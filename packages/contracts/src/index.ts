@@ -232,6 +232,137 @@ export type UpdateUserStatusRequest = z.infer<typeof UpdateUserStatusRequestSche
 
 /**
  * ==============================================================================
+ * Phase 3: Assessment, Question, and Rubric Schemas
+ * ==============================================================================
+ */
+
+export const RubricLevelSchema = z.object({
+  id: z.string().uuid(),
+  criterion_id: z.string().uuid(),
+  display_order: z.number().int().min(1),
+  label: z.string().min(1),
+  description: z.string(),
+  min_guidance: z.number().nullable().optional(),
+  max_guidance: z.number().nullable().optional(),
+  created_at: z.string()
+});
+export type RubricLevel = z.infer<typeof RubricLevelSchema>;
+
+export const RubricCriterionSchema = z.object({
+  id: z.string().uuid(),
+  rubric_version_id: z.string().uuid(),
+  display_order: z.number().int().min(1),
+  title: z.string().min(1),
+  description: z.string(),
+  max_marks: z.number().positive(),
+  levels: z.array(RubricLevelSchema).optional().default([]),
+  created_at: z.string()
+});
+export type RubricCriterion = z.infer<typeof RubricCriterionSchema>;
+
+export const RubricVersionSchema = z.object({
+  id: z.string().uuid(),
+  template_id: z.string().uuid().nullable().optional(),
+  question_id: z.string().uuid(),
+  version: z.number().int().min(1),
+  title: z.string().min(1),
+  frozen_at: z.string().nullable().optional(),
+  created_by: z.string().uuid(),
+  criteria: z.array(RubricCriterionSchema).optional().default([]),
+  created_at: z.string()
+});
+export type RubricVersion = z.infer<typeof RubricVersionSchema>;
+
+export const QuestionSchema = z.object({
+  id: z.string().uuid(),
+  assessment_id: z.string().uuid(),
+  display_order: z.number().int().min(1),
+  prompt: z.string().min(1),
+  max_marks: z.number().positive(),
+  rubric: RubricVersionSchema.nullable().optional(),
+  created_at: z.string()
+});
+export type Question = z.infer<typeof QuestionSchema>;
+
+export const AssessmentSchema = z.object({
+  id: z.string().uuid(),
+  class_subject_id: z.string().uuid(),
+  title: z.string().min(1),
+  instructions: z.string(),
+  deadline_at: z.string(),
+  status: AssessmentStatusSchema,
+  created_by: z.string().uuid(),
+  published_at: z.string().nullable().optional(),
+  published_by: z.string().uuid().nullable().optional(),
+  version: z.number().int().min(1),
+  questions: z.array(QuestionSchema).optional().default([]),
+  created_at: z.string(),
+  updated_at: z.string()
+});
+export type Assessment = z.infer<typeof AssessmentSchema>;
+
+/**
+ * Assessment Request DTOs
+ */
+export const CreateAssessmentRequestSchema = z.object({
+  class_subject_id: z.string().uuid(),
+  title: z.string().min(3, 'Title must be at least 3 characters').max(200),
+  instructions: z.string().min(5, 'Instructions must be at least 5 characters'),
+  deadline_at: z.string().refine(val => !isNaN(Date.parse(val)), {
+    message: 'Valid ISO timestamp required'
+  })
+});
+export type CreateAssessmentRequest = z.infer<typeof CreateAssessmentRequestSchema>;
+
+export const UpdateAssessmentRequestSchema = z.object({
+  title: z.string().min(3).max(200).optional(),
+  instructions: z.string().min(5).optional(),
+  deadline_at: z.string().refine(val => !isNaN(Date.parse(val)), {
+    message: 'Valid ISO timestamp required'
+  }).optional()
+});
+export type UpdateAssessmentRequest = z.infer<typeof UpdateAssessmentRequestSchema>;
+
+export const CreateQuestionRequestSchema = z.object({
+  display_order: z.number().int().min(1),
+  prompt: z.string().min(3, 'Question prompt must be at least 3 characters'),
+  max_marks: z.number().positive('Question marks must be positive').max(100)
+});
+export type CreateQuestionRequest = z.infer<typeof CreateQuestionRequestSchema>;
+
+export const UpdateQuestionRequestSchema = z.object({
+  display_order: z.number().int().min(1).optional(),
+  prompt: z.string().min(3).optional(),
+  max_marks: z.number().positive().max(100).optional()
+});
+export type UpdateQuestionRequest = z.infer<typeof UpdateQuestionRequestSchema>;
+
+export const SaveRubricLevelDTO = z.object({
+  display_order: z.number().int().min(1),
+  label: z.string().min(1),
+  description: z.string(),
+  min_guidance: z.number().nullable().optional(),
+  max_guidance: z.number().nullable().optional()
+});
+export type SaveRubricLevelDTO = z.infer<typeof SaveRubricLevelDTO>;
+
+export const SaveRubricCriterionDTO = z.object({
+  display_order: z.number().int().min(1),
+  title: z.string().min(2, 'Criterion title must be at least 2 characters'),
+  description: z.string(),
+  max_marks: z.number().positive('Criterion marks must be positive'),
+  levels: z.array(SaveRubricLevelDTO).default([])
+});
+export type SaveRubricCriterionDTO = z.infer<typeof SaveRubricCriterionDTO>;
+
+export const SaveRubricRequestSchema = z.object({
+  title: z.string().min(2, 'Rubric title required'),
+  criteria: z.array(SaveRubricCriterionDTO).min(1, 'At least one criterion is required')
+});
+export type SaveRubricRequest = z.infer<typeof SaveRubricRequestSchema>;
+
+/**
+ * ==============================================================================
  * Health Check Contract
  * ==============================================================================
  */
@@ -239,6 +370,9 @@ export const HealthResponseSchema = z.object({
   status: z.literal('ok'),
   service: z.string(),
   version: z.string(),
-  timestamp: z.string()
+  timestamp: z.string(),
+  database_mode: z.enum(['supabase_postgresql', 'in_memory_mock']).optional(),
+  is_persistent: z.boolean().optional()
 });
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
+

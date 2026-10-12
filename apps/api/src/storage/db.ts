@@ -7,7 +7,12 @@ import {
   Class, 
   Subject, 
   ClassSubject, 
-  AuditEvent 
+  AuditEvent,
+  Assessment,
+  Question,
+  RubricVersion,
+  RubricCriterion,
+  RubricLevel 
 } from '@smartfa/contracts';
 import { supabaseAdmin } from '../auth/jwt.js';
 
@@ -125,6 +130,14 @@ class InMemoryDatabase {
       created_at: new Date().toISOString()
     },
     {
+      id: 'r2000000-0000-0000-0000-000000000003',
+      user_id: 'a2000000-0000-0000-0000-000000000002',
+      role: 'subject_teacher',
+      scope_id: 'd1000000-0000-0000-0000-000000000001',
+      active: true,
+      created_at: new Date().toISOString()
+    },
+    {
       id: 'r3000000-0000-0000-0000-000000000001',
       user_id: 'a3000000-0000-0000-0000-000000000001',
       role: 'proctor',
@@ -182,14 +195,45 @@ class InMemoryDatabase {
 
   classSubjects: ClassSubject[] = [
     {
-      id: 'cs100000-0000-0000-0000-000000000001',
+      id: 'c5100000-0000-0000-0000-000000000001',
       class_id: 'c1000000-0000-0000-0000-000000000001',
       subject_id: 's1000000-0000-0000-0000-000000000001',
       subject_teacher_id: 'a2000000-0000-0000-0000-000000000001',
       active: true,
       created_at: new Date().toISOString()
+    },
+    {
+      id: 'c5100000-0000-0000-0000-000000000002',
+      class_id: 'c1000000-0000-0000-0000-000000000001',
+      subject_id: 's1000000-0000-0000-0000-000000000002',
+      subject_teacher_id: 'a2000000-0000-0000-0000-000000000002',
+      active: true,
+      created_at: new Date().toISOString()
     }
   ];
+
+  enrollments = [
+    {
+      id: 'e1000000-0000-0000-0000-000000000001',
+      class_id: 'c1000000-0000-0000-0000-000000000001',
+      student_id: 'a4000000-0000-0000-0000-000000000001',
+      roll_number: '01',
+      status: 'active'
+    },
+    {
+      id: 'e1000000-0000-0000-0000-000000000002',
+      class_id: 'c1000000-0000-0000-0000-000000000001',
+      student_id: 'a4000000-0000-0000-0000-000000000002',
+      roll_number: '02',
+      status: 'active'
+    }
+  ];
+
+  assessments: Assessment[] = [];
+  questions: Question[] = [];
+  rubricVersions: RubricVersion[] = [];
+  rubricCriteria: RubricCriterion[] = [];
+  rubricLevels: RubricLevel[] = [];
 
   auditEvents: AuditEvent[] = [
     {

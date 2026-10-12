@@ -52,6 +52,10 @@ app.get('/api/v1/health', (req: Request, res: Response) => {
 import hodRouter from './admin/hodRoutes.js';
 app.use('/api/v1/admin/hod', hodRouter);
 
+// Mount Assessment & Rubric Routes
+import assessmentRouter from './assessments/assessmentRoutes.js';
+app.use('/api/v1/assessments', assessmentRouter);
+
 /**
  * Root Info Endpoint
  */

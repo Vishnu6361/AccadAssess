@@ -15,10 +15,11 @@ import { isSupabaseConfigured } from '../services/supabase';
 import { UserManagement } from '../features/hod/UserManagement';
 import { AcademicStructure } from '../features/hod/AcademicStructure';
 import { AuditViewer } from '../features/hod/AuditViewer';
+import { AssessmentManagement } from '../features/teacher/AssessmentManagement';
 
 export const App: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [activeItem, setActiveItem] = useState('foundation');
+  const [activeItem, setActiveItem] = useState('assessments');
   const [activeRole, setActiveRole] = useState<'student' | 'subject_teacher' | 'class_teacher' | 'proctor' | 'hod'>('subject_teacher');
   
   // Health checks status
@@ -60,6 +61,15 @@ export const App: React.FC = () => {
     checkServices();
   }, []);
 
+  const handleRoleChange = (role: 'student' | 'subject_teacher' | 'class_teacher' | 'proctor' | 'hod') => {
+    setActiveRole(role);
+    if (role === 'hod' && activeItem === 'assessments') {
+      setActiveItem('academics');
+    } else if (role !== 'hod' && (activeItem === 'users' || activeItem === 'academics' || activeItem === 'audit')) {
+      setActiveItem('assessments');
+    }
+  };
+
   const availableRoles = ['student', 'subject_teacher', 'class_teacher', 'proctor', 'hod'];
 
   return (
@@ -67,7 +77,7 @@ export const App: React.FC = () => {
       <Header
         activeRole={activeRole}
         availableRoles={availableRoles}
-        onRoleChange={(role) => setActiveRole(role as any)}
+        onRoleChange={(role) => handleRoleChange(role as any)}
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
       />
 
@@ -84,7 +94,7 @@ export const App: React.FC = () => {
           <div className="max-w-6xl mx-auto space-y-6">
             <Breadcrumbs 
               items={[
-                { label: 'Institutional Admin' },
+                { label: activeRole === 'hod' ? 'Institutional Admin' : activeRole === 'subject_teacher' ? 'Faculty Workspace' : 'Student Workspace' },
                 { 
                   label: activeItem === 'users' 
                     ? 'User Directory & Roles' 
@@ -92,18 +102,21 @@ export const App: React.FC = () => {
                     ? 'Academic Structure' 
                     : activeItem === 'audit' 
                     ? 'Audit Trail' 
+                    : activeItem === 'assessments'
+                    ? 'Assessment Authoring & Rubrics'
                     : 'System Overview & Architecture', 
                   current: true 
                 }
               ]} 
             />
 
-            {/* Conditionally Render HOD Feature Views */}
+            {/* Conditionally Render Feature Views */}
             {activeItem === 'users' && <UserManagement />}
             {activeItem === 'academics' && <AcademicStructure />}
             {activeItem === 'audit' && <AuditViewer />}
+            {activeItem === 'assessments' && <AssessmentManagement activeRole={activeRole} />}
 
-            {activeItem !== 'users' && activeItem !== 'academics' && activeItem !== 'audit' && (
+            {activeItem !== 'users' && activeItem !== 'academics' && activeItem !== 'audit' && activeItem !== 'assessments' && (
               <>
                 {/* Title & Primary Action Header */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-academic-border gap-4">
@@ -112,7 +125,7 @@ export const App: React.FC = () => {
                       <h1 className="text-2xl font-bold text-academic-deepGreen tracking-tight">
                         SmartFA Architecture & UI Foundation
                       </h1>
-                      <StatusBadge label="Phase 2 Active" variant="published" />
+                      <StatusBadge label="Phase 3 Active" variant="published" />
                     </div>
                     <p className="text-xs text-academic-muted mt-1 max-w-3xl">
                       Institutional Formative Assessment, Evaluation and Internal Answer Similarity Review System.

@@ -360,3 +360,232 @@ export const hodApi = {
     return mockAuditEvents;
   }
 };
+
+/**
+ * ==============================================================================
+ * Assessment & Rubric Management API
+ * ==============================================================================
+ */
+
+export interface AssessmentDTO {
+  id: string;
+  class_subject_id: string;
+  title: string;
+  instructions: string;
+  deadline_at: string;
+  status: 'draft' | 'published' | 'closed' | 'archived';
+  created_by: string;
+  published_at?: string | null;
+  version: number;
+  class_details?: string;
+  subject_details?: string;
+  questions?: any[];
+}
+
+const mockAssessments: AssessmentDTO[] = [
+  {
+    id: 'as100000-0000-0000-0000-000000000001',
+    class_subject_id: 'c5100000-0000-0000-0000-000000000001',
+    title: 'Formative Assessment 1: Algorithm Analysis',
+    instructions: 'Handwrite answers on plain paper, scan as PDF, and submit before deadline. 5 MB limit per question.',
+    deadline_at: new Date(Date.now() + 5 * 86400000).toISOString(),
+    status: 'draft',
+    created_by: 'a2000000-0000-0000-0000-000000000001',
+    published_at: null,
+    version: 1,
+    class_details: 'MCA Sem 3-A',
+    subject_details: 'MCA301 - Analysis and Design of Algorithms',
+    questions: [
+      {
+        id: 'q1000000-0000-0000-0000-000000000001',
+        assessment_id: 'as100000-0000-0000-0000-000000000001',
+        display_order: 1,
+        prompt: 'Explain Time Complexity of QuickSort in Best, Average, and Worst Case scenarios with recurrence trees.',
+        max_marks: 10,
+        rubric: {
+          id: 'rv100000-0000-0000-0000-000000000001',
+          version: 1,
+          title: 'QuickSort Complexity Rubric',
+          frozen_at: null,
+          criteria: [
+            {
+              id: 'rc100000-0000-0000-0000-000000000001',
+              display_order: 1,
+              title: 'Recurrence Formulation',
+              description: 'Clear formulation of T(n) relations',
+              max_marks: 6,
+              levels: [
+                { id: 'rl1', display_order: 1, label: 'Excellent', description: 'Accurate mathematical formulation' },
+                { id: 'rl2', display_order: 2, label: 'Developing', description: 'Partial formulation' }
+              ]
+            },
+            {
+              id: 'rc100000-0000-0000-0000-000000000002',
+              display_order: 2,
+              title: 'Partitioning & Worst Case Analysis',
+              description: 'Demonstration of worst case behavior',
+              max_marks: 4,
+              levels: [
+                { id: 'rl3', display_order: 1, label: 'Excellent', description: 'Clear pivot analysis' },
+                { id: 'rl4', display_order: 2, label: 'Insufficient', description: 'Missing pivot reasoning' }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+];
+
+export const assessmentApi = {
+  getAssessments: async (): Promise<AssessmentDTO[]> => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/assessments`);
+      if (res.ok) {
+        const data = await res.json();
+        return data.assessments;
+      }
+    } catch {}
+    return mockAssessments;
+  },
+
+  getAssessment: async (id: string): Promise<AssessmentDTO | null> => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/assessments/${id}`);
+      if (res.ok) {
+        const data = await res.json();
+        return data.assessment;
+      }
+    } catch {}
+    return mockAssessments.find(a => a.id === id) || null;
+  },
+
+  createAssessment: async (payload: {
+    class_subject_id: string;
+    title: string;
+    instructions: string;
+    deadline_at: string;
+  }): Promise<AssessmentDTO> => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/assessments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.assessment;
+      }
+    } catch {}
+    const newAss: AssessmentDTO = {
+      id: `as-${Date.now()}`,
+      class_subject_id: payload.class_subject_id,
+      title: payload.title,
+      instructions: payload.instructions,
+      deadline_at: payload.deadline_at,
+      status: 'draft',
+      created_by: 'a2000000-0000-0000-0000-000000000001',
+      published_at: null,
+      version: 1,
+      class_details: 'MCA Sem 3-A',
+      subject_details: 'MCA301 - Algorithms',
+      questions: []
+    };
+    mockAssessments.unshift(newAss);
+    return newAss;
+  },
+
+  addQuestion: async (assessmentId: string, payload: {
+    display_order: number;
+    prompt: string;
+    max_marks: number;
+  }): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/questions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.question;
+      }
+    } catch {}
+    const ass = mockAssessments.find(a => a.id === assessmentId);
+    const newQ = {
+      id: `q-${Date.now()}`,
+      assessment_id: assessmentId,
+      display_order: payload.display_order,
+      prompt: payload.prompt,
+      max_marks: payload.max_marks,
+      rubric: null
+    };
+    if (ass) {
+      if (!ass.questions) ass.questions = [];
+      ass.questions.push(newQ);
+    }
+    return newQ;
+  },
+
+  saveRubric: async (assessmentId: string, questionId: string, payload: {
+    title: string;
+    criteria: any[];
+  }): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/questions/${questionId}/rubric`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.rubric;
+      }
+    } catch {}
+    const ass = mockAssessments.find(a => a.id === assessmentId);
+    const q = ass?.questions?.find(item => item.id === questionId);
+    const newRubric = {
+      id: `rv-${Date.now()}`,
+      question_id: questionId,
+      version: 1,
+      title: payload.title,
+      frozen_at: null,
+      criteria: payload.criteria
+    };
+    if (q) {
+      q.rubric = newRubric;
+    }
+    return newRubric;
+  },
+
+  publishAssessment: async (assessmentId: string): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error?.message || 'Publication failed');
+      }
+      return data.assessment;
+    } catch (err: any) {
+      // Mock publish
+      const ass = mockAssessments.find(a => a.id === assessmentId);
+      if (ass) {
+        // Enforce invariant in mock
+        for (const q of ass.questions || []) {
+          if (!q.rubric) throw new Error(`Question ${q.display_order} is missing a rubric.`);
+          const sum = q.rubric.criteria?.reduce((acc: number, c: any) => acc + Number(c.max_marks), 0) || 0;
+          if (Math.abs(sum - q.max_marks) > 0.001) {
+            throw new Error(`Question ${q.display_order} criteria sum (${sum}) does not match question max marks (${q.max_marks})`);
+          }
+        }
+        ass.status = 'published';
+        ass.published_at = new Date().toISOString();
+        return ass;
+      }
+      throw err;
+    }
+  }
+};
