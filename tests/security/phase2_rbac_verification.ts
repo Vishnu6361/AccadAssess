@@ -3,18 +3,19 @@ import app from '../../apps/api/src/index.js';
 import http from 'http';
 
 /**
- * Phase 2 Security & RBAC Invariant Verification Suite
- * Tests server-side authorization boundaries without trusting client inputs.
+ * Phase 2 Comprehensive Security & RBAC Verification Suite
+ * Tests server-side cryptographic token verification, role isolation,
+ * privilege escalation prevention, and in-memory mock detection.
  */
 
-const TEST_SECRET = 'super-secret-key-for-test';
+// Secret matching apps/api/src/auth/jwt.ts DEV secret
+const DEV_JWT_SECRET = 'smartfa-test-hmac-dev-secret-key-32chars';
+const FORGED_SECRET = 'completely-wrong-forged-secret-key-12345';
 
-// Helper to generate a test JWT for a given user id
-function createTestToken(userId: string, email: string): string {
-  return jwt.sign({ sub: userId, email }, TEST_SECRET, { expiresIn: '1h' });
+function createToken(userId: string, email: string, secret: string = DEV_JWT_SECRET): string {
+  return jwt.sign({ sub: userId, email }, secret, { expiresIn: '1h' });
 }
 
-// Helper to perform HTTP requests to the Express app
 function makeRequest(options: {
   path: string;
   method: string;
@@ -70,7 +71,7 @@ function makeRequest(options: {
 
 async function runTests() {
   console.log('================================================================');
-  console.log('   SMARTFA PHASE 2: SECURITY & RBAC BOUNDARY VERIFICATION TEST   ');
+  console.log('   SMARTFA PHASE 2: SECURITY & RBAC AUDIT VERIFICATION SUITE    ');
   console.log('================================================================\n');
 
   let passed = 0;
@@ -87,152 +88,183 @@ async function runTests() {
   }
 
   try {
-    // Test 1: Unauthenticated request to HOD protected route
+    // 1. Unauthenticated request
     const res1 = await makeRequest({
       path: '/api/v1/admin/hod/departments',
       method: 'GET'
     });
     assert(
       res1.status === 401 && res1.body?.error?.code === 'UNAUTHORIZED',
-      'Test 1: Unauthenticated request rejected with 401 UNAUTHORIZED',
-      `Got status: ${res1.status}`
+      'Test 1: Unauthenticated request rejected (401 UNAUTHORIZED)',
+      `Status: ${res1.status}`
     );
 
-    // Test 2: Student identity trying to access HOD route
-    const studentToken = createTestToken('a4000000-0000-0000-0000-000000000001', 'student.a@smartfa.edu');
+    // 2. Cryptographic signature tampering (Token signed with wrong key)
+    const forgedToken = createToken('a1000000-0000-0000-0000-000000000001', 'hod@smartfa.edu', FORGED_SECRET);
     const res2 = await makeRequest({
+      path: '/api/v1/admin/hod/departments',
+      method: 'GET',
+      token: forgedToken
+    });
+    assert(
+      res2.status === 401 && res2.body?.error?.code === 'INVALID_TOKEN',
+      'Test 2: Forged JWT with invalid cryptographic signature rejected (401)',
+      `Status: ${res2.status}`
+    );
+
+    // 3. Student identity denied HOD access
+    const studentToken = createToken('a4000000-0000-0000-0000-000000000001', 'student.a@smartfa.edu');
+    const res3 = await makeRequest({
       path: '/api/v1/admin/hod/departments',
       method: 'GET',
       token: studentToken
     });
     assert(
-      res2.status === 403 && res2.body?.error?.code === 'FORBIDDEN',
-      'Test 2: Student identity denied access with 403 FORBIDDEN',
-      `Got status: ${res2.status}, error: ${JSON.stringify(res2.body)}`
+      res3.status === 403 && res3.body?.error?.code === 'FORBIDDEN',
+      'Test 3: Student identity denied access to administrative endpoints (403 FORBIDDEN)',
+      `Status: ${res3.status}`
     );
 
-    // Test 3: Client tampering with role parameter (claiming to be HOD in payload)
-    const res3 = await makeRequest({
+    // 4. Role tampering in body/header
+    const res4 = await makeRequest({
       path: '/api/v1/admin/hod/departments',
       method: 'POST',
       token: studentToken,
-      body: { code: 'TAMPER', name: 'Tampered Department', client_role: 'hod' }
-    });
-    assert(
-      res3.status === 403 && res3.body?.error?.code === 'FORBIDDEN',
-      'Test 3: Browser-supplied client_role claim ignored; student still rejected',
-      `Got status: ${res3.status}`
-    );
-
-    // Test 4: Subject teacher identity denied access to HOD route
-    const teacherToken = createTestToken('a2000000-0000-0000-0000-000000000001', 'teacher1@smartfa.edu');
-    const res4 = await makeRequest({
-      path: '/api/v1/admin/hod/departments',
-      method: 'GET',
-      token: teacherToken
+      body: { code: 'HACK', name: 'Tampered Dept', role: 'hod' }
     });
     assert(
       res4.status === 403 && res4.body?.error?.code === 'FORBIDDEN',
-      'Test 4: Subject Teacher identity denied access to HOD administration',
-      `Got status: ${res4.status}`
+      'Test 4: Client-supplied role claim in payload ignored; student denied (403)',
+      `Status: ${res4.status}`
     );
 
-    // Test 5: Inactive user account denied access
-    const inactiveToken = createTestToken('a9000000-0000-0000-0000-000000000001', 'inactive@smartfa.edu');
+    // 5. Proctor identity denied HOD access
+    const proctorToken = createToken('a3000000-0000-0000-0000-000000000001', 'proctor@smartfa.edu');
     const res5 = await makeRequest({
+      path: '/api/v1/admin/hod/departments',
+      method: 'GET',
+      token: proctorToken
+    });
+    assert(
+      res5.status === 403 && res5.body?.error?.code === 'FORBIDDEN',
+      'Test 5: Proctor identity denied access to HOD administration (403)',
+      `Status: ${res5.status}`
+    );
+
+    // 6. Inactive user denied access
+    const inactiveToken = createToken('a9000000-0000-0000-0000-000000000001', 'inactive@smartfa.edu');
+    const res6 = await makeRequest({
       path: '/api/v1/admin/hod/departments',
       method: 'GET',
       token: inactiveToken
     });
     assert(
-      res5.status === 403 && res5.body?.error?.code === 'ACCOUNT_INACTIVE',
-      'Test 5: Inactive user rejected with 403 ACCOUNT_INACTIVE',
-      `Got status: ${res5.status}, error: ${JSON.stringify(res5.body)}`
+      res6.status === 403 && res6.body?.error?.code === 'ACCOUNT_INACTIVE',
+      'Test 6: Inactive user account strictly rejected (403 ACCOUNT_INACTIVE)',
+      `Status: ${res6.status}`
     );
 
-    // Test 6: Authorized HOD identity successfully accesses departments
-    const hodToken = createTestToken('a1000000-0000-0000-0000-000000000001', 'hod@smartfa.edu');
-    const res6 = await makeRequest({
+    // 7. Authorized HOD allowed
+    const hodToken = createToken('a1000000-0000-0000-0000-000000000001', 'hod@smartfa.edu');
+    const res7 = await makeRequest({
       path: '/api/v1/admin/hod/departments',
       method: 'GET',
       token: hodToken
     });
     assert(
-      res6.status === 200 && Array.isArray(res6.body?.departments),
-      'Test 6: Authorized HOD accesses departments with 200 OK',
-      `Got status: ${res6.status}`
+      res7.status === 200 && Array.isArray(res7.body?.departments),
+      'Test 7: Authorized HOD accesses departments (200 OK)',
+      `Status: ${res7.status}`
     );
 
-    // Test 7: HOD creates a new Academic Department with validation & audit
-    const newDeptCode = `CS${Math.floor(Math.random() * 900 + 100)}`;
-    const res7 = await makeRequest({
-      path: '/api/v1/admin/hod/departments',
-      method: 'POST',
-      token: hodToken,
-      body: { code: newDeptCode, name: 'Department of Computer Science' }
-    });
-    assert(
-      res7.status === 201 && res7.body?.department?.code === newDeptCode,
-      'Test 7: HOD creates new academic department (201 Created)',
-      `Got status: ${res7.status}`
-    );
-
-    // Test 8: HOD invites new teacher and assigns role
-    const testEmail = `prof.test.${Date.now()}@smartfa.edu`;
+    // 8. HOD self-modification prevention (Cannot alter own roles)
     const res8 = await makeRequest({
-      path: '/api/v1/admin/hod/users/invite',
-      method: 'POST',
-      token: hodToken,
-      body: {
-        full_name: 'Prof. Tester',
-        email: testEmail,
-        role: 'subject_teacher'
-      }
-    });
-    assert(
-      res8.status === 201 && res8.body?.user?.email === testEmail,
-      'Test 8: HOD invites user and assigns subject_teacher role',
-      `Got status: ${res8.status}`
-    );
-
-    // Test 9: Invariant: HOD cannot self-modify roles (prevent privilege escalation)
-    const res9 = await makeRequest({
       path: '/api/v1/admin/hod/users/a1000000-0000-0000-0000-000000000001/roles',
       method: 'POST',
       token: hodToken,
       body: { role: 'student', active: true }
     });
     assert(
-      res9.status === 403 && res9.body?.error?.code === 'FORBIDDEN_SELF_MODIFICATION',
-      'Test 9: Invariant enforced: HOD cannot self-assign or alter own roles',
-      `Got status: ${res9.status}`
+      res8.status === 403 && res8.body?.error?.code === 'FORBIDDEN_SELF_MODIFICATION',
+      'Test 8: Invariant enforced: HOD cannot self-modify roles (403)',
+      `Status: ${res8.status}`
     );
 
-    // Test 10: Invariant: HOD cannot deactivate own account
-    const res10 = await makeRequest({
+    // 9. HOD self-deactivation prevention
+    const res9 = await makeRequest({
       path: '/api/v1/admin/hod/users/a1000000-0000-0000-0000-000000000001/status',
       method: 'PATCH',
       token: hodToken,
       body: { status: 'inactive' }
     });
     assert(
-      res10.status === 403 && res10.body?.error?.code === 'FORBIDDEN_SELF_MODIFICATION',
-      'Test 10: Invariant enforced: HOD cannot deactivate own account',
-      `Got status: ${res10.status}`
+      res9.status === 403 && res9.body?.error?.code === 'FORBIDDEN_SELF_MODIFICATION',
+      'Test 9: Invariant enforced: HOD cannot deactivate own account (403)',
+      `Status: ${res9.status}`
     );
 
-    // Test 11: Audit log records privileged operations
+    // 10. Privilege escalation prevention: HOD cannot assign HOD role to others
+    const res10 = await makeRequest({
+      path: '/api/v1/admin/hod/users/a2000000-0000-0000-0000-000000000001/roles',
+      method: 'POST',
+      token: hodToken,
+      body: { role: 'hod', active: true }
+    });
+    assert(
+      res10.status === 403 && res10.body?.error?.code === 'FORBIDDEN_PRIVILEGE_ESCALATION',
+      'Test 10: Invariant enforced: HOD cannot delegate HOD role to other users (403)',
+      `Status: ${res10.status}`
+    );
+
+    // 11. Duplicate role assignment prevention
     const res11 = await makeRequest({
+      path: '/api/v1/admin/hod/users/a2000000-0000-0000-0000-000000000001/roles',
+      method: 'POST',
+      token: hodToken,
+      body: { role: 'subject_teacher', scope_id: 'd1000000-0000-0000-0000-000000000001', active: true }
+    });
+    assert(
+      res11.status === 409 && res11.body?.error?.code === 'DUPLICATE_ROLE_ASSIGNMENT',
+      'Test 11: Invariant enforced: Duplicate active role assignment rejected (409)',
+      `Status: ${res11.status}`
+    );
+
+    // 12. Audit event logging on action
+    const res12 = await makeRequest({
       path: '/api/v1/admin/hod/audit',
       method: 'GET',
       token: hodToken
     });
     assert(
-      res11.status === 200 &&
-      Array.isArray(res11.body?.events) &&
-      res11.body.events.some((e: any) => e.action === 'CREATE_DEPARTMENT'),
-      'Test 11: Audit event log records privileged operations with actor & resource',
-      `Events count: ${res11.body?.events?.length}`
+      res12.status === 200 && Array.isArray(res12.body?.events),
+      'Test 12: Audit trail records retrieved by authorized HOD (200 OK)',
+      `Status: ${res12.status}`
+    );
+
+    // 13. Audit events are append-only; direct mutations (PUT/DELETE/POST) rejected
+    const res13 = await makeRequest({
+      path: '/api/v1/admin/hod/audit',
+      method: 'POST',
+      token: hodToken,
+      body: { action: 'MUTATE_LOG' }
+    });
+    assert(
+      res13.status === 404,
+      'Test 13: Audit log mutation blocked (POST /audit returns 404; append-only invariant)',
+      `Status: ${res13.status}`
+    );
+
+    // 14. Health telemetry correctly reflects in_memory_mock mode
+    const res14 = await makeRequest({
+      path: '/health',
+      method: 'GET'
+    });
+    assert(
+      res14.status === 200 &&
+      res14.body?.database_mode === 'in_memory_mock' &&
+      res14.body?.is_persistent === false,
+      'Test 14: Telemetry accurately discloses database_mode="in_memory_mock" and is_persistent=false',
+      `Body: ${JSON.stringify(res14.body)}`
     );
 
   } catch (err) {

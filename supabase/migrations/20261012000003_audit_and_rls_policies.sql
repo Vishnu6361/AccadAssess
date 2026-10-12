@@ -156,18 +156,41 @@ create policy "HOD can assign or revoke roles"
   with check (
     public.is_hod(auth.uid()) 
     and user_id <> auth.uid() -- HOD cannot self-promote or alter own role permissions
+    and role <> 'hod'::public.app_role -- HOD cannot delegate HOD role directly; requires trusted institutional admin
+    and (
+      scope_id is null 
+      or exists (
+        select 1 from public.user_roles hod_r
+        where hod_r.user_id = auth.uid()
+          and hod_r.role = 'hod'
+          and hod_r.active = true
+          and (hod_r.scope_id is null or hod_r.scope_id = public.user_roles.scope_id)
+      )
+    )
   );
 
 create policy "HOD can update roles"
   on public.user_roles for update
   to authenticated
-  using (public.is_hod(auth.uid()) and user_id <> auth.uid())
-  with check (public.is_hod(auth.uid()) and user_id <> auth.uid());
+  using (
+    public.is_hod(auth.uid()) 
+    and user_id <> auth.uid()
+    and role <> 'hod'::public.app_role
+  )
+  with check (
+    public.is_hod(auth.uid()) 
+    and user_id <> auth.uid()
+    and role <> 'hod'::public.app_role
+  );
 
 create policy "HOD can delete roles"
   on public.user_roles for delete
   to authenticated
-  using (public.is_hod(auth.uid()) and user_id <> auth.uid());
+  using (
+    public.is_hod(auth.uid()) 
+    and user_id <> auth.uid()
+    and role <> 'hod'::public.app_role
+  );
 
 -- ------------------------------------------------------------------------------
 -- Policies: academic_terms
@@ -298,10 +321,18 @@ create policy "HOD can view audit events"
   to authenticated
   using (public.is_hod(auth.uid()));
 
-create policy "Authenticated users can record audit events"
+create policy "Authorized staff can record audit events"
   on public.audit_events for insert
   to authenticated
-  with check (actor_id = auth.uid() or actor_id is null);
+  with check (
+    actor_id = auth.uid()
+    and (
+      public.is_hod(auth.uid())
+      or public.has_role(auth.uid(), 'subject_teacher'::public.app_role)
+      or public.has_role(auth.uid(), 'class_teacher'::public.app_role)
+      or public.has_role(auth.uid(), 'proctor'::public.app_role)
+    )
+  );
 
 -- Prohibit any update or deletion on audit_events
 -- (No update/delete policy defined = default deny in PostgreSQL RLS)

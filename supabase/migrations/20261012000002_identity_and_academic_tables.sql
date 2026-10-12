@@ -37,9 +37,12 @@ create table if not exists public.user_roles (
   scope_id uuid null, -- e.g. department_id, class_id, or null for institutional global
   assigned_by uuid null references public.profiles(id) on delete set null,
   active boolean not null default true,
-  created_at timestamptz not null default now(),
-  constraint uq_user_role_scope unique (user_id, role, scope_id)
+  created_at timestamptz not null default now()
 );
+
+-- Partial unique indexes ensure unique active role assignments regardless of NULL scope_id
+create unique index if not exists uq_user_role_global on public.user_roles(user_id, role) where scope_id is null;
+create unique index if not exists uq_user_role_scoped on public.user_roles(user_id, role, scope_id) where scope_id is not null;
 
 create index if not exists idx_user_roles_lookup on public.user_roles(user_id, active);
 create index if not exists idx_user_roles_role on public.user_roles(role, scope_id);

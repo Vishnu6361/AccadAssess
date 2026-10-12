@@ -18,19 +18,24 @@ const HealthResponseSchema = z.object({
   service: z.string(),
   version: z.string(),
   timestamp: z.string(),
-  environment: z.string()
+  environment: z.string(),
+  database_mode: z.enum(['supabase_postgresql', 'in_memory_mock']),
+  is_persistent: z.boolean()
 });
 
 /**
  * Health Endpoints
  */
 const getHealthStatus = () => {
+  const isLive = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   const payload = {
     status: 'ok' as const,
     service: 'smartfa-api',
     version: '1.0.0',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
+    database_mode: isLive ? ('supabase_postgresql' as const) : ('in_memory_mock' as const),
+    is_persistent: isLive
   };
   return HealthResponseSchema.parse(payload);
 };
@@ -97,7 +102,13 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 
 if (process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => {
+    const isLive = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
     console.log(`[SmartFA API] Running on http://localhost:${PORT}`);
+    if (isLive) {
+      console.log(`[DATABASE] Connected to Supabase PostgreSQL at ${process.env.SUPABASE_URL}`);
+    } else {
+      console.warn(`[DATABASE NOTICE] Running in IN_MEMORY_MOCK mode. PostgreSQL database not connected. Data persistence is disabled.`);
+    }
   });
 }
 

@@ -237,6 +237,12 @@ router.get('/users', (req: Request, res: Response) => {
 router.post('/users/invite', (req: Request, res: Response) => {
   const body = InviteUserRequestSchema.parse(req.body);
 
+  if (body.role === 'hod') {
+    return res.status(403).json({
+      error: { code: 'FORBIDDEN_PRIVILEGE_ESCALATION', message: 'HOD role cannot be granted via standard user invitation' }
+    });
+  }
+
   if (db.profiles.some(p => p.email.toLowerCase() === body.email.toLowerCase())) {
     return res.status(409).json({
       error: { code: 'DUPLICATE_EMAIL', message: 'A user with this email address already exists' }
@@ -289,10 +295,27 @@ router.post('/users/:id/roles', (req: Request, res: Response) => {
     });
   }
 
+  // Invariant: HOD cannot delegate HOD role to arbitrary users
+  if (body.role === 'hod') {
+    return res.status(403).json({
+      error: { code: 'FORBIDDEN_PRIVILEGE_ESCALATION', message: 'HOD role cannot be granted through regular role assignment' }
+    });
+  }
+
   const user = db.profiles.find(p => p.id === targetUserId);
   if (!user) {
     return res.status(404).json({
       error: { code: 'USER_NOT_FOUND', message: 'Target user does not exist' }
+    });
+  }
+
+  // Prevent duplicate active role assignment for same user and scope
+  const hasExistingRole = db.roles.some(
+    r => r.user_id === targetUserId && r.role === body.role && (r.scope_id ?? null) === (body.scope_id ?? null) && r.active
+  );
+  if (hasExistingRole) {
+    return res.status(409).json({
+      error: { code: 'DUPLICATE_ROLE_ASSIGNMENT', message: 'User already possesses this active role and scope' }
     });
   }
 
