@@ -43,6 +43,10 @@ app.get('/api/v1/health', (req: Request, res: Response) => {
   res.status(200).json(getHealthStatus());
 });
 
+// Mount HOD Administration Routes
+import hodRouter from './admin/hodRoutes.js';
+app.use('/api/v1/admin/hod', hodRouter);
+
 /**
  * Root Info Endpoint
  */

@@ -12,6 +12,9 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { isSupabaseConfigured } from '../services/supabase';
+import { UserManagement } from '../features/hod/UserManagement';
+import { AcademicStructure } from '../features/hod/AcademicStructure';
+import { AuditViewer } from '../features/hod/AuditViewer';
 
 export const App: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -81,38 +84,54 @@ export const App: React.FC = () => {
           <div className="max-w-6xl mx-auto space-y-6">
             <Breadcrumbs 
               items={[
-                { label: 'System Overview' },
-                { label: 'Phase 1 Foundation', current: true }
+                { label: 'Institutional Admin' },
+                { 
+                  label: activeItem === 'users' 
+                    ? 'User Directory & Roles' 
+                    : activeItem === 'academics' 
+                    ? 'Academic Structure' 
+                    : activeItem === 'audit' 
+                    ? 'Audit Trail' 
+                    : 'System Overview & Architecture', 
+                  current: true 
+                }
               ]} 
             />
 
-            {/* Title & Primary Action Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-academic-border gap-4">
-              <div>
-                <div className="flex items-center space-x-3">
-                  <h1 className="text-2xl font-bold text-academic-deepGreen tracking-tight">
-                    SmartFA Architecture & UI Foundation
-                  </h1>
-                  <StatusBadge label="Phase 1 Active" variant="published" />
-                </div>
-                <p className="text-xs text-academic-muted mt-1 max-w-3xl">
-                  Institutional Formative Assessment, Evaluation and Internal Answer Similarity Review System.
-                  Baseline monorepo, design tokens, type contracts, and health telemetry established.
-                </p>
-              </div>
+            {/* Conditionally Render HOD Feature Views */}
+            {activeItem === 'users' && <UserManagement />}
+            {activeItem === 'academics' && <AcademicStructure />}
+            {activeItem === 'audit' && <AuditViewer />}
 
-              <div className="flex items-center space-x-3">
-                <button
-                  onClick={checkServices}
-                  disabled={isChecking}
-                  className="btn-secondary text-xs flex items-center space-x-1.5"
-                  aria-label="Refresh service connection checks"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isChecking ? 'animate-spin' : ''}`} />
-                  <span>Check Services</span>
-                </button>
-              </div>
-            </div>
+            {activeItem !== 'users' && activeItem !== 'academics' && activeItem !== 'audit' && (
+              <>
+                {/* Title & Primary Action Header */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-academic-border gap-4">
+                  <div>
+                    <div className="flex items-center space-x-3">
+                      <h1 className="text-2xl font-bold text-academic-deepGreen tracking-tight">
+                        SmartFA Architecture & UI Foundation
+                      </h1>
+                      <StatusBadge label="Phase 2 Active" variant="published" />
+                    </div>
+                    <p className="text-xs text-academic-muted mt-1 max-w-3xl">
+                      Institutional Formative Assessment, Evaluation and Internal Answer Similarity Review System.
+                      Phase 2 Identity, Scoped RBAC, Academic Structure, and Audit Logging active.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center space-x-3">
+                    <button
+                      onClick={checkServices}
+                      disabled={isChecking}
+                      className="btn-secondary text-xs flex items-center space-x-1.5"
+                      aria-label="Refresh service connection checks"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isChecking ? 'animate-spin' : ''}`} />
+                      <span>Check Services</span>
+                    </button>
+                  </div>
+                </div>
 
             {/* Architecture Overview Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -296,6 +315,8 @@ export const App: React.FC = () => {
                 </div>
               </div>
             </div>
+          </>
+        )}
 
           </div>
         </main>
