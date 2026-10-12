@@ -12,7 +12,9 @@ import {
   Question,
   RubricVersion,
   RubricCriterion,
-  RubricLevel 
+  RubricLevel,
+  Submission,
+  SubmissionVersion
 } from '@smartfa/contracts';
 import { supabaseAdmin } from '../auth/jwt.js';
 
@@ -94,6 +96,15 @@ class InMemoryDatabase {
       updated_at: new Date().toISOString()
     },
     {
+      id: 'a4000000-0000-0000-0000-000000000003',
+      full_name: 'Chetan Varma (Unenrolled)',
+      email: 'student.c@smartfa.edu',
+      usn: '1RV24MC003',
+      status: 'active',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    },
+    {
       id: 'a9000000-0000-0000-0000-000000000001',
       full_name: 'Inactive Student',
       email: 'inactive@smartfa.edu',
@@ -155,6 +166,13 @@ class InMemoryDatabase {
     {
       id: 'r4000000-0000-0000-0000-000000000002',
       user_id: 'a4000000-0000-0000-0000-000000000002',
+      role: 'student',
+      active: true,
+      created_at: new Date().toISOString()
+    },
+    {
+      id: 'r4000000-0000-0000-0000-000000000003',
+      user_id: 'a4000000-0000-0000-0000-000000000003',
       role: 'student',
       active: true,
       created_at: new Date().toISOString()
@@ -234,6 +252,9 @@ class InMemoryDatabase {
   rubricVersions: RubricVersion[] = [];
   rubricCriteria: RubricCriterion[] = [];
   rubricLevels: RubricLevel[] = [];
+  submissions: Submission[] = [];
+  submissionVersions: SubmissionVersion[] = [];
+  storageBlobs: Map<string, Buffer> = new Map();
 
   auditEvents: AuditEvent[] = [
     {

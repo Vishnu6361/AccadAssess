@@ -14,10 +14,15 @@ import {
   HelpCircle,
   X,
   Sparkles,
-  Sliders
+  Sliders,
+  Upload,
+  Download,
+  FileCheck2,
+  History,
+  ChevronDown
 } from 'lucide-react';
 import { StatusBadge } from '../../components/StatusBadge';
-import { assessmentApi, AssessmentDTO } from '../../services/apiClient';
+import { assessmentApi, AssessmentDTO, submissionApi, SubmissionDTO } from '../../services/apiClient';
 
 interface AssessmentManagementProps {
   activeRole: string;
@@ -83,6 +88,73 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
   }, [activeRole]);
 
   const selectedAssessment = assessments.find(a => a.id === selectedAssessmentId);
+
+  // Phase 4 Submission States
+  const [assessmentSubmissions, setAssessmentSubmissions] = useState<SubmissionDTO[]>([]);
+  const [activeTab, setActiveTab] = useState<'questions' | 'submissions'>('questions');
+  const [uploadingQId, setUploadingQId] = useState<string | null>(null);
+  const [expandedVersionsQId, setExpandedVersionsQId] = useState<string | null>(null);
+
+  const loadSubmissions = async (assessmentId: string) => {
+    try {
+      const subs = await submissionApi.getSubmissionsForAssessment(assessmentId);
+      setAssessmentSubmissions(subs);
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (selectedAssessmentId) {
+      loadSubmissions(selectedAssessmentId);
+    }
+  }, [selectedAssessmentId]);
+
+  const handlePdfUpload = async (questionId: string, file: File) => {
+    if (!selectedAssessmentId) return;
+    setErrorMessage(null);
+
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      setErrorMessage('Invalid file: Only PDF documents (.pdf) are accepted.');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setErrorMessage(`File size (${(file.size / (1024 * 1024)).toFixed(2)} MB) exceeds maximum allowed limit of 5.00 MB.`);
+      return;
+    }
+
+    setUploadingQId(questionId);
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const resultStr = reader.result as string;
+          const base64 = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
+          const receipt = await submissionApi.uploadSubmission({
+            assessment_id: selectedAssessmentId,
+            question_id: questionId,
+            file_name: file.name,
+            file_base64: base64
+          });
+          setActionMessage(
+            `Answer uploaded successfully! Version ${receipt.version} saved. SHA-256: ${receipt.sha256.substring(0, 16)}...`
+          );
+          await loadSubmissions(selectedAssessmentId);
+        } catch (err: any) {
+          setErrorMessage(err.message || 'Failed to upload submission');
+        } finally {
+          setUploadingQId(null);
+        }
+      };
+      reader.onerror = () => {
+        setErrorMessage('Failed to read file from disk.');
+        setUploadingQId(null);
+      };
+      reader.readAsDataURL(file);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'File processing error.');
+      setUploadingQId(null);
+    }
+  };
 
   // Handle Assessment Creation
   const handleCreateAssessment = async (e: React.FormEvent) => {
@@ -556,24 +628,134 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
             </div>
           )}
 
-          {/* Questions & Rubrics Section */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
-                <FileText className="w-4 h-4 mr-2 text-academic-primaryGreen" />
-                Questions & Grading Rubrics
-              </h3>
+          {/* Phase 4: Teacher Tab Switcher (Published Assessments) */}
+          {isTeacher && selectedAssessment?.status === 'published' && (
+            <div className="flex border-b border-academic-border gap-2">
+              <button
+                onClick={() => setActiveTab('questions')}
+                className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors ${
+                  activeTab === 'questions'
+                    ? 'border-academic-primaryGreen text-academic-deepGreen'
+                    : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+                }`}
+              >
+                Questions & Rubrics ({selectedAssessment.questions?.length || 0})
+              </button>
+              <button
+                onClick={() => setActiveTab('submissions')}
+                className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors ${
+                  activeTab === 'submissions'
+                    ? 'border-academic-primaryGreen text-academic-deepGreen'
+                    : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+                }`}
+              >
+                Student Submissions & Private PDFs ({assessmentSubmissions.length})
+              </button>
+            </div>
+          )}
 
-              {isTeacher && selectedAssessment?.status === 'draft' && (
-                <button
-                  onClick={() => setShowAddQuestionModal(true)}
-                  className="btn-secondary text-xs flex items-center min-h-[44px]"
-                >
-                  <PlusCircle className="w-3.5 h-3.5 mr-1.5" />
-                  <span>Add Question</span>
-                </button>
+          {/* Phase 4: Teacher Submissions View */}
+          {isTeacher && selectedAssessment?.status === 'published' && activeTab === 'submissions' ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
+                    <FileCheck2 className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                    Enrolled Student Submissions
+                  </h3>
+                  <p className="text-xs text-academic-muted mt-0.5">
+                    Original handwritten student PDFs stored securely in private storage bucket.
+                  </p>
+                </div>
+              </div>
+
+              {assessmentSubmissions.length === 0 ? (
+                <div className="card-surface text-center py-12">
+                  <FileText className="w-10 h-10 text-academic-muted/40 mx-auto mb-2" />
+                  <p className="text-xs font-semibold text-academic-deepGreen">No submissions received yet</p>
+                  <p className="text-[11px] text-academic-muted mt-0.5">
+                    Enrolled students have not submitted PDF answers for this assessment.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto border border-academic-border rounded-lg bg-academic-surface">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-academic-paleGreen text-academic-deepGreen border-b border-academic-border text-[11px] font-semibold">
+                      <tr>
+                        <th className="p-3">Student Name</th>
+                        <th className="p-3">USN</th>
+                        <th className="p-3">Question</th>
+                        <th className="p-3">Version</th>
+                        <th className="p-3">Submitted At</th>
+                        <th className="p-3">Size</th>
+                        <th className="p-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-academic-border bg-academic-surface">
+                      {assessmentSubmissions.map((sub) => {
+                        const qObj = selectedAssessment.questions?.find(q => q.id === sub.question_id);
+                        return (
+                          <tr key={sub.id} className="hover:bg-academic-paleGreen/30 transition-colors">
+                            <td className="p-3 font-semibold text-academic-deepGreen">
+                              {sub.student_name || 'Enrolled Student'}
+                            </td>
+                            <td className="p-3 font-mono text-[11px] text-academic-muted">
+                              {sub.student_usn || '—'}
+                            </td>
+                            <td className="p-3 text-academic-deepGreen">
+                              Q{qObj?.display_order || '1'} ({qObj?.max_marks || 10} marks)
+                            </td>
+                            <td className="p-3">
+                              <span className="px-2 py-0.5 rounded bg-academic-paleGreen border border-academic-border text-[11px] font-bold text-academic-deepGreen">
+                                v{sub.active_version?.version || 1}
+                              </span>
+                            </td>
+                            <td className="p-3 text-academic-muted text-[11px]">
+                              {sub.active_version?.uploaded_at ? new Date(sub.active_version.uploaded_at).toLocaleString() : '—'}
+                            </td>
+                            <td className="p-3 font-mono text-[11px] text-academic-muted">
+                              {sub.active_version?.size_bytes ? `${(sub.active_version.size_bytes / 1024).toFixed(1)} KB` : '—'}
+                            </td>
+                            <td className="p-3 text-right">
+                              {sub.active_version && (
+                                <a
+                                  href={submissionApi.downloadPdfUrl(sub.id, sub.active_version.id)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="btn-secondary text-xs inline-flex items-center min-h-[36px]"
+                                >
+                                  <Download className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
+                                  <span>Download PDF</span>
+                                </a>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
+          ) : (
+            /* Questions & Rubrics Section */
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
+                  <FileText className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                  Questions & Grading Rubrics
+                </h3>
+
+                {isTeacher && selectedAssessment?.status === 'draft' && (
+                  <button
+                    onClick={() => setShowAddQuestionModal(true)}
+                    className="btn-secondary text-xs flex items-center min-h-[44px]"
+                  >
+                    <PlusCircle className="w-3.5 h-3.5 mr-1.5" />
+                    <span>Add Question</span>
+                  </button>
+                )}
+              </div>
 
             {selectedAssessment?.questions?.length === 0 ? (
               <div className="card-surface text-center py-8">
@@ -707,14 +889,137 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                           </div>
                         )}
                       </div>
+
+                      {/* Phase 4: Student Submission Panel */}
+                      {!isTeacher && selectedAssessment.status === 'published' && (() => {
+                        const sub = assessmentSubmissions.find(s => s.question_id === q.id);
+                        const isDeadlinePassed = new Date(selectedAssessment.deadline_at).getTime() <= Date.now();
+
+                        return (
+                          <div className="pt-3 border-t border-academic-border space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="font-semibold text-academic-deepGreen text-xs flex items-center">
+                                <FileCheck2 className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+                                Your Handwritten PDF Answer
+                              </span>
+                              {sub ? (
+                                <span className="inline-flex items-center text-[11px] font-semibold text-academic-primaryGreen bg-academic-lightGreen px-2 py-0.5 rounded border border-academic-primaryGreen/30">
+                                  <CheckCircle2 className="w-3 h-3 mr-1" />
+                                  Submitted (v{sub.active_version?.version || 1})
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center text-[11px] font-medium text-academic-muted bg-academic-paleGreen px-2 py-0.5 rounded border border-academic-border">
+                                  <Clock className="w-3 h-3 mr-1" />
+                                  Pending Submission
+                                </span>
+                              )}
+                            </div>
+
+                            {sub && sub.active_version && (
+                              <div className="p-3 bg-academic-paleGreen/40 rounded border border-academic-border space-y-2 text-xs">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                  <div>
+                                    <p className="font-semibold text-academic-deepGreen">{sub.active_version.original_name}</p>
+                                    <p className="text-[11px] text-academic-muted mt-0.5">
+                                      {(sub.active_version.size_bytes / 1024).toFixed(1)} KB • Uploaded {new Date(sub.active_version.uploaded_at).toLocaleString()}
+                                    </p>
+                                  </div>
+                                  <a
+                                    href={submissionApi.downloadPdfUrl(sub.id, sub.active_version.id)}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="btn-secondary text-xs inline-flex items-center self-start sm:self-auto min-h-[36px]"
+                                  >
+                                    <Download className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
+                                    <span>Download PDF</span>
+                                  </a>
+                                </div>
+                                <div className="text-[10px] text-academic-muted font-mono bg-academic-surface/80 p-1.5 rounded border border-academic-border/60 break-all">
+                                  SHA-256: {sub.active_version.sha256}
+                                </div>
+
+                                {/* Historical Version Accordion */}
+                                {sub.versions && sub.versions.length > 1 && (
+                                  <div className="pt-2 border-t border-academic-border/60">
+                                    <button
+                                      type="button"
+                                      onClick={() => setExpandedVersionsQId(expandedVersionsQId === q.id ? null : q.id)}
+                                      className="text-[11px] font-semibold text-academic-deepGreen hover:text-academic-primaryGreen flex items-center"
+                                    >
+                                      <History className="w-3 h-3 mr-1" />
+                                      <span>Version History ({sub.versions.length} versions)</span>
+                                      <ChevronDown className={`w-3.5 h-3.5 ml-1 transition-transform ${expandedVersionsQId === q.id ? 'rotate-180' : ''}`} />
+                                    </button>
+
+                                    {expandedVersionsQId === q.id && (
+                                      <div className="mt-2 space-y-1.5 pl-2 border-l-2 border-academic-primaryGreen/30">
+                                        {sub.versions.map((ver: any) => (
+                                          <div key={ver.id} className="text-[11px] flex items-center justify-between p-1.5 rounded bg-academic-surface border border-academic-border">
+                                            <div>
+                                              <span className="font-bold text-academic-deepGreen mr-2">v{ver.version}</span>
+                                              <span className="text-academic-muted">{ver.original_name}</span>
+                                              {ver.superseded_at && (
+                                                <span className="ml-2 text-[10px] text-academic-muted/80 bg-academic-paleGreen px-1.5 py-0.5 rounded">
+                                                  Superseded on {new Date(ver.superseded_at).toLocaleDateString()}
+                                                </span>
+                                              )}
+                                            </div>
+                                            <a
+                                              href={submissionApi.downloadPdfUrl(sub.id, ver.id)}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="text-academic-primaryGreen hover:underline text-[11px] font-semibold ml-2"
+                                            >
+                                              Download
+                                            </a>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* File Upload / Resubmit Box */}
+                            {!isDeadlinePassed ? (
+                              <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
+                                <label className="btn-secondary text-xs flex items-center cursor-pointer min-h-[44px]">
+                                  <Upload className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+                                  <span>{sub ? 'Resubmit Revised PDF Answer' : 'Choose PDF Answer File'}</span>
+                                  <input
+                                    type="file"
+                                    accept="application/pdf"
+                                    className="hidden"
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0];
+                                      if (file) handlePdfUpload(q.id, file);
+                                    }}
+                                    disabled={uploadingQId === q.id}
+                                  />
+                                </label>
+                                <span className="text-[11px] text-academic-muted">
+                                  {uploadingQId === q.id ? 'Uploading & validating PDF...' : 'Max 5 MB. PDF only. Resubmissions permitted until deadline.'}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="p-2.5 bg-[#FDF6E2] border border-[#D9BD71] rounded text-[11px] text-[#6D5200] flex items-center space-x-1.5">
+                                <Lock className="w-3.5 h-3.5 text-[#B28704] flex-shrink-0" />
+                                <span>Submissions locked. The assessment deadline has passed. Resubmissions are disabled.</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })}
               </div>
             )}
           </div>
-        </div>
-      )}
+        )}
+      </div>
+    )}
 
       {/* MODAL 1: Create Assessment Modal */}
       {showCreateModal && (

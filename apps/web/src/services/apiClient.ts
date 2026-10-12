@@ -556,3 +556,67 @@ export const assessmentApi = {
     }
   }
 };
+
+/**
+ * ==============================================================================
+ * Phase 4: Student Submissions and Private PDF Storage API
+ * ==============================================================================
+ */
+
+export interface SubmissionDTO {
+  id: string;
+  assessment_id: string;
+  question_id: string;
+  student_id: string;
+  student_name?: string;
+  student_email?: string;
+  student_usn?: string | null;
+  active_version_id?: string | null;
+  status: string;
+  first_submitted_at: string;
+  updated_at: string;
+  active_version?: any;
+  versions?: any[];
+}
+
+export const submissionApi = {
+  uploadSubmission: async (payload: {
+    assessment_id: string;
+    question_id: string;
+    file_name: string;
+    file_base64: string;
+  }): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/submissions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error?.message || `Submission failed (${res.status})`);
+      }
+      return data.receipt;
+    } catch (err: any) {
+      if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
+        throw new Error('API server is offline (http://localhost:4000). Cannot submit PDF answer.');
+      }
+      throw err;
+    }
+  },
+
+  getSubmissionsForAssessment: async (assessmentId: string): Promise<SubmissionDTO[]> => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/submissions/assessment/${assessmentId}`);
+      if (res.ok) {
+        const data = await res.json();
+        return data.submissions;
+      }
+    } catch {}
+    return [];
+  },
+
+  downloadPdfUrl: (submissionId: string, versionId: string): string => {
+    return `${API_BASE_URL}/submissions/${submissionId}/versions/${versionId}/download`;
+  }
+};

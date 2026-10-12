@@ -363,6 +363,53 @@ export type SaveRubricRequest = z.infer<typeof SaveRubricRequestSchema>;
 
 /**
  * ==============================================================================
+ * Phase 4: Student Submissions and Private PDF Storage Schemas
+ * ==============================================================================
+ */
+
+export const SubmissionVersionSchema = z.object({
+  id: z.string().uuid(),
+  submission_id: z.string().uuid(),
+  version: z.number().int().min(1),
+  storage_path: z.string().min(1),
+  original_name: z.string().min(1),
+  mime_type: z.literal('application/pdf'),
+  size_bytes: z.number().int().positive().max(5242880, 'File size cannot exceed 5 MB (5,242,880 bytes)'),
+  sha256: z.string().length(64, 'SHA-256 must be 64 hexadecimal characters'),
+  uploaded_at: z.string(),
+  superseded_at: z.string().nullable().optional()
+});
+export type SubmissionVersion = z.infer<typeof SubmissionVersionSchema>;
+
+export const SubmissionSchema = z.object({
+  id: z.string().uuid(),
+  assessment_id: z.string().uuid(),
+  question_id: z.string().uuid(),
+  student_id: z.string().uuid(),
+  active_version_id: z.string().uuid().nullable().optional(),
+  status: SubmissionStatusSchema,
+  first_submitted_at: z.string(),
+  updated_at: z.string(),
+  active_version: SubmissionVersionSchema.nullable().optional(),
+  versions: z.array(SubmissionVersionSchema).optional()
+});
+export type Submission = z.infer<typeof SubmissionSchema>;
+
+export const SubmissionReceiptSchema = z.object({
+  submission_id: z.string().uuid(),
+  version_id: z.string().uuid(),
+  version: z.number().int().min(1),
+  status: SubmissionStatusSchema,
+  sha256: z.string().length(64),
+  size_bytes: z.number().int().positive(),
+  uploaded_at: z.string(),
+  is_resubmission: z.boolean(),
+  storage_path: z.string()
+});
+export type SubmissionReceipt = z.infer<typeof SubmissionReceiptSchema>;
+
+/**
+ * ==============================================================================
  * Health Check Contract
  * ==============================================================================
  */

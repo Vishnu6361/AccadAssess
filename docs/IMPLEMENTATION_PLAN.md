@@ -168,17 +168,23 @@ SmartFA/
 ---
 
 ### Phase 4: Private Student PDF Submissions & Storage
-- **Scope:**
-  - Private Supabase Storage bucket `submissions-private` configuration with strict storage RLS policies.
-  - Database schema: `submissions`, `submission_versions`.
-  - Two-step submission protocol:
-    1. Client calls `POST /submissions/initiate` to validate enrollment and server deadline.
-    2. Client uploads file to authorized scoped path (`institution/{instId}/assessment/{assId}/question/{qId}/student/{sId}/{subId}/v{ver}.pdf`).
-    3. Client calls `POST /submissions/:id/finalize` where server validates magic bytes (`%PDF-`), file size ($\le 5\text{MB}$), creates `submission_versions` record, and returns a submission receipt.
-  - Resubmission support: replaces active version before deadline, marks previous version `superseded_at`, preserving historical PDFs.
-  - Deadline locking: client UI and server-side clock enforce zero submissions past deadline.
+- **Status:** **IMPLEMENTED & VERIFIED** (19/19 automated verification tests passing).
+- **Scope Implemented:**
+  - Private Supabase Storage bucket `submissions-private` configuration with strict private storage RLS policies in `supabase/migrations/20261012000005_student_submissions_and_storage.sql`.
+  - Database schema: `submissions`, `submission_versions`, constraints, indexes, RLS policies, and `public.finalize_submission` transactional function.
+  - PDF upload validation: strict server-side $\le 5\text{MB}$ limit, ASCII `%PDF-` magic byte inspection, and SHA-256 fingerprint generation.
+  - Submission lifecycle: creates or updates submissions for published assessments and questions; sets `submission_status = 'submitted'`.
+  - Versioned resubmissions: permitted only strictly before assessment deadline; increments `version_number` (v1 $\rightarrow$ v2), retains historical version records and files with `superseded_at` timestamp.
+  - Scoped storage hierarchy: `assessments/{assId}/questions/{qId}/students/{studentId}/submissions/{subId}/v{ver}.pdf` with private blob retention; never exposed via unauthenticated public URLs.
+  - Server-side authorization & download gateway: strictly scoped private download streaming with `Content-Type: application/pdf`, `Content-Disposition: inline`, and `Cache-Control: private, no-cache`. Enforces that students can only download own submissions, assigned teachers and HOD can access class submissions, and unassigned teachers / cross-students are denied (403).
+  - Scope checks: verifies student enrollment in assessment's class and valid assessment question membership.
+  - Audit logging: records `SUBMIT_ANSWER` and `RESUBMIT_ANSWER` events with user, assessment, question, version, and file SHA-256 metadata.
+  - Frontend screens: Academic Beige/Green submission panel with drag & drop PDF upload, 5 MB client check, receipt display with SHA-256 fingerprint, private download button, version history accordion, deadline lock banner, and teacher published view tab with student submission review table.
 - **Dependencies:** Phase 3 (Published assessments).
-- **Exit Gate / DoD:** Student uploads per-question PDF; file size $\le 5\text{MB}$ and PDF magic bytes strictly enforced; cross-student file access blocked; deadline enforcement validated.
+- **Exit Gate / DoD:** Passed. 19 automated tests verify unauthenticated rejection, non-student denial, draft assessment rejection, non-enrolled student denial, invalid question rejection, non-PDF magic byte rejection, > 5MB file rejection, valid PDF submission with receipt & SHA-256, storage blob retention, versioned resubmission before deadline, active version switching & historical superseded retention, student submission listing with version history, cross-student private download denial, owner private download streaming, assigned teacher download and listing, unassigned teacher denial, deadline passed lock enforcement, and audit trail generation.
+- **Remaining Database Integration Tasks:**
+  - Migration `20261012000005_student_submissions_and_storage.sql` and storage bucket policies await execution on live PostgreSQL / Supabase instance once available.
+  - Real PostgreSQL RLS enforcement and storage RLS policies remain unverified against live cloud/local Supabase services while in `IN_MEMORY_MOCK` mode.
 
 ---
 

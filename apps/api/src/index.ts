@@ -56,6 +56,10 @@ app.use('/api/v1/admin/hod', hodRouter);
 import assessmentRouter from './assessments/assessmentRoutes.js';
 app.use('/api/v1/assessments', assessmentRouter);
 
+// Mount Student Submissions & Storage Routes
+import submissionRouter from './submissions/submissionRoutes.js';
+app.use('/api/v1/submissions', submissionRouter);
+
 /**
  * Root Info Endpoint
  */
