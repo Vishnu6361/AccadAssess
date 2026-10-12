@@ -437,16 +437,21 @@ const mockAssessments: AssessmentDTO[] = [
   }
 ];
 
+export interface GetAssessmentsResult {
+  assessments: AssessmentDTO[];
+  isOfflineFallback: boolean;
+}
+
 export const assessmentApi = {
-  getAssessments: async (): Promise<AssessmentDTO[]> => {
+  getAssessments: async (): Promise<GetAssessmentsResult> => {
     try {
       const res = await fetch(`${API_BASE_URL}/assessments`);
       if (res.ok) {
         const data = await res.json();
-        return data.assessments;
+        return { assessments: data.assessments, isOfflineFallback: false };
       }
     } catch {}
-    return mockAssessments;
+    return { assessments: mockAssessments, isOfflineFallback: true };
   },
 
   getAssessment: async (id: string): Promise<AssessmentDTO | null> => {
@@ -472,27 +477,17 @@ export const assessmentApi = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      if (res.ok) {
-        const data = await res.json();
-        return data.assessment;
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error?.message || `Server error (${res.status}): Failed to create assessment`);
       }
-    } catch {}
-    const newAss: AssessmentDTO = {
-      id: `as-${Date.now()}`,
-      class_subject_id: payload.class_subject_id,
-      title: payload.title,
-      instructions: payload.instructions,
-      deadline_at: payload.deadline_at,
-      status: 'draft',
-      created_by: 'a2000000-0000-0000-0000-000000000001',
-      published_at: null,
-      version: 1,
-      class_details: 'MCA Sem 3-A',
-      subject_details: 'MCA301 - Algorithms',
-      questions: []
-    };
-    mockAssessments.unshift(newAss);
-    return newAss;
+      return data.assessment;
+    } catch (err: any) {
+      if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
+        throw new Error('API server is offline (http://localhost:4000). Cannot persist assessment to server.');
+      }
+      throw err;
+    }
   },
 
   addQuestion: async (assessmentId: string, payload: {
@@ -506,25 +501,17 @@ export const assessmentApi = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      if (res.ok) {
-        const data = await res.json();
-        return data.question;
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error?.message || `Server error (${res.status}): Failed to add question`);
       }
-    } catch {}
-    const ass = mockAssessments.find(a => a.id === assessmentId);
-    const newQ = {
-      id: `q-${Date.now()}`,
-      assessment_id: assessmentId,
-      display_order: payload.display_order,
-      prompt: payload.prompt,
-      max_marks: payload.max_marks,
-      rubric: null
-    };
-    if (ass) {
-      if (!ass.questions) ass.questions = [];
-      ass.questions.push(newQ);
+      return data.question;
+    } catch (err: any) {
+      if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
+        throw new Error('API server is offline (http://localhost:4000). Cannot add question.');
+      }
+      throw err;
     }
-    return newQ;
   },
 
   saveRubric: async (assessmentId: string, questionId: string, payload: {
@@ -537,25 +524,17 @@ export const assessmentApi = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      if (res.ok) {
-        const data = await res.json();
-        return data.rubric;
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error?.message || `Server error (${res.status}): Failed to save rubric`);
       }
-    } catch {}
-    const ass = mockAssessments.find(a => a.id === assessmentId);
-    const q = ass?.questions?.find(item => item.id === questionId);
-    const newRubric = {
-      id: `rv-${Date.now()}`,
-      question_id: questionId,
-      version: 1,
-      title: payload.title,
-      frozen_at: null,
-      criteria: payload.criteria
-    };
-    if (q) {
-      q.rubric = newRubric;
+      return data.rubric;
+    } catch (err: any) {
+      if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
+        throw new Error('API server is offline (http://localhost:4000). Cannot persist rubric.');
+      }
+      throw err;
     }
-    return newRubric;
   },
 
   publishAssessment: async (assessmentId: string): Promise<any> => {
@@ -566,24 +545,12 @@ export const assessmentApi = {
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error?.message || 'Publication failed');
+        throw new Error(data.error?.message || `Publication failed (${res.status})`);
       }
       return data.assessment;
     } catch (err: any) {
-      // Mock publish
-      const ass = mockAssessments.find(a => a.id === assessmentId);
-      if (ass) {
-        // Enforce invariant in mock
-        for (const q of ass.questions || []) {
-          if (!q.rubric) throw new Error(`Question ${q.display_order} is missing a rubric.`);
-          const sum = q.rubric.criteria?.reduce((acc: number, c: any) => acc + Number(c.max_marks), 0) || 0;
-          if (Math.abs(sum - q.max_marks) > 0.001) {
-            throw new Error(`Question ${q.display_order} criteria sum (${sum}) does not match question max marks (${q.max_marks})`);
-          }
-        }
-        ass.status = 'published';
-        ass.published_at = new Date().toISOString();
-        return ass;
+      if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
+        throw new Error('API server is offline (http://localhost:4000). Cannot publish assessment.');
       }
       throw err;
     }

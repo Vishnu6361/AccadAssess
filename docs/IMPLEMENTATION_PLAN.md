@@ -151,14 +151,19 @@ SmartFA/
 ---
 
 ### Phase 3: Assessment Authoring & Rubric Management
-- **Scope:**
-  - Database schema: `assessments`, `questions`, `rubric_templates`, `rubric_versions`, `rubric_criteria`, and `rubric_levels`.
-  - Teacher assessment builder UI: title, instructions, common deadline, per-question prompts, and max marks.
-  - Rubric builder: criteria reordering, max marks per criterion, performance levels (e.g. Excellent, Good, Developing, Insufficient).
-  - Rubric validation invariant: enforcement in trusted API and DB transaction that $\sum \text{criterion.max\_marks} = \text{question.max\_marks}$.
-  - Assessment publication workflow: creates an immutable snapshot (`frozen_at`), locks rubrics from subsequent edits, and audits the publication event.
+- **Status:** **IMPLEMENTED & VERIFIED** (21/21 automated verification tests passing; commit `321010b` and review hardening).
+- **Scope Implemented:**
+  - Database schema migration: `assessments`, `questions`, `rubric_templates`, `rubric_versions`, `rubric_criteria`, `rubric_levels`, composite order constraints, and transactional publication function `public.publish_assessment` with `FOR UPDATE` locking.
+  - Teacher assessment builder UI: title, instructions, common future deadline, per-question prompts, display orders, and max marks.
+  - Rubric builder & live invariant balancer: criteria reordering, max marks per criterion, performance levels (`Excellent`, `Good`, `Developing`, `Insufficient`).
+  - Rubric validation invariant: strict enforcement in API and DB that $\sum \text{criterion.max\_marks} = \text{question.max\_marks}$.
+  - Assessment publication workflow: creates immutable snapshot (`frozen_at`), locks rubrics, questions, and assessment records from subsequent edits, and records `PUBLISH_ASSESSMENT` audit log.
+  - Frontend truthfulness: explicit offline mock mode banner; mutating actions throw errors when API is unavailable, preventing mock data from masquerading as saved server data.
 - **Dependencies:** Phase 2 (Identity & RBAC).
-- **Exit Gate / DoD:** Teacher can create, edit draft, validate, and publish an assessment; published rubric versions become immutable; criteria sum invariant strictly enforced.
+- **Exit Gate / DoD:** Passed. 21 automated tests verify authentication, student denial, unassigned teacher denial, past deadline rejection, question addition, missing rubric rejection, rubric total mismatch rejection, balanced rubric saves, atomic publication, post-publication immutability locks on all mutating endpoints, student class enrollment scoping, and audit trail generation.
+- **Remaining Database Integration Tasks:**
+  - Migrations `20261012000001` through `20261012000004` await execution on a live PostgreSQL instance once Docker or Supabase CLI is available.
+  - Real PostgreSQL RLS enforcement and PL/pgSQL function execution remain unverified against a live database kernel while operating in `IN_MEMORY_MOCK` mode.
 
 ---
 

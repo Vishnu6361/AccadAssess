@@ -302,3 +302,130 @@ create policy "Teachers can modify levels on unfrozen criteria"
         and rv.frozen_at is null
     )
   );
+
+-- ------------------------------------------------------------------------------
+-- Transactional Publication & Rubric Freezing Function
+-- Specification 05, Section 8: Publication Workflow & Immutability
+-- ------------------------------------------------------------------------------
+create or replace function public.publish_assessment(p_assessment_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_assessment public.assessments%rowtype;
+  v_q record;
+  v_rv public.rubric_versions%rowtype;
+  v_criteria_sum numeric(6,2);
+  v_q_count integer := 0;
+  v_now timestamptz := now();
+begin
+  -- 1. Lock the assessment row to prevent concurrent modifications
+  select * into v_assessment
+  from public.assessments
+  where id = p_assessment_id
+  for update;
+
+  if not found then
+    raise exception 'Assessment not found';
+  end if;
+
+  -- 2. Authorization check: must be assigned subject teacher or HOD
+  if not (
+    public.is_hod(auth.uid()) or exists (
+      select 1 from public.class_subjects cs
+      where cs.id = v_assessment.class_subject_id
+        and cs.subject_teacher_id = auth.uid()
+        and cs.active = true
+    )
+  ) then
+    raise exception 'FORBIDDEN: Caller is not authorized to publish this assessment';
+  end if;
+
+  -- 3. Status check: must be draft
+  if v_assessment.status <> 'draft' then
+    raise exception 'ALREADY_PUBLISHED: Cannot publish assessment with status %', v_assessment.status;
+  end if;
+
+  -- 4. Deadline check: must be in the future
+  if v_assessment.deadline_at <= v_now then
+    raise exception 'INVALID_DEADLINE: Assessment deadline must be in the future';
+  end if;
+
+  -- 5. Validate questions and rubric sum invariants
+  for v_q in (
+    select id, display_order, prompt, max_marks
+    from public.questions
+    where assessment_id = p_assessment_id
+    order by display_order
+    for update
+  ) loop
+    v_q_count := v_q_count + 1;
+
+    -- Fetch rubric version
+    select * into v_rv
+    from public.rubric_versions
+    where question_id = v_q.id
+    order by version desc
+    limit 1
+    for update;
+
+    if not found then
+      raise exception 'MISSING_RUBRIC: Question % does not have a rubric defined', v_q.display_order;
+    end if;
+
+    -- Calculate criteria sum
+    select coalesce(sum(max_marks), 0) into v_criteria_sum
+    from public.rubric_criteria
+    where rubric_version_id = v_rv.id;
+
+    -- Invariant: criteria sum must equal question max marks
+    if v_criteria_sum <> v_q.max_marks then
+      raise exception 'RUBRIC_TOTAL_MISMATCH: Question % criteria sum (%) does not equal question max marks (%)',
+        v_q.display_order, v_criteria_sum, v_q.max_marks;
+    end if;
+  end loop;
+
+  if v_q_count = 0 then
+    raise exception 'EMPTY_ASSESSMENT: Assessment must contain at least one question before publication';
+  end if;
+
+  -- 6. Atomically freeze rubric versions
+  update public.rubric_versions
+  set frozen_at = v_now
+  where question_id in (
+    select id from public.questions where assessment_id = p_assessment_id
+  );
+
+  -- 7. Transition assessment status to published
+  update public.assessments
+  set status = 'published',
+      published_at = v_now,
+      published_by = auth.uid(),
+      updated_at = v_now
+  where id = p_assessment_id;
+
+  -- 8. Record audit log
+  insert into public.audit_events (
+    actor_id,
+    action,
+    resource_type,
+    resource_id,
+    after
+  ) values (
+    auth.uid(),
+    'PUBLISH_ASSESSMENT',
+    'assessments',
+    p_assessment_id,
+    jsonb_build_object('published_at', v_now, 'questions_count', v_q_count)
+  );
+
+  return jsonb_build_object(
+    'assessment_id', p_assessment_id,
+    'status', 'published',
+    'published_at', v_now,
+    'questions_count', v_q_count
+  );
+end;
+$$;

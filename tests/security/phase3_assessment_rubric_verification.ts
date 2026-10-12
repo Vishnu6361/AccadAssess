@@ -250,8 +250,8 @@ async function runTests() {
       'Test 10: Invariant enforced: Publication rejected when rubric criteria sum (8) != question max marks (10)'
     );
 
-    // 11. Fix Question 1 rubric: Add Criterion 3 with 2 marks (5 + 3 + 2 = 10)
-    await makeRequest({
+    // 11. Fix Question 1 rubric: Add Criterion 3 with 2 marks so sum equals question max marks (5 + 3 + 2 = 10)
+    const res11 = await makeRequest({
       path: `/api/v1/assessments/${assessmentId}/questions/${q1Id}/rubric`,
       method: 'POST',
       token: teacher1Token,
@@ -282,9 +282,13 @@ async function runTests() {
         ]
       }
     });
+    assert(
+      res11.status === 201 && res11.body?.rubric?.criteria?.length === 3,
+      'Test 11: Saved balanced rubric for Question 1 (201 Created)'
+    );
 
-    // Also add matching rubric for Question 2 (max_marks = 15; criteria sum: 10 + 5 = 15)
-    await makeRequest({
+    // 12. Also add matching rubric for Question 2 (max_marks = 15; criteria sum: 10 + 5 = 15)
+    const res12 = await makeRequest({
       path: `/api/v1/assessments/${assessmentId}/questions/${q2Id}/rubric`,
       method: 'POST',
       token: teacher1Token,
@@ -308,65 +312,118 @@ async function runTests() {
         ]
       }
     });
+    assert(
+      res12.status === 201 && res12.body?.rubric?.criteria?.length === 2,
+      'Test 12: Saved balanced rubric for Question 2 (201 Created)'
+    );
 
-    // 12. Publish assessment now succeeds transactionally!
-    const res12 = await makeRequest({
+    // 13. Publish assessment now succeeds transactionally!
+    const res13 = await makeRequest({
       path: `/api/v1/assessments/${assessmentId}/publish`,
       method: 'POST',
       token: teacher1Token
     });
     assert(
-      res12.status === 200 &&
-      res12.body?.assessment?.status === 'published' &&
-      res12.body?.assessment?.published_at != null,
-      'Test 12: Assessment published successfully; rubric versions frozen'
+      res13.status === 200 &&
+      res13.body?.assessment?.status === 'published' &&
+      res13.body?.assessment?.published_at != null,
+      'Test 13: Assessment published successfully; rubric versions frozen (200 OK)'
     );
 
-    // 13. Post-publication lock invariant: cannot modify published assessment
-    const res13 = await makeRequest({
+    // 14. Post-publication lock invariant: cannot modify published assessment
+    const res14 = await makeRequest({
       path: `/api/v1/assessments/${assessmentId}`,
       method: 'PUT',
       token: teacher1Token,
       body: { title: 'Modified Title After Publish' }
     });
     assert(
-      res13.status === 400 && res13.body?.error?.code === 'LIFECYCLE_LOCKED',
-      'Test 13: Invariant enforced: Cannot modify published assessment (400 LIFECYCLE_LOCKED)'
+      res14.status === 400 && res14.body?.error?.code === 'LIFECYCLE_LOCKED',
+      'Test 14: Invariant enforced: Cannot modify published assessment (400 LIFECYCLE_LOCKED)'
     );
 
-    // 14. Post-publication lock invariant: cannot add question to published assessment
-    const res14 = await makeRequest({
+    // 15. Post-publication lock invariant: cannot add question to published assessment
+    const res15 = await makeRequest({
       path: `/api/v1/assessments/${assessmentId}/questions`,
       method: 'POST',
       token: teacher1Token,
       body: { display_order: 3, prompt: 'Extra Question', max_marks: 5 }
     });
     assert(
-      res14.status === 400 && res14.body?.error?.code === 'LIFECYCLE_LOCKED',
-      'Test 14: Invariant enforced: Cannot add questions to published assessment (400)'
+      res15.status === 400 && res15.body?.error?.code === 'LIFECYCLE_LOCKED',
+      'Test 15: Invariant enforced: Cannot add questions to published assessment (400 LIFECYCLE_LOCKED)'
     );
 
-    // 15. Student can now access the published assessment
-    const res15 = await makeRequest({
+    // 16. Post-publication lock invariant: cannot modify rubric on published assessment
+    const res16 = await makeRequest({
+      path: `/api/v1/assessments/${assessmentId}/questions/${q1Id}/rubric`,
+      method: 'POST',
+      token: teacher1Token,
+      body: {
+        title: 'Tampered Rubric Post Publish',
+        criteria: [{ display_order: 1, title: 'Cheating', description: 'desc', max_marks: 10, levels: [] }]
+      }
+    });
+    assert(
+      res16.status === 400 && res16.body?.error?.code === 'LIFECYCLE_LOCKED',
+      'Test 16: Invariant enforced: Cannot modify rubric after assessment is published (400 LIFECYCLE_LOCKED)'
+    );
+
+    // 17. Post-publication lock invariant: cannot delete question on published assessment
+    const res17 = await makeRequest({
+      path: `/api/v1/assessments/${assessmentId}/questions/${q1Id}`,
+      method: 'DELETE',
+      token: teacher1Token
+    });
+    assert(
+      res17.status === 400 && res17.body?.error?.code === 'LIFECYCLE_LOCKED',
+      'Test 17: Invariant enforced: Cannot delete question on published assessment (400 LIFECYCLE_LOCKED)'
+    );
+
+    // 18. Student enrolled in class can now access the published assessment
+    const res18 = await makeRequest({
       path: `/api/v1/assessments/${assessmentId}`,
       method: 'GET',
       token: student1Token
     });
     assert(
-      res15.status === 200 && res15.body?.assessment?.status === 'published',
-      'Test 15: Enrolled student can now view published assessment with questions (200 OK)'
+      res18.status === 200 && res18.body?.assessment?.status === 'published',
+      'Test 18: Enrolled student can now view published assessment with questions (200 OK)'
     );
 
-    // 16. Audit events recorded
-    const res16 = await makeRequest({
+    // 19. Non-enrolled student denied access to published assessment
+    const nonEnrolledStudentToken = createToken('a4000000-0000-0000-0000-000000000099', 'outsider.student@smartfa.edu');
+    const res19 = await makeRequest({
+      path: `/api/v1/assessments/${assessmentId}`,
+      method: 'GET',
+      token: nonEnrolledStudentToken
+    });
+    assert(
+      res19.status === 403,
+      'Test 19: Non-enrolled student denied access to published assessment (403 FORBIDDEN)'
+    );
+
+    // 20. Teacher not assigned to this class/subject denied viewing assessment
+    const res20 = await makeRequest({
+      path: `/api/v1/assessments/${assessmentId}`,
+      method: 'GET',
+      token: teacher2Token
+    });
+    assert(
+      res20.status === 403,
+      'Test 20: Unassigned teacher denied viewing assessment of other class/subject (403 FORBIDDEN)'
+    );
+
+    // 21. Audit events recorded
+    const res21 = await makeRequest({
       path: '/api/v1/admin/hod/audit',
       method: 'GET',
       token: hodToken
     });
     assert(
-      res16.status === 200 &&
-      res16.body.events.some((e: any) => e.action === 'PUBLISH_ASSESSMENT'),
-      'Test 16: Audit trail contains PUBLISH_ASSESSMENT event'
+      res21.status === 200 &&
+      res21.body.events.some((e: any) => e.action === 'PUBLISH_ASSESSMENT'),
+      'Test 21: Audit trail contains PUBLISH_ASSESSMENT event'
     );
 
   } catch (err) {

@@ -58,11 +58,13 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
   const [criteria, setCriteria] = useState<NewCriterionForm[]>([]);
 
   const isTeacher = activeRole === 'subject_teacher' || activeRole === 'hod';
+  const [isOfflineFallback, setIsOfflineFallback] = useState(false);
 
   const loadAssessments = async () => {
     setLoading(true);
     try {
-      const data = await assessmentApi.getAssessments();
+      const { assessments: data, isOfflineFallback: fallback } = await assessmentApi.getAssessments();
+      setIsOfflineFallback(fallback);
       // If student, filter out draft assessments
       if (!isTeacher) {
         setAssessments(data.filter(a => a.status === 'published' || a.status === 'closed'));
@@ -339,6 +341,17 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
           <button onClick={() => setErrorMessage(null)} className="text-academic-muted hover:text-[#6D5200]">
             <X className="w-4 h-4" />
           </button>
+        </div>
+      )}
+
+      {isOfflineFallback && (
+        <div className="p-3 bg-[#FDF6E2] border border-[#D9BD71] rounded-md text-xs text-[#6D5200] flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <AlertCircle className="w-4 h-4 text-[#B28704] flex-shrink-0" />
+            <span>
+              <strong>Offline Mock Mode:</strong> The backend API server (http://localhost:4000) is unreachable. Displaying read-only preview data. Changes cannot be saved until the API is running.
+            </span>
+          </div>
         </div>
       )}
 

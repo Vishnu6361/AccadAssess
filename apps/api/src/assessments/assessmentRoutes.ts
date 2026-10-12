@@ -137,8 +137,21 @@ router.get('/:id', (req: Request, res: Response) => {
 
   const user = req.userContext!;
 
-  // Student visibility rule: must be published and student enrolled in the class
-  if (user.roles.includes('student') && !user.roles.includes('subject_teacher') && !user.isHOD) {
+  // Strict Role & Scope Enforcement for GET /:id
+  if (user.isHOD) {
+    return res.status(200).json({ assessment });
+  }
+
+  if (user.roles.includes('subject_teacher')) {
+    if (!isAuthorizedTeacher(user.profile.id, assessment.class_subject_id)) {
+      return res.status(403).json({
+        error: { code: 'FORBIDDEN', message: 'Not authorized for this assessment class/subject' }
+      });
+    }
+    return res.status(200).json({ assessment });
+  }
+
+  if (user.roles.includes('student')) {
     if (assessment.status !== 'published') {
       return res.status(403).json({
         error: { code: 'FORBIDDEN', message: 'Unpublished assessments are invisible to students' }
@@ -155,18 +168,14 @@ router.get('/:id', (req: Request, res: Response) => {
         error: { code: 'FORBIDDEN', message: 'Student is not enrolled in this assessment class' }
       });
     }
+
+    return res.status(200).json({ assessment });
   }
 
-  // Teacher visibility rule: must be assigned teacher or HOD
-  if (user.roles.includes('subject_teacher') && !user.isHOD) {
-    if (!isAuthorizedTeacher(user.profile.id, assessment.class_subject_id)) {
-      return res.status(403).json({
-        error: { code: 'FORBIDDEN', message: 'Not authorized for this assessment class/subject' }
-      });
-    }
-  }
-
-  res.status(200).json({ assessment });
+  // Any other role (e.g. proctor, external user) denied
+  return res.status(403).json({
+    error: { code: 'FORBIDDEN', message: 'You do not have permission to view this assessment' }
+  });
 });
 
 /**
@@ -452,8 +461,15 @@ router.post('/:id/questions/:questionId/rubric', requireRoles(['subject_teacher'
 
   const body = SaveRubricRequestSchema.parse(req.body);
 
-  // Remove existing rubric version and criteria for this question if re-saving draft
+  // Check if existing rubric version is frozen (defense-in-depth)
   const existingRv = db.rubricVersions.find(rv => rv.question_id === question.id);
+  if (existingRv && existingRv.frozen_at !== null) {
+    return res.status(400).json({
+      error: { code: 'LIFECYCLE_LOCKED', message: 'Cannot modify a frozen rubric version' }
+    });
+  }
+
+  // Remove existing rubric version and criteria for this question if re-saving draft
   if (existingRv) {
     const existingCriteria = db.rubricCriteria.filter(rc => rc.rubric_version_id === existingRv.id);
     for (const c of existingCriteria) {
