@@ -2,11 +2,13 @@ import {
   AppRole, 
   Profile, 
   UserRole, 
-  Department, 
   AcademicTerm, 
   Class, 
   Subject, 
   ClassSubject, 
+  Programme,
+  Specialization,
+  SubjectSpecialization,
   AuditEvent,
   Assessment,
   Question,
@@ -14,7 +16,13 @@ import {
   RubricCriterion,
   RubricLevel,
   Submission,
-  SubmissionVersion
+  SubmissionVersion,
+  Enrollment,
+  ProctorAssignment,
+  Evaluation,
+  EvaluationCriterionScore,
+  ResultPublication,
+  FacultyAllocation
 } from '@smartfa/contracts';
 import { supabaseAdmin } from '../auth/jwt.js';
 
@@ -22,21 +30,64 @@ import { supabaseAdmin } from '../auth/jwt.js';
  * In-memory fallback database pre-seeded with synthetic development fixtures
  * from supabase/seed.sql for offline testing and local verification.
  */
-class InMemoryDatabase {
-  departments: Department[] = [
+export class InMemoryDatabase {
+  programmes: Programme[] = [
     {
-      id: 'd1000000-0000-0000-0000-000000000001',
+      id: 'b1000000-0000-4000-8000-000000000001',
       code: 'MCA',
-      name: 'Department of Computer Applications',
+      name: 'Master of Computer Applications',
+      duration_years: 2,
+      total_semesters: 4,
+      status: 'active',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     }
   ];
 
+  specializations: Specialization[] = [
+    {
+      id: 'c1000000-0000-4000-8000-000000000001',
+      programme_id: 'b1000000-0000-4000-8000-000000000001',
+      code: 'CYBER',
+      name: 'Cyber Security',
+      applicable_semesters: [3, 4],
+      active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    },
+    {
+      id: 'a1000000-0000-4000-8000-000000000002',
+      programme_id: 'b1000000-0000-4000-8000-000000000001',
+      code: 'AIDS',
+      name: 'Artificial Intelligence & Data Science',
+      applicable_semesters: [3, 4],
+      active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }
+  ];
+
+  subject_specializations: SubjectSpecialization[] = [
+    {
+      id: 'f1000000-0000-4000-8000-000000000001',
+      subject_id: '02000000-0000-4000-8000-000000000001',
+      specialization_id: 'c1000000-0000-4000-8000-000000000001',
+      semester: 3,
+      created_at: new Date().toISOString()
+    },
+    {
+      id: 'f1000000-0000-4000-8000-000000000002',
+      subject_id: '02000000-0000-4000-8000-000000000002',
+      specialization_id: 'a1000000-0000-4000-8000-000000000002',
+      semester: 3,
+      created_at: new Date().toISOString()
+    }
+  ];
+
   terms: AcademicTerm[] = [
     {
-      id: 't1000000-0000-0000-0000-000000000001',
-      name: 'Autumn 2026',
+      id: '01000000-0000-4000-8000-000000000001',
+      name: 'Academic Term 1',
       starts_on: '2026-08-01',
       ends_on: '2026-12-31',
       active: true,
@@ -182,11 +233,10 @@ class InMemoryDatabase {
   classes: Class[] = [
     {
       id: 'c1000000-0000-0000-0000-000000000001',
-      department_id: 'd1000000-0000-0000-0000-000000000001',
-      term_id: 't1000000-0000-0000-0000-000000000001',
+      term_id: '01000000-0000-4000-8000-000000000001',
       programme: 'MCA',
       semester: 3,
-      section: 'A',
+      section: null,
       class_teacher_id: 'a2000000-0000-0000-0000-000000000002',
       created_at: new Date().toISOString()
     }
@@ -194,19 +244,25 @@ class InMemoryDatabase {
 
   subjects: Subject[] = [
     {
-      id: 's1000000-0000-0000-0000-000000000001',
-      department_id: 'd1000000-0000-0000-0000-000000000001',
+      id: '02000000-0000-4000-8000-000000000001',
+      programme_id: 'b1000000-0000-4000-8000-000000000001',
+      specialization_id: 'c1000000-0000-4000-8000-000000000001',
+      semester: 3,
       code: 'MCA301',
       name: 'Analysis and Design of Algorithms',
       credits: 4,
+      active: true,
       created_at: new Date().toISOString()
     },
     {
-      id: 's1000000-0000-0000-0000-000000000002',
-      department_id: 'd1000000-0000-0000-0000-000000000001',
+      id: '02000000-0000-4000-8000-000000000002',
+      programme_id: 'b1000000-0000-4000-8000-000000000001',
+      specialization_id: 'a1000000-0000-4000-8000-000000000002',
+      semester: 3,
       code: 'MCA302',
       name: 'Cloud Computing & Distributed Systems',
       credits: 3,
+      active: true,
       created_at: new Date().toISOString()
     }
   ];
@@ -215,7 +271,7 @@ class InMemoryDatabase {
     {
       id: 'c5100000-0000-0000-0000-000000000001',
       class_id: 'c1000000-0000-0000-0000-000000000001',
-      subject_id: 's1000000-0000-0000-0000-000000000001',
+      subject_id: '02000000-0000-4000-8000-000000000001',
       subject_teacher_id: 'a2000000-0000-0000-0000-000000000001',
       active: true,
       created_at: new Date().toISOString()
@@ -223,27 +279,42 @@ class InMemoryDatabase {
     {
       id: 'c5100000-0000-0000-0000-000000000002',
       class_id: 'c1000000-0000-0000-0000-000000000001',
-      subject_id: 's1000000-0000-0000-0000-000000000002',
+      subject_id: '02000000-0000-4000-8000-000000000002',
       subject_teacher_id: 'a2000000-0000-0000-0000-000000000002',
       active: true,
       created_at: new Date().toISOString()
     }
   ];
 
-  enrollments = [
+  enrollments: Enrollment[] = [
     {
       id: 'e1000000-0000-0000-0000-000000000001',
       class_id: 'c1000000-0000-0000-0000-000000000001',
       student_id: 'a4000000-0000-0000-0000-000000000001',
       roll_number: '01',
-      status: 'active'
+      status: 'active',
+      created_at: new Date().toISOString()
     },
     {
       id: 'e1000000-0000-0000-0000-000000000002',
       class_id: 'c1000000-0000-0000-0000-000000000001',
       student_id: 'a4000000-0000-0000-0000-000000000002',
       roll_number: '02',
-      status: 'active'
+      status: 'active',
+      created_at: new Date().toISOString()
+    }
+  ];
+
+  proctorAssignments: ProctorAssignment[] = [
+    {
+      id: 'pa100000-0000-0000-0000-000000000001',
+      class_id: 'c1000000-0000-0000-0000-000000000001',
+      student_id: 'a4000000-0000-0000-0000-000000000001',
+      proctor_id: 'a3000000-0000-0000-0000-000000000001',
+      valid_from: '2026-08-01',
+      valid_to: null,
+      assigned_by: 'a1000000-0000-0000-0000-000000000001',
+      created_at: new Date().toISOString()
     }
   ];
 
@@ -255,6 +326,10 @@ class InMemoryDatabase {
   submissions: Submission[] = [];
   submissionVersions: SubmissionVersion[] = [];
   storageBlobs: Map<string, Buffer> = new Map();
+  evaluations: Evaluation[] = [];
+  evaluationCriterionScores: EvaluationCriterionScore[] = [];
+  resultPublications: ResultPublication[] = [];
+  faculty_allocations: FacultyAllocation[] = [];
 
   auditEvents: AuditEvent[] = [
     {

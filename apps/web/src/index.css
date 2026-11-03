@@ -4,14 +4,21 @@
 
 @layer base {
   :root {
-    --academic-bg: #F4EFE3;
-    --academic-surface: #FFFDF8;
-    --academic-light-green: #E7F0E4;
+    --academic-bg: #FAF8F3;
+    --academic-canvas-alt: #F4EFE3;
+    --academic-surface: #FFFFFF;
+    --academic-surface-alt: #FCFBF8;
+    --academic-light-green: #EBF2EC;
     --academic-pale-green: #F2F7EF;
-    --academic-primary-green: #355E3B;
-    --academic-deep-green: #27452C;
-    --academic-muted: #667066;
-    --academic-border: #C9D2C5;
+    --academic-primary-green: #2D5A3F;
+    --academic-primary-hover: #1E3F2E;
+    --academic-deep-green: #1A3E2A;
+    --academic-dark-teal: #023730;
+    --academic-olive: #708636;
+    --academic-gold: #C59B42;
+    --academic-muted: #556E5D;
+    --academic-border: #E2DDD1;
+    --academic-border-subtle: #EFEBE0;
   }
 
   body {
@@ -29,15 +36,23 @@
 }
 
 @layer components {
+  /* Primary Action Button: 42px accessible height, institutional green */
   .btn-primary {
-    @apply inline-flex items-center justify-center min-h-[44px] px-4 py-2 text-sm font-medium text-white bg-academic-primaryGreen hover:bg-academic-deepGreen rounded-md border border-transparent shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center min-h-[42px] px-4 py-2 text-xs sm:text-sm font-bold text-white bg-academic-primaryGreen hover:bg-academic-primaryHover active:bg-[#153023] rounded-lg border border-transparent shadow-sm transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-academic-primaryGreen focus:ring-offset-1;
   }
 
+  /* Secondary Neutral Button */
   .btn-secondary {
-    @apply inline-flex items-center justify-center min-h-[44px] px-4 py-2 text-sm font-medium text-academic-deepGreen bg-academic-paleGreen hover:bg-academic-lightGreen rounded-md border border-academic-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center min-h-[42px] px-4 py-2 text-xs sm:text-sm font-semibold text-academic-deepGreen bg-academic-paleGreen hover:bg-academic-lightGreen active:bg-[#DCE7DD] rounded-lg border border-academic-border transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-academic-primaryGreen focus:ring-offset-1;
   }
 
+  /* Standard Application Card */
   .card-surface {
-    @apply bg-academic-surface border border-academic-border rounded-lg p-6 shadow-academic;
+    @apply bg-white border border-academic-border rounded-xl p-5 sm:p-6 shadow-[0_2px_12px_-2px_rgba(27,77,62,0.06)];
+  }
+
+  /* Standard Form Input */
+  .input-academic {
+    @apply w-full px-3.5 py-2.5 text-xs sm:text-sm bg-[#FCFBF9] border border-academic-border rounded-lg text-academic-deepGreen placeholder-[#8A9C90] focus:outline-none focus:ring-2 focus:ring-academic-primaryGreen focus:border-academic-primaryGreen focus:bg-white disabled:opacity-50 min-h-[42px] transition-all duration-150;
   }
 }

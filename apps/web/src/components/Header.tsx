@@ -1,27 +1,54 @@
 import React from 'react';
-import { 
+import {
   Building2, 
-  Calendar, 
   Bell, 
   UserCircle, 
-  Menu
+  Menu, 
+  LogOut, 
+  ShieldCheck,
+  Layers,
+  ChevronDown
 } from 'lucide-react';
+import { AcadAssessLogo } from './AcadAssessLogo';
 
 interface HeaderProps {
   institutionName?: string;
-  academicTerm?: string;
   activeRole: string;
   availableRoles: string[];
+  userFullName?: string;
+  userEmail?: string;
   onRoleChange?: (role: string) => void;
+  onOpenWorkspaceModal?: () => void;
+  onLogout?: () => void;
   onToggleSidebar: () => void;
 }
 
+const formatWorkspaceTitle = (role: string): string => {
+  switch (role) {
+    case 'hod':
+      return 'HOD Workspace';
+    case 'subject_teacher':
+      return 'Subject Teacher Workspace';
+    case 'class_teacher':
+      return 'Class Teacher Workspace';
+    case 'proctor':
+      return 'Proctor Workspace';
+    case 'student':
+      return 'Student Workspace';
+    default:
+      return `${role.replace('_', ' ').toUpperCase()} Workspace`;
+  }
+};
+
 export const Header: React.FC<HeaderProps> = ({
-  institutionName = "Department of Computer Applications",
-  academicTerm = "Autumn 2026",
+  institutionName,
   activeRole,
   availableRoles,
+  userFullName,
+  userEmail,
   onRoleChange,
+  onOpenWorkspaceModal,
+  onLogout,
   onToggleSidebar
 }) => {
   return (
@@ -35,44 +62,60 @@ export const Header: React.FC<HeaderProps> = ({
           <Menu className="w-5 h-5" />
         </button>
 
-        <div className="flex items-center space-x-2">
-          <div className="w-9 h-9 rounded bg-academic-primaryGreen text-white flex items-center justify-center font-bold text-sm tracking-wider shadow-sm">
-            SFA
-          </div>
-          <div>
-            <h1 className="text-sm font-bold text-academic-deepGreen tracking-tight leading-none">SmartFA</h1>
-            <p className="text-[11px] text-academic-muted flex items-center mt-0.5">
-              <Building2 className="w-3 h-3 mr-1 inline" />
-              <span className="truncate max-w-[200px] sm:max-w-none">{institutionName}</span>
-            </p>
-          </div>
+        <div className="flex items-center space-x-2.5">
+          <AcadAssessLogo variant="compact" size="sm" showSubtitle={false} />
+          {institutionName && (
+            <div className="hidden sm:block border-l border-academic-border pl-2.5">
+              <p className="text-[11px] text-academic-muted flex items-center">
+                <Building2 className="w-3 h-3 mr-1 inline text-academic-primaryGreen" />
+                <span className="truncate max-w-[200px] md:max-w-[320px]">{institutionName}</span>
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="flex items-center space-x-3 sm:space-x-5">
-        {/* Academic Term indicator */}
-        <div className="hidden md:flex items-center text-xs text-academic-deepGreen bg-academic-paleGreen px-2.5 py-1.5 rounded-md border border-academic-border">
-          <Calendar className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
-          <span>{academicTerm}</span>
-        </div>
+      <div className="flex items-center space-x-2 sm:space-x-4">
+        {/* Multi-role Switcher (Only visible when user possesses multiple backend-verified approved roles) */}
+        {availableRoles.length > 1 ? (
+          <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-1.5 bg-academic-paleGreen px-2.5 py-1 rounded-md border border-academic-border text-xs shadow-xs">
+              <Layers className="w-3.5 h-3.5 text-academic-primaryGreen shrink-0" />
+              <label htmlFor="role-select" className="text-academic-muted font-medium hidden sm:inline">Workspace:</label>
+              <select
+                id="role-select"
+                value={activeRole}
+                onChange={(e) => onRoleChange?.(e.target.value)}
+                className="bg-transparent text-academic-deepGreen font-bold focus:outline-none cursor-pointer py-1"
+                title="Switch Active Academic Workspace"
+              >
+                {availableRoles.map(role => (
+                  <option key={role} value={role} className="bg-academic-surface font-semibold text-academic-deepGreen">
+                    {formatWorkspaceTitle(role)}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        {/* Multi-role Switcher (Only visible when user possesses multiple approved roles) */}
-        {availableRoles.length > 1 && (
-          <div className="flex items-center space-x-1.5 bg-academic-paleGreen px-2.5 py-1 rounded-md border border-academic-border text-xs">
-            <label htmlFor="role-select" className="text-academic-muted font-medium">Role:</label>
-            <select
-              id="role-select"
-              value={activeRole}
-              onChange={(e) => onRoleChange?.(e.target.value)}
-              className="bg-transparent text-academic-deepGreen font-semibold focus:outline-none cursor-pointer py-1"
-            >
-              {availableRoles.map(role => (
-                <option key={role} value={role} className="bg-academic-surface">
-                  {role.replace('_', ' ').toUpperCase()}
-                </option>
-              ))}
-            </select>
+            {onOpenWorkspaceModal && (
+              <button
+                type="button"
+                onClick={onOpenWorkspaceModal}
+                className="hidden md:inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-md border border-academic-border bg-academic-surface hover:bg-academic-paleGreen text-[11px] font-semibold text-academic-deepGreen transition-colors"
+                title="View All Workspaces"
+              >
+                <span>Switch</span>
+                <ChevronDown className="w-3 h-3 text-academic-muted" />
+              </button>
+            )}
           </div>
+        ) : (
+          activeRole && (
+            <div className="hidden sm:flex items-center space-x-1.5 bg-academic-paleGreen px-2.5 py-1 rounded-md border border-academic-border text-xs font-semibold text-academic-deepGreen">
+              <ShieldCheck className="w-3.5 h-3.5 text-academic-primaryGreen" />
+              <span>{formatWorkspaceTitle(activeRole)}</span>
+            </div>
+          )
         )}
 
         {/* Notifications indicator */}
@@ -84,16 +127,33 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-academic-primaryGreen rounded-full" />
         </button>
 
-        {/* Account menu badge */}
-        <div className="flex items-center space-x-2 border-l border-academic-border pl-3 sm:pl-4">
+        {/* Account profile badge */}
+        <div className="flex items-center space-x-2 border-l border-academic-border pl-2 sm:pl-3">
           <div className="w-8 h-8 rounded-full bg-academic-lightGreen border border-academic-primaryGreen/30 text-academic-primaryGreen flex items-center justify-center font-medium text-xs">
             <UserCircle className="w-6 h-6 text-academic-primaryGreen" />
           </div>
-          <div className="hidden lg:block text-left text-xs">
-            <p className="font-semibold text-academic-deepGreen">Active Session</p>
-            <p className="text-[11px] text-academic-muted capitalize">{activeRole.replace('_', ' ')}</p>
+          <div className="hidden lg:block text-left text-xs max-w-[140px]">
+            <p className="font-semibold text-academic-deepGreen truncate" title={userFullName || userEmail || 'Institutional User'}>
+              {userFullName || userEmail || 'Active Session'}
+            </p>
+            <p className="text-[11px] text-academic-muted capitalize truncate">
+              {activeRole ? activeRole.replace('_', ' ') : 'Authenticated'}
+            </p>
           </div>
         </div>
+
+        {/* Logout button */}
+        {onLogout && (
+          <button
+            onClick={onLogout}
+            className="p-2 rounded-md hover:bg-[#FFF5F2] text-academic-muted hover:text-[#A63214] transition-colors min-h-[44px] flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-[#A63214] border border-transparent hover:border-[#F2C4B3]"
+            title="Sign out of AcadAssess"
+            aria-label="Sign out"
+          >
+            <LogOut className="w-4 h-4" />
+            <span className="hidden sm:inline-block ml-1.5 text-xs font-medium">Logout</span>
+          </button>
+        )}
       </div>
     </header>
   );

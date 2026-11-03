@@ -16,17 +16,21 @@ export type BadgeVariant =
   | 'completed' 
   | 'ready_for_review' 
   | 'warning' 
-  | 'neutral';
+  | 'neutral'
+  | 'submitted'
+  | 'not_submitted';
 
 interface StatusBadgeProps {
   label: string;
   variant: BadgeVariant;
   className?: string;
+  title?: string;
 }
 
-export const StatusBadge: React.FC<StatusBadgeProps> = ({ label, variant, className = '' }) => {
+export const StatusBadge: React.FC<StatusBadgeProps> = ({ label, variant, className = '', title }) => {
   const getBadgeStyle = () => {
     switch (variant) {
+      case 'submitted':
       case 'published':
       case 'completed':
         return {
@@ -34,6 +38,13 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ label, variant, classN
           text: 'text-academic-deepGreen',
           border: 'border-academic-primaryGreen/30',
           icon: <CheckCircle2 className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+        };
+      case 'not_submitted':
+        return {
+          bg: 'bg-[#FFF5F2]',
+          text: 'text-[#A63214]',
+          border: 'border-[#F8D2C9]',
+          icon: <AlertCircle className="w-3.5 h-3.5 mr-1.5 text-[#C8421E]" />
         };
       case 'processing':
       case 'queued':
@@ -81,6 +92,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ label, variant, classN
     <span 
       className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium border ${style.bg} ${style.text} ${style.border} ${className}`}
       role="status"
+      title={title}
     >
       {style.icon}
       <span>{label}</span>

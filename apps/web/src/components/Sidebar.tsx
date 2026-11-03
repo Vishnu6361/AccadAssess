@@ -1,15 +1,14 @@
 import React from 'react';
 import { 
-  LayoutDashboard, 
   BookOpen, 
   FileCheck2, 
-  Scale, 
   Users, 
-  ShieldCheck, 
   ScrollText, 
-  X,
-  FileSpreadsheet
+  X, 
+  FileSpreadsheet, 
+  GraduationCap 
 } from 'lucide-react';
+import { AcadAssessLogo } from './AcadAssessLogo';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -17,43 +16,88 @@ interface SidebarProps {
   activeItem: string;
   onSelectItem: (item: string) => void;
   activeRole: string;
+  availableRoles?: string[];
+  onRoleChange?: (role: string) => void;
+  onOpenWorkspaceModal?: () => void;
 }
+
+const formatWorkspaceTitle = (role: string): string => {
+  switch (role) {
+    case 'hod':
+      return 'HOD Workspace';
+    case 'subject_teacher':
+      return 'Subject Teacher Workspace';
+    case 'class_teacher':
+      return 'Class Teacher Workspace';
+    case 'proctor':
+      return 'Proctor Workspace';
+    case 'student':
+      return 'Student Workspace';
+    default:
+      return `${role.replace('_', ' ').toUpperCase()} Workspace`;
+  }
+};
+
+const formatRoleButtonLabel = (role: string): string => {
+  switch (role) {
+    case 'hod':
+      return 'HOD';
+    case 'subject_teacher':
+      return 'Subject Teacher';
+    case 'class_teacher':
+      return 'Class Teacher';
+    case 'proctor':
+      return 'Proctor';
+    case 'student':
+      return 'Student';
+    default:
+      return role.replace('_', ' ');
+  }
+};
 
 export const Sidebar: React.FC<SidebarProps> = ({
   isOpen,
   onClose,
   activeItem,
   onSelectItem,
-  activeRole
+  activeRole,
+  availableRoles = [],
+  onRoleChange,
+  onOpenWorkspaceModal
 }) => {
   // Navigation items defined according to role specifications
   const getNavItems = () => {
-    const commonItems = [
-      { id: 'foundation', label: 'Phase 1 Architecture', icon: LayoutDashboard },
-    ];
-
     if (activeRole === 'hod') {
       return [
-        ...commonItems,
         { id: 'academics', label: 'Academic Structure', icon: BookOpen },
         { id: 'users', label: 'User Directory & Roles', icon: Users },
-        { id: 'audit', label: 'Audit Records', icon: ShieldCheck },
+        { id: 'institutional_reports', label: 'Institutional Submission Report', icon: FileSpreadsheet },
       ];
     }
 
     if (activeRole === 'subject_teacher') {
       return [
-        ...commonItems,
         { id: 'assessments', label: 'Formative Assessments', icon: BookOpen },
-        { id: 'submissions', label: 'Submissions & PDFs', icon: FileCheck2 },
-        { id: 'similarity', label: 'Similarity Reviews', icon: Scale },
         { id: 'grading', label: 'Rubric Evaluations', icon: FileSpreadsheet },
+      ];
+    }
+
+    if (activeRole === 'class_teacher') {
+      return [
+        { id: 'assessments', label: 'Class Workspace', icon: GraduationCap },
+        { id: 'students', label: 'Student Cohort', icon: Users },
+        { id: 'late_reports', label: 'Submissions & Late Report', icon: FileSpreadsheet },
+      ];
+    }
+
+    if (activeRole === 'proctor') {
+      return [
+        { id: 'late_reports', label: 'Mentee Submissions Report', icon: FileSpreadsheet },
       ];
     }
 
     // Default / student view
     return [
-      ...commonItems,
       { id: 'assessments', label: 'My Assessments', icon: BookOpen },
       { id: 'submissions', label: 'My Submissions', icon: FileCheck2 },
       { id: 'results', label: 'Published Results', icon: ScrollText },
@@ -80,22 +124,55 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }`}
         aria-label="Sidebar navigation"
       >
-        <div className="h-16 px-6 border-b border-academic-border flex items-center justify-between lg:hidden">
-          <span className="font-bold text-academic-deepGreen text-base">Navigation</span>
+        <div className="h-16 px-4 border-b border-academic-border flex items-center justify-between">
+          <AcadAssessLogo variant="compact" size="sm" showSubtitle={false} />
           <button 
             onClick={onClose}
-            className="p-2 rounded-md hover:bg-academic-paleGreen text-academic-muted min-h-[44px] min-w-[44px] flex items-center justify-center"
+            className="lg:hidden p-2 rounded-md hover:bg-academic-paleGreen text-academic-muted min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Close menu"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="px-4 py-4 border-b border-academic-border bg-academic-paleGreen/50">
-          <p className="text-[11px] font-semibold tracking-wider uppercase text-academic-muted">Workspace Scope</p>
-          <p className="text-xs font-semibold text-academic-deepGreen capitalize mt-0.5">
-            {activeRole.replace('_', ' ')} Workspace
+        <div className="px-4 py-3 border-b border-academic-border bg-academic-paleGreen/50">
+          <p className="text-[10px] font-bold tracking-wider uppercase text-academic-muted">Workspace Scope</p>
+          <p className="text-xs font-bold text-academic-deepGreen mt-0.5">
+            {formatWorkspaceTitle(activeRole)}
           </p>
+          {availableRoles.length > 1 && onRoleChange && (
+            <div className="mt-2 pt-2 border-t border-academic-border/50">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-[9px] uppercase font-bold text-academic-muted">Switch Workspace</p>
+                {onOpenWorkspaceModal && (
+                  <button
+                    onClick={onOpenWorkspaceModal}
+                    className="text-[9px] font-semibold text-academic-primaryGreen hover:underline cursor-pointer"
+                  >
+                    View All
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {availableRoles.map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => {
+                      onRoleChange(r);
+                      onClose();
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
+                      activeRole === r
+                        ? 'bg-academic-deepGreen text-white shadow-xs'
+                        : 'bg-white border border-academic-border text-academic-deepGreen hover:bg-academic-paleGreen'
+                    }`}
+                  >
+                    {formatRoleButtonLabel(r)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
@@ -111,7 +188,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 }}
                 className={`w-full flex items-center px-3 py-2.5 text-xs font-medium rounded-md transition-colors min-h-[44px] ${
                   isActive
-                    ? 'bg-academic-lightGreen text-academic-deepGreen font-semibold border border-academic-primaryGreen/30'
+                    ? 'bg-academic-lightGreen text-academic-deepGreen font-semibold border border-academic-primaryGreen/30 shadow-sm'
                     : 'text-academic-muted hover:bg-academic-paleGreen hover:text-academic-deepGreen'
                 }`}
                 aria-current={isActive ? 'page' : undefined}
@@ -126,12 +203,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="p-4 border-t border-academic-border bg-academic-paleGreen/30">
           <div className="text-[11px] text-academic-muted space-y-1">
             <div className="flex justify-between">
-              <span>System Version</span>
-              <span className="font-mono font-medium text-academic-deepGreen">2.0.0 (Phase 1)</span>
+              <span>Portal</span>
+              <span className="font-semibold text-academic-deepGreen">AcadAssess v2.0</span>
             </div>
             <div className="flex justify-between">
               <span>Security</span>
-              <span className="text-academic-primaryGreen font-medium">RLS Enforced</span>
+              <span className="text-academic-primaryGreen font-medium">RBAC / RLS Active</span>
             </div>
           </div>
         </div>

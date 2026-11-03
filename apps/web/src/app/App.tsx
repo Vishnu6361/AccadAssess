@@ -2,82 +2,343 @@ import React, { useState, useEffect } from 'react';
 import { Header } from '../components/Header';
 import { Sidebar } from '../components/Sidebar';
 import { Breadcrumbs } from '../components/Breadcrumbs';
-import { StatusBadge } from '../components/StatusBadge';
 import { 
-  Server, 
-  Cpu, 
-  Database, 
   ShieldAlert, 
-  Palette, 
-  RefreshCw
+  Loader2,
+  AlertTriangle,
+  LogOut,
+  UserX
 } from 'lucide-react';
-import { isSupabaseConfigured } from '../services/supabase';
-import { UserManagement } from '../features/hod/UserManagement';
-import { AcademicStructure } from '../features/hod/AcademicStructure';
-import { AuditViewer } from '../features/hod/AuditViewer';
-import { AssessmentManagement } from '../features/teacher/AssessmentManagement';
+const UserManagement = React.lazy(() => import('../features/hod/UserManagement').then(m => ({ default: m.UserManagement })));
+const AcademicStructure = React.lazy(() => import('../features/hod/AcademicStructure').then(m => ({ default: m.AcademicStructure })));
+const InstitutionalSubmissionReport = React.lazy(() => import('../features/hod/InstitutionalSubmissionReport').then(m => ({ default: m.InstitutionalSubmissionReport })));
+const AssessmentManagement = React.lazy(() => import('../features/teacher/AssessmentManagement').then(m => ({ default: m.AssessmentManagement })));
+const EvaluationGrading = React.lazy(() => import('../features/teacher/EvaluationGrading').then(m => ({ default: m.EvaluationGrading })));
+const StudentResults = React.lazy(() => import('../features/student/StudentResults').then(m => ({ default: m.StudentResults })));
+const StudentSubmissions = React.lazy(() => import('../features/student/StudentSubmissions').then(m => ({ default: m.StudentSubmissions })));
+const ClassTeacherWorkspace = React.lazy(() => import('../features/teacher/ClassTeacherWorkspace').then(m => ({ default: m.ClassTeacherWorkspace })));
+const ProctorMenteeReport = React.lazy(() => import('../features/proctor/ProctorMenteeReport').then(m => ({ default: m.ProctorMenteeReport })));
 
-export const App: React.FC = () => {
+const FeatureLoadingFallback: React.FC = () => (
+  <div className="flex flex-col items-center justify-center py-20 space-y-3">
+    <Loader2 className="w-6 h-6 text-academic-primaryGreen animate-spin" />
+    <span className="text-xs font-semibold text-academic-deepGreen">Loading Academic View...</span>
+  </div>
+);
+import { AuthProvider, useAuth } from '../context/AuthContext';
+import { LoginView } from '../features/auth/LoginView';
+import { PortalSelectionView } from '../features/portal/PortalSelectionView';
+import { AcadAssessLogo } from '../components/AcadAssessLogo';
+import { WorkspaceSelectionModal } from '../components/WorkspaceSelectionModal';
+import { useRouter } from '../hooks/useRouter';
+
+const getDefaultActiveItemForRole = (role: string | null): string => {
+  switch (role) {
+    case 'hod':
+      return 'academics';
+    case 'proctor':
+      return 'late_reports';
+    case 'subject_teacher':
+    case 'class_teacher':
+    case 'student':
+    default:
+      return 'assessments';
+  }
+};
+
+export const AppContent: React.FC = () => {
+  const {
+    user,
+    session,
+    userContext,
+    activeRole,
+    availableRoles,
+    isLoading,
+    accountStatus,
+    accountStatusMessage,
+    isPasswordRecovery,
+    logout,
+    switchRole
+  } = useAuth();
+
+  const { pathname, navigate } = useRouter();
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [activeItem, setActiveItem] = useState('assessments');
-  const [activeRole, setActiveRole] = useState<'student' | 'subject_teacher' | 'class_teacher' | 'proctor' | 'hod'>('subject_teacher');
-  
-  // Health checks status
-  const [apiHealth, setApiHealth] = useState<'unknown' | 'connected' | 'unreachable'>('unknown');
-  const [processorHealth, setProcessorHealth] = useState<'unknown' | 'connected' | 'unreachable'>('unknown');
-  const [isChecking, setIsChecking] = useState(false);
+  const [activeItem, setActiveItem] = useState(() => getDefaultActiveItemForRole(activeRole));
+  const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState(false);
+  const [hasPromptedWorkspaceModal, setHasPromptedWorkspaceModal] = useState(false);
 
-  const checkServices = async () => {
-    setIsChecking(true);
-    
-    // Check Node.js Express API
-    try {
-      const apiRes = await fetch('http://localhost:4000/health', { method: 'GET' });
-      if (apiRes.ok) {
-        setApiHealth('connected');
-      } else {
-        setApiHealth('unreachable');
-      }
-    } catch {
-      setApiHealth('unreachable');
-    }
-
-    // Check Python FastAPI Processor
-    try {
-      const procRes = await fetch('http://localhost:8000/health', { method: 'GET' });
-      if (procRes.ok) {
-        setProcessorHealth('connected');
-      } else {
-        setProcessorHealth('unreachable');
-      }
-    } catch {
-      setProcessorHealth('unreachable');
-    }
-
-    setIsChecking(false);
-  };
-
+  // If user has multiple roles and has not explicitly selected a workspace in this session, open modal
   useEffect(() => {
-    checkServices();
-  }, []);
-
-  const handleRoleChange = (role: 'student' | 'subject_teacher' | 'class_teacher' | 'proctor' | 'hod') => {
-    setActiveRole(role);
-    if (role === 'hod' && activeItem === 'assessments') {
-      setActiveItem('academics');
-    } else if (role !== 'hod' && (activeItem === 'users' || activeItem === 'academics' || activeItem === 'audit')) {
-      setActiveItem('assessments');
+    if (user && availableRoles.length > 1 && !hasPromptedWorkspaceModal) {
+      const saved = sessionStorage.getItem('smartfa_active_workspace');
+      if (!saved) {
+        setIsWorkspaceModalOpen(true);
+      }
+      setHasPromptedWorkspaceModal(true);
     }
+  }, [user, availableRoles, hasPromptedWorkspaceModal]);
+
+  const handleRoleChange = (newRole: string) => {
+    switchRole(newRole);
+    setActiveItem(getDefaultActiveItemForRole(newRole));
   };
 
-  const availableRoles = ['student', 'subject_teacher', 'class_teacher', 'proctor', 'hod'];
+  // Sync navigation view and redirect removed/unauthorized routes per role
+  useEffect(() => {
+    if (!activeRole) return;
 
+    if (activeRole === 'hod') {
+      // HOD workspace allows: academics (Academic Structure), users (User Directory & Roles), institutional_reports (Institutional Submission Report)
+      if (activeItem !== 'academics' && activeItem !== 'users' && activeItem !== 'institutional_reports') {
+        setActiveItem('academics');
+      }
+    } else if (activeRole === 'subject_teacher') {
+      // Subject Teacher workspace allows: assessments (Formative Assessments), grading (Rubric Evaluations)
+      if (activeItem !== 'assessments' && activeItem !== 'grading') {
+        setActiveItem('assessments');
+      }
+    } else if (activeRole === 'class_teacher') {
+      // Class Teacher workspace allows: assessments, students, late_reports
+      if (activeItem !== 'assessments' && activeItem !== 'students' && activeItem !== 'late_reports') {
+        setActiveItem('assessments');
+      }
+    } else if (activeRole === 'proctor') {
+      // Proctor workspace allows: late_reports
+      if (activeItem !== 'late_reports') {
+        setActiveItem('late_reports');
+      }
+    } else if (activeRole === 'student') {
+      // Student workspace allows: assessments, submissions, results
+      if (activeItem !== 'assessments' && activeItem !== 'submissions' && activeItem !== 'results') {
+        setActiveItem('assessments');
+      }
+    }
+  }, [activeRole, activeItem]);
+
+  // 1. Loading State: Prevent premature privileged page rendering
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-academic-bg flex flex-col justify-center items-center p-6 text-center space-y-4">
+        <AcadAssessLogo variant="emblem" size="md" />
+        <Loader2 className="w-6 h-6 text-academic-primaryGreen animate-spin" />
+        <p className="text-sm font-semibold text-academic-deepGreen">
+          Restoring Institutional Session...
+        </p>
+        <p className="text-xs text-academic-muted max-w-sm">
+          Verifying Supabase authentication token and backend role authorization context.
+        </p>
+      </div>
+    );
+  }
+
+  // 2. Unauthenticated State or Password Recovery State: Route to Selected Portal or Landing Page
+  if (!user || !session || isPasswordRecovery || pathname === '/reset-password') {
+    if (isPasswordRecovery || pathname === '/reset-password') {
+      const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+      const queryPortal = urlParams?.get('portal');
+      const recoveryPortal: 'student' | 'faculty' = (queryPortal === 'faculty' || pathname.includes('faculty')) ? 'faculty' : 'student';
+      return (
+        <LoginView
+          portal={recoveryPortal}
+          initialMode="reset_password"
+          onNavigatePortal={(p) => navigate(`/${p}/login`)}
+          onBackToSelection={() => navigate('/')}
+        />
+      );
+    }
+
+    if (pathname === '/student/login') {
+      return (
+        <LoginView
+          portal="student"
+          onNavigatePortal={(p) => navigate(`/${p}/login`)}
+          onBackToSelection={() => navigate('/')}
+        />
+      );
+    }
+
+    if (pathname === '/faculty/login') {
+      return (
+        <LoginView
+          portal="faculty"
+          onNavigatePortal={(p) => navigate(`/${p}/login`)}
+          onBackToSelection={() => navigate('/')}
+        />
+      );
+    }
+
+    // Default route `/` or any other route shows the official portal selection landing page
+    return (
+      <PortalSelectionView
+        onSelectPortal={(p) => navigate(`/${p}/login`)}
+      />
+    );
+  }
+
+  // 3. Inactive Profile, Profile Missing, or Zero Roles State
+  if (accountStatus === 'inactive' || accountStatus === 'no_profile' || accountStatus === 'no_roles' || !activeRole) {
+    return (
+      <div className="min-h-screen bg-academic-bg flex flex-col justify-center items-center px-4 py-12">
+        <div className="w-full max-w-lg bg-academic-surface border border-academic-border rounded-lg shadow-sm p-6 sm:p-8 space-y-6">
+          <div className="flex items-center space-x-3 text-[#A63214]">
+            <div className="p-2.5 rounded-full bg-[#FFF5F2] border border-[#F2C4B3]">
+              {accountStatus === 'inactive' ? (
+                <UserX className="w-6 h-6" />
+              ) : (
+                <AlertTriangle className="w-6 h-6" />
+              )}
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-academic-deepGreen">
+                {accountStatus === 'inactive' 
+                  ? 'Institutional Account Inactive' 
+                  : accountStatus === 'no_profile'
+                  ? 'Institutional Profile Required'
+                  : 'No Active Roles Provisioned'}
+              </h2>
+              <p className="text-xs text-academic-muted">
+                Authenticated Identity: {user.email}
+              </p>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-md bg-[#FFFDF8] border border-academic-border text-xs text-academic-deepGreen leading-relaxed space-y-2">
+            <p className="font-medium text-[#A63214]">
+              {accountStatusMessage || 'Your account cannot access academic workspaces at this time.'}
+            </p>
+            <p className="text-academic-muted">
+              Role permissions and account status are strictly governed by institutional policy in accordance with AcadAssess Specifications. Contact your Academic Head (HOD) for verification or reactivation.
+            </p>
+          </div>
+
+          <div className="pt-2 flex justify-between items-center border-t border-academic-border">
+            <span className="text-[11px] text-academic-muted">
+              Security Boundary: Express API + Supabase RBAC
+            </span>
+            <button
+              onClick={logout}
+              className="py-2 px-4 rounded-md bg-academic-surface border border-academic-border hover:bg-[#FFF5F2] text-[#A63214] font-medium text-xs flex items-center space-x-1.5 transition-colors focus:outline-none focus:ring-2 focus:ring-[#A63214]"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Sign Out</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 4. Portal-level Route Guard: Reject authenticated users visiting the wrong portal route
+  const staffRoles = ['subject_teacher', 'class_teacher', 'proctor', 'hod'];
+  const isStaff = userContext?.roles.some(r => staffRoles.includes(r));
+  const isStudent = userContext?.roles.includes('student');
+
+  if (pathname === '/faculty/login' && !isStaff) {
+    return (
+      <div className="min-h-screen bg-academic-bg flex flex-col justify-center items-center px-4 py-12">
+        <div className="w-full max-w-lg bg-academic-surface border border-academic-border rounded-2xl shadow-sm p-6 sm:p-8 space-y-6">
+          <div className="flex items-center space-x-3 text-[#A63214]">
+            <div className="p-2.5 rounded-full bg-[#FFF5F2] border border-[#F2C4B3]">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-academic-deepGreen">
+                Faculty Portal Access Denied
+              </h2>
+              <p className="text-xs text-academic-muted">
+                Authenticated Identity: {user.email}
+              </p>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-md bg-[#FFFDF8] border border-academic-border text-xs text-academic-deepGreen leading-relaxed space-y-2">
+            <p className="font-semibold text-[#A63214]">
+              Access restricted: You are authenticated with a student account.
+            </p>
+            <p className="text-academic-muted">
+              Students cannot access faculty assessment creation, rubric evaluation, or administrative tools. Please access your designated academic portal.
+            </p>
+          </div>
+
+          <div className="pt-2 flex justify-between items-center border-t border-academic-border">
+            <button
+              onClick={() => navigate('/student/login')}
+              className="btn-primary text-xs"
+            >
+              Go to Student Workspace
+            </button>
+            <button
+              onClick={logout}
+              className="py-2 px-4 rounded-md bg-academic-surface border border-academic-border hover:bg-[#FFF5F2] text-[#A63214] font-medium text-xs flex items-center space-x-1.5 transition-colors focus:outline-none focus:ring-2 focus:ring-[#A63214]"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Sign Out</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (pathname === '/student/login' && !isStudent) {
+    return (
+      <div className="min-h-screen bg-academic-bg flex flex-col justify-center items-center px-4 py-12">
+        <div className="w-full max-w-lg bg-academic-surface border border-academic-border rounded-2xl shadow-sm p-6 sm:p-8 space-y-6">
+          <div className="flex items-center space-x-3 text-[#A63214]">
+            <div className="p-2.5 rounded-full bg-[#FFF5F2] border border-[#F2C4B3]">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-academic-deepGreen">
+                Student Portal Access Denied
+              </h2>
+              <p className="text-xs text-academic-muted">
+                Authenticated Identity: {user.email}
+              </p>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-md bg-[#FFFDF8] border border-academic-border text-xs text-academic-deepGreen leading-relaxed space-y-2">
+            <p className="font-semibold text-[#A63214]">
+              Access restricted: You are authenticated with faculty/staff credentials.
+            </p>
+            <p className="text-academic-muted">
+              Faculty members and administrators must manage academic evaluations through the Faculty Portal.
+            </p>
+          </div>
+
+          <div className="pt-2 flex justify-between items-center border-t border-academic-border">
+            <button
+              onClick={() => navigate('/faculty/login')}
+              className="btn-primary text-xs"
+            >
+              Go to Faculty Workspace
+            </button>
+            <button
+              onClick={logout}
+              className="py-2 px-4 rounded-md bg-academic-surface border border-academic-border hover:bg-[#FFF5F2] text-[#A63214] font-medium text-xs flex items-center space-x-1.5 transition-colors focus:outline-none focus:ring-2 focus:ring-[#A63214]"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Sign Out</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 5. Authenticated & Verified State: Render Workspaces
   return (
     <div className="min-h-screen bg-academic-bg text-[#27452C] flex flex-col font-sans">
       <Header
         activeRole={activeRole}
         availableRoles={availableRoles}
-        onRoleChange={(role) => handleRoleChange(role as any)}
+        userFullName={userContext?.profile.full_name}
+        userEmail={user.email}
+        onRoleChange={handleRoleChange}
+        onOpenWorkspaceModal={() => setIsWorkspaceModalOpen(true)}
+        onLogout={logout}
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
       />
 
@@ -88,252 +349,149 @@ export const App: React.FC = () => {
           activeItem={activeItem}
           onSelectItem={setActiveItem}
           activeRole={activeRole}
+          availableRoles={availableRoles}
+          onRoleChange={handleRoleChange}
+          onOpenWorkspaceModal={() => setIsWorkspaceModalOpen(true)}
         />
 
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
           <div className="max-w-6xl mx-auto space-y-6">
             <Breadcrumbs 
               items={[
-                { label: activeRole === 'hod' ? 'Institutional Admin' : activeRole === 'subject_teacher' ? 'Faculty Workspace' : 'Student Workspace' },
+                { 
+                  label: activeRole === 'hod' 
+                    ? 'HOD Workspace' 
+                    : activeRole === 'subject_teacher' 
+                    ? 'Subject Teacher Workspace' 
+                    : activeRole === 'class_teacher'
+                    ? 'Class Teacher Workspace'
+                    : activeRole === 'proctor'
+                    ? 'Proctor Workspace'
+                    : `${activeRole.replace('_', ' ').toUpperCase()} Workspace` 
+                },
                 { 
                   label: activeItem === 'users' 
                     ? 'User Directory & Roles' 
                     : activeItem === 'academics' 
                     ? 'Academic Structure' 
-                    : activeItem === 'audit' 
-                    ? 'Audit Trail' 
+                    : activeRole === 'class_teacher' && activeItem === 'assessments'
+                    ? 'Class Teacher Workspace'
+                    : activeRole === 'class_teacher' && activeItem === 'students'
+                    ? 'Student Submission Tracking'
+                    : activeRole === 'class_teacher' && (activeItem === 'late_reports' || activeItem === 'submissions')
+                    ? 'Class Submissions & Late Report'
+                    : activeRole === 'proctor' && activeItem === 'late_reports'
+                    ? 'Mentee Submissions Report'
+                    : activeRole === 'subject_teacher' && activeItem === 'assessments'
+                    ? 'Formative Assessments'
                     : activeItem === 'assessments'
                     ? 'Assessment Authoring & Rubrics'
-                    : 'System Overview & Architecture', 
+                    : activeItem === 'grading'
+                    ? 'Rubric Evaluations'
+                    : activeItem === 'results'
+                    ? 'Official Published Results'
+                    : activeItem === 'submissions'
+                    ? 'Student Submissions & PDFs'
+                    : activeItem === 'late_reports'
+                    ? 'Submissions Report'
+                    : activeItem === 'institutional_reports'
+                    ? 'Institutional Submission Report'
+                    : 'Workspace', 
                   current: true 
                 }
               ]} 
             />
 
-            {/* Conditionally Render Feature Views */}
-            {activeItem === 'users' && <UserManagement />}
-            {activeItem === 'academics' && <AcademicStructure />}
-            {activeItem === 'audit' && <AuditViewer />}
-            {activeItem === 'assessments' && <AssessmentManagement activeRole={activeRole} />}
+            {/* Conditionally Render Feature Views based on backend-verified role with Lazy Loading */}
+            <React.Suspense fallback={<FeatureLoadingFallback />}>
+              {activeItem === 'users' && activeRole === 'hod' && <UserManagement />}
+              {activeItem === 'academics' && activeRole === 'hod' && <AcademicStructure />}
+              {activeItem === 'institutional_reports' && activeRole === 'hod' && <InstitutionalSubmissionReport />}
 
-            {activeItem !== 'users' && activeItem !== 'academics' && activeItem !== 'audit' && activeItem !== 'assessments' && (
-              <>
-                {/* Title & Primary Action Header */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-academic-border gap-4">
-                  <div>
-                    <div className="flex items-center space-x-3">
-                      <h1 className="text-2xl font-bold text-academic-deepGreen tracking-tight">
-                        SmartFA Architecture & UI Foundation
-                      </h1>
-                      <StatusBadge label="Phase 3 Active" variant="published" />
-                    </div>
-                    <p className="text-xs text-academic-muted mt-1 max-w-3xl">
-                      Institutional Formative Assessment, Evaluation and Internal Answer Similarity Review System.
-                      Phase 2 Identity, Scoped RBAC, Academic Structure, and Audit Logging active.
-                    </p>
+              {/* Class Teacher Dedicated Role-Specific Workspace */}
+              {activeRole === 'class_teacher' && (
+                activeItem === 'assessments' ? (
+                  <ClassTeacherWorkspace initialTab="overview" />
+                ) : activeItem === 'students' ? (
+                  <ClassTeacherWorkspace initialTab="students" />
+                ) : (activeItem === 'submissions' || activeItem === 'late_reports') ? (
+                  <ClassTeacherWorkspace initialTab="reports" />
+                ) : null
+              )}
+
+              {/* Other Roles Assessment / Submission Management */}
+              {activeRole !== 'class_teacher' && activeRole !== 'proctor' && activeRole !== 'hod' && activeItem === 'assessments' && (
+                <AssessmentManagement activeRole={activeRole} initialTab="questions" />
+              )}
+              {activeRole !== 'class_teacher' && activeRole !== 'proctor' && activeRole !== 'hod' && activeItem === 'submissions' && (
+                activeRole === 'student' ? (
+                  <StudentSubmissions onNavigateToAssessments={() => setActiveItem('assessments')} />
+                ) : (
+                  <AssessmentManagement activeRole={activeRole} initialTab="submissions" />
+                )
+              )}
+              {activeRole === 'proctor' && activeItem === 'late_reports' && (
+                <ProctorMenteeReport />
+              )}
+              {activeRole !== 'class_teacher' && activeRole !== 'proctor' && activeRole !== 'hod' && activeItem === 'late_reports' && (
+                <AssessmentManagement activeRole={activeRole} initialTab="submissions_report" />
+              )}
+
+              {/* Proctor Access Restriction Fallback for Unauthorized Tabs */}
+              {activeRole === 'proctor' && (activeItem === 'assessments' || activeItem === 'submissions' || activeItem === 'grading' || activeItem === 'users' || activeItem === 'academics') && (
+                <div className="card-surface p-6 text-center space-y-3">
+                  <div className="p-3 bg-[#FFF5F2] border border-[#F2C4B3] rounded-full inline-flex text-[#A63214]">
+                    <ShieldAlert className="w-6 h-6" />
                   </div>
-
-                  <div className="flex items-center space-x-3">
-                    <button
-                      onClick={checkServices}
-                      disabled={isChecking}
-                      className="btn-secondary text-xs flex items-center space-x-1.5"
-                      aria-label="Refresh service connection checks"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 ${isChecking ? 'animate-spin' : ''}`} />
-                      <span>Check Services</span>
+                  <h3 className="text-base font-bold text-academic-deepGreen">Access Restricted for Proctor Role</h3>
+                  <p className="text-xs text-academic-muted max-w-md mx-auto">
+                    Proctors are authorized to monitor student submission progress through the Mentee Submissions Report. Direct assessment authoring and unrestricted submissions management are reserved for Subject Teachers and Institutional Administrators.
+                  </p>
+                  <div className="flex flex-wrap justify-center items-center gap-3 pt-1">
+                    <button onClick={() => setActiveItem('late_reports')} className="btn-primary text-xs">
+                      Go to Mentee Submissions Report
                     </button>
+                    {availableRoles.includes('hod') && (
+                      <button onClick={() => handleRoleChange('hod')} className="px-3 py-1.5 rounded-md border border-academic-border bg-white hover:bg-academic-paleGreen text-xs font-semibold text-academic-deepGreen transition-colors">
+                        Switch to HOD Workspace
+                      </button>
+                    )}
+                    {availableRoles.includes('subject_teacher') && (
+                      <button onClick={() => handleRoleChange('subject_teacher')} className="px-3 py-1.5 rounded-md border border-academic-border bg-white hover:bg-academic-paleGreen text-xs font-semibold text-academic-deepGreen transition-colors">
+                        Switch to Subject Teacher Workspace
+                      </button>
+                    )}
+                    {availableRoles.includes('class_teacher') && (
+                      <button onClick={() => handleRoleChange('class_teacher')} className="px-3 py-1.5 rounded-md border border-academic-border bg-white hover:bg-academic-paleGreen text-xs font-semibold text-academic-deepGreen transition-colors">
+                        Switch to Class Teacher Workspace
+                      </button>
+                    )}
                   </div>
                 </div>
+              )}
 
-            {/* Architecture Overview Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-              {/* API Node Service Card */}
-              <div className="card-surface flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="p-2 rounded bg-academic-paleGreen text-academic-primaryGreen">
-                      <Server className="w-5 h-5" />
-                    </span>
-                    <StatusBadge 
-                      label={apiHealth === 'connected' ? 'Port 4000 Active' : apiHealth === 'unreachable' ? 'Not Running' : 'Pending Probe'} 
-                      variant={apiHealth === 'connected' ? 'published' : 'warning'} 
-                    />
-                  </div>
-                  <h2 className="text-sm font-bold text-academic-deepGreen">Trusted API Service</h2>
-                  <p className="text-xs text-academic-muted mt-1 leading-relaxed">
-                    Node.js + Express + Zod. Responsible for verifying Supabase JWTs, rubric freezing, and transactional publication.
-                  </p>
-                </div>
-                <div className="mt-4 pt-3 border-t border-academic-border/60 text-[11px] text-academic-muted">
-                  Endpoint: <code className="font-mono text-academic-deepGreen">apps/api</code>
-                </div>
-              </div>
-
-              {/* Processor Python Service Card */}
-              <div className="card-surface flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="p-2 rounded bg-academic-paleGreen text-academic-primaryGreen">
-                      <Cpu className="w-5 h-5" />
-                    </span>
-                    <StatusBadge 
-                      label={processorHealth === 'connected' ? 'Port 8000 Active' : processorHealth === 'unreachable' ? 'Not Running' : 'Pending Probe'} 
-                      variant={processorHealth === 'connected' ? 'published' : 'warning'} 
-                    />
-                  </div>
-                  <h2 className="text-sm font-bold text-academic-deepGreen">Document Processing Worker</h2>
-                  <p className="text-xs text-academic-muted mt-1 leading-relaxed">
-                    Python + FastAPI + scikit-learn. Handles PDF rendering, replaceable HTR adapter, and TF-IDF pairwise similarity.
-                  </p>
-                </div>
-                <div className="mt-4 pt-3 border-t border-academic-border/60 text-[11px] text-academic-muted">
-                  Endpoint: <code className="font-mono text-academic-deepGreen">services/processor</code>
-                </div>
-              </div>
-
-              {/* Supabase PostgreSQL & Storage Card */}
-              <div className="card-surface flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="p-2 rounded bg-academic-paleGreen text-academic-primaryGreen">
-                      <Database className="w-5 h-5" />
-                    </span>
-                    <StatusBadge 
-                      label={isSupabaseConfigured ? 'Configured' : 'Local Standby'} 
-                      variant={isSupabaseConfigured ? 'published' : 'draft'} 
-                    />
-                  </div>
-                  <h2 className="text-sm font-bold text-academic-deepGreen">Database & Private Storage</h2>
-                  <p className="text-xs text-academic-muted mt-1 leading-relaxed">
-                    Supabase PostgreSQL + Private Storage. SQL migrations in <code className="font-mono">supabase/migrations</code> are the sole schema authority.
-                  </p>
-                </div>
-                <div className="mt-4 pt-3 border-t border-academic-border/60 text-[11px] text-academic-muted">
-                  Bucket: <code className="font-mono text-academic-deepGreen">submissions-private</code> (5 MB limit)
-                </div>
-              </div>
-            </div>
-
-            {/* Design Tokens & Aesthetic System */}
-            <div className="card-surface">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center space-x-2">
-                  <Palette className="w-4 h-4 text-academic-primaryGreen" />
-                  <h2 className="text-sm font-bold text-academic-deepGreen">Academic Beige & Green Design System</h2>
-                </div>
-                <span className="text-xs text-academic-muted">Specification 03 / 06 - UI/UX</span>
-              </div>
-
-              <p className="text-xs text-academic-muted mb-4 leading-relaxed">
-                The visual identity uses a calm, scholarly aesthetic designed for focused evaluation and clear evidence review.
-                No gradients, neon palettes, glassmorphism, or distracting decorations are permitted.
-              </p>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                <div className="p-3 rounded border border-academic-border bg-[#F4EFE3]">
-                  <p className="font-mono text-[11px] font-bold text-academic-deepGreen">#F4EFE3</p>
-                  <p className="text-[11px] text-academic-muted">Page Background</p>
-                </div>
-                <div className="p-3 rounded border border-academic-border bg-[#FFFDF8]">
-                  <p className="font-mono text-[11px] font-bold text-academic-deepGreen">#FFFDF8</p>
-                  <p className="text-[11px] text-academic-muted">Primary Surface</p>
-                </div>
-                <div className="p-3 rounded border border-academic-border bg-[#E7F0E4]">
-                  <p className="font-mono text-[11px] font-bold text-academic-deepGreen">#E7F0E4</p>
-                  <p className="text-[11px] text-academic-muted">Light Green</p>
-                </div>
-                <div className="p-3 rounded border border-academic-border bg-[#F2F7EF]">
-                  <p className="font-mono text-[11px] font-bold text-academic-deepGreen">#F2F7EF</p>
-                  <p className="text-[11px] text-academic-muted">Pale Green</p>
-                </div>
-                <div className="p-3 rounded border border-academic-border bg-[#355E3B] text-white">
-                  <p className="font-mono text-[11px] font-bold">#355E3B</p>
-                  <p className="text-[11px] opacity-90">Primary Green</p>
-                </div>
-                <div className="p-3 rounded border border-academic-border bg-[#27452C] text-white">
-                  <p className="font-mono text-[11px] font-bold">#27452C</p>
-                  <p className="text-[11px] opacity-90">Deep Green</p>
-                </div>
-                <div className="p-3 rounded border border-academic-border bg-[#667066] text-white">
-                  <p className="font-mono text-[11px] font-bold">#667066</p>
-                  <p className="text-[11px] opacity-90">Muted Text</p>
-                </div>
-                <div className="p-3 rounded border border-academic-border bg-[#C9D2C5]">
-                  <p className="font-mono text-[11px] font-bold text-academic-deepGreen">#C9D2C5</p>
-                  <p className="text-[11px] text-academic-muted">Border / Dividers</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Strict Non-Negotiable Boundaries & Academic Safeguards */}
-            <div className="card-surface bg-academic-paleGreen/40 border-academic-border">
-              <div className="flex items-start space-x-3">
-                <ShieldAlert className="w-5 h-5 text-academic-primaryGreen flex-shrink-0 mt-0.5" />
-                <div className="space-y-2">
-                  <h3 className="text-sm font-bold text-academic-deepGreen">Authoritative Project Boundary Guidelines</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-academic-muted pt-1">
-                    <div className="space-y-1">
-                      <p className="font-semibold text-academic-deepGreen">✓ Human-Controlled Decisions</p>
-                      <p>Similarity scores are evidence for teacher review, never automatic verdicts. HTR output is derived and subject to human review.</p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="font-semibold text-academic-deepGreen">✓ Strict PDF Preservation</p>
-                      <p>Original PDFs are authoritative and survive any processing failure. Versioned submissions retain immutable history.</p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="font-semibold text-academic-deepGreen">✓ Explicit Result Publication</p>
-                      <p>Grades and rubric breakdowns remain hidden through database RLS until explicitly published by authorized teachers.</p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="font-semibold text-academic-deepGreen">✓ Zero Mock Record Fabrication</p>
-                      <p>Phase 1 establishes clean architectural foundations without fabricated student submissions or synthetic grades.</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Implementation Roadmap Preview */}
-            <div className="card-surface">
-              <h2 className="text-sm font-bold text-academic-deepGreen mb-3">Planned Build Milestones (Phases 1 - 7)</h2>
-              <div className="space-y-2.5 text-xs">
-                <div className="flex items-center justify-between p-2.5 rounded bg-academic-lightGreen/50 border border-academic-primaryGreen/30">
-                  <span className="font-medium text-academic-deepGreen">Phase 1: Project Foundation & Architecture (Monorepo, Tokens, Express API, FastAPI Worker)</span>
-                  <StatusBadge label="Complete" variant="completed" />
-                </div>
-                <div className="flex items-center justify-between p-2.5 rounded bg-academic-surface border border-academic-border text-academic-muted">
-                  <span>Phase 2: Identity, RBAC & Institutional Academic Structure (Supabase Auth, RLS, 5 Roles, HOD Setup)</span>
-                  <StatusBadge label="Next Phase" variant="draft" />
-                </div>
-                <div className="flex items-center justify-between p-2.5 rounded bg-academic-surface border border-academic-border text-academic-muted">
-                  <span>Phase 3: Assessment Authoring & Rubric Management (Questions, Frozen Rubric Invariants, Publishing)</span>
-                  <StatusBadge label="Pending" variant="neutral" />
-                </div>
-                <div className="flex items-center justify-between p-2.5 rounded bg-academic-surface border border-academic-border text-academic-muted">
-                  <span>Phase 4: Private Student PDF Submissions & Storage (Private Bucket, 5 MB Limit, Versioning, Receipts)</span>
-                  <StatusBadge label="Pending" variant="neutral" />
-                </div>
-                <div className="flex items-center justify-between p-2.5 rounded bg-academic-surface border border-academic-border text-academic-muted">
-                  <span>Phase 5: Evaluation, Human Rubric Grading & Publication (Side-by-side Grader, Publication RLS)</span>
-                  <StatusBadge label="Pending" variant="neutral" />
-                </div>
-                <div className="flex items-center justify-between p-2.5 rounded bg-academic-surface border border-academic-border text-academic-muted">
-                  <span>Phase 6: Document Processing & Internal Similarity Engine (FastAPI Worker, HTR Adapter, Pairwise TF-IDF)</span>
-                  <StatusBadge label="Pending" variant="neutral" />
-                </div>
-                <div className="flex items-center justify-between p-2.5 rounded bg-academic-surface border border-academic-border text-academic-muted">
-                  <span>Phase 7: End-to-End Hardening, Audit Reporting, Security & UAT</span>
-                  <StatusBadge label="Pending" variant="neutral" />
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-
+              {activeRole !== 'proctor' && activeRole !== 'hod' && activeItem === 'grading' && <EvaluationGrading activeRole={activeRole} />}
+              {activeRole !== 'proctor' && activeItem === 'results' && <StudentResults />}
+            </React.Suspense>
           </div>
         </main>
       </div>
+
+      <WorkspaceSelectionModal
+        isOpen={isWorkspaceModalOpen}
+        onClose={() => setIsWorkspaceModalOpen(false)}
+        availableRoles={availableRoles}
+        activeRole={activeRole}
+        onSelectRole={handleRoleChange}
+      />
     </div>
+  );
+};
+
+export const App: React.FC = () => {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 };

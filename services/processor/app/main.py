@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 app = FastAPI(
     title="SmartFA Document Processing Worker",
-    description="Asynchronous PDF rendering, HTR transcription adapter, and internal answer similarity engine.",
+    description="Asynchronous PDF rendering and document processing worker.",
     version="1.0.0"
 )
 
@@ -42,7 +42,7 @@ def get_root():
     """Root metadata endpoint."""
     return {
         "name": "SmartFA Document Processing Worker",
-        "description": "PDF rendering, HTR extraction, and pairwise answer similarity calculation",
+        "description": "PDF rendering and document processing",
         "version": "1.0.0",
         "status": "operational",
         "health": "/health"
@@ -50,5 +50,7 @@ def get_root():
 
 
 if __name__ == "__main__":
+    import os
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

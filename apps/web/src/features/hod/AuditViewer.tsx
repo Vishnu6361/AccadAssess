@@ -4,7 +4,8 @@ import {
   Clock, 
   Terminal, 
   RefreshCw,
-  Search
+  Search,
+  AlertTriangle
 } from 'lucide-react';
 import { hodApi } from '../../services/apiClient';
 import { AuditEvent } from '@smartfa/contracts';
@@ -13,12 +14,19 @@ export const AuditViewer: React.FC = () => {
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchAudit = async () => {
     setLoading(true);
-    const data = await hodApi.getAuditEvents();
-    setEvents(data);
-    setLoading(false);
+    setError(null);
+    try {
+      const data = await hodApi.getAuditEvents();
+      setEvents(data);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to retrieve audit records from server');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -54,6 +62,21 @@ export const AuditViewer: React.FC = () => {
         </button>
       </div>
 
+      {error && (
+        <div className="card-surface p-4 border border-red-300 bg-red-50 text-red-800 rounded-md flex items-center justify-between">
+          <div className="flex items-center space-x-2 text-xs">
+            <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button
+            onClick={fetchAudit}
+            className="btn-secondary text-xs px-2.5 py-1 text-red-700 border-red-300 hover:bg-red-100"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       <div className="card-surface p-4 flex items-center justify-between">
         <div className="relative w-full max-w-sm">
           <Search className="w-4 h-4 text-academic-muted absolute left-3 top-3" />
@@ -73,9 +96,14 @@ export const AuditViewer: React.FC = () => {
       </div>
 
       <div className="space-y-3">
-        {filtered.length === 0 ? (
+        {loading && events.length === 0 ? (
+          <div className="card-surface text-center py-12 text-academic-muted text-xs flex flex-col items-center justify-center space-y-2">
+            <RefreshCw className="w-5 h-5 animate-spin text-academic-primaryGreen" />
+            <span>Loading audit log records from server...</span>
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="card-surface text-center py-8 text-academic-muted text-xs">
-            No audit records found.
+            {error ? 'Unable to display audit records.' : 'No audit records found.'}
           </div>
         ) : (
           filtered.map(event => (

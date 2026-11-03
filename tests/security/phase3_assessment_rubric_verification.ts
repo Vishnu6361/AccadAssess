@@ -1,3 +1,4 @@
+process.env.SMARTFA_TEST_MODE = 'true';
 import jwt from 'jsonwebtoken';
 import app from '../../apps/api/src/index.js';
 import http from 'http';

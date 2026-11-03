@@ -1,6 +1,6 @@
 # SmartFA: Project Implementation Plan
 
-**System:** Web-Based Institutional Formative Assessment, Evaluation and Internal Answer Similarity Review System  
+**System:** Web-Based Institutional Formative Assessment and Evaluation System (AcadAssess)  
 **Architecture:** React (Vite + TS + Tailwind) + Node.js/Express Trusted API + Supabase (PostgreSQL, Auth, Private Storage) + Python/FastAPI Document Processor  
 **Authoritative Basis:** Specifications 01 (PRD), 02 (TRD), 03 (UI/UX Brief), 04 (Application Flow), 05 (Backend Schema), and 06 (Master Project Context).
 

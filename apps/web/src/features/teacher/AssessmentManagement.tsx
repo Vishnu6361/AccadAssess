@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  BookOpen, 
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Pencil,
+  BookOpen,
+  Loader2, 
   PlusCircle, 
   CheckCircle2, 
   AlertCircle, 
@@ -11,68 +13,146 @@ import {
   Layers, 
   ChevronRight, 
   ArrowLeft, 
-  HelpCircle,
-  X,
-  Sparkles,
-  Sliders,
-  Upload,
-  Download,
-  FileCheck2,
-  History,
-  ChevronDown
+  X, 
+  Upload, 
+  Download, 
+  FileCheck2, 
+  Search, 
+  Filter, 
+  Trash2, 
+  Paperclip, 
+  FileSpreadsheet, 
+  AlertTriangle 
 } from 'lucide-react';
 import { StatusBadge } from '../../components/StatusBadge';
+import { PdfViewer } from '../../components/PdfViewer';
 import { assessmentApi, AssessmentDTO, submissionApi, SubmissionDTO } from '../../services/apiClient';
+import { formatClassName } from '@smartfa/contracts';
+import { ProctorMenteeReport } from '../proctor/ProctorMenteeReport';
 
 interface AssessmentManagementProps {
   activeRole: string;
+  initialTab?: 'questions' | 'submissions' | 'submissions_report' | 'late_reports';
 }
 
-interface NewCriterionForm {
-  title: string;
-  description: string;
-  max_marks: number;
-  levels: { label: string; description: string; score_percentage: number }[];
-}
-
-export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ activeRole }) => {
+export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ activeRole, initialTab }) => {
   const [assessments, setAssessments] = useState<AssessmentDTO[]>([]);
   const [selectedAssessmentId, setSelectedAssessmentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
+
+  const handleDownloadDocument = async (assessmentId: string, filename?: string | null) => {
+    try {
+      setDownloadingDocId(assessmentId);
+      await assessmentApi.downloadDocument(assessmentId, filename || 'Assignment Document.pdf');
+    } catch (err: any) {
+      console.error('Failed to download document:', err);
+      setErrorMessage(err.message || 'Failed to download document');
+    } finally {
+      setDownloadingDocId(null);
+    }
+  };
+
+  // Tab & View States
+  const [activeTab, setActiveTab] = useState<'questions' | 'submissions' | 'submissions_report'>(
+    activeRole === 'proctor' || initialTab === 'late_reports' || initialTab === 'submissions_report' ? 'submissions_report' : (initialTab || 'questions')
+  );
 
   // Modal States
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showAddQuestionModal, setShowAddQuestionModal] = useState(false);
-  const [editingRubricQuestionId, setEditingRubricQuestionId] = useState<string | null>(null);
   const [showPublishConfirmModal, setShowPublishConfirmModal] = useState(false);
+
+  // Edit Assessment State
+  const [editingAssessment, setEditingAssessment] = useState<AssessmentDTO | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editInstructions, setEditInstructions] = useState('');
+  const [editDeadline, setEditDeadline] = useState('');
+  const [editMaxMarks, setEditMaxMarks] = useState<number>(50);
+  const [editMaxFiles, setEditMaxFiles] = useState<number>(1);
+  const [editAllowLate, setEditAllowLate] = useState<boolean>(false);
+  const [editExtensionDeadline, setEditExtensionDeadline] = useState<string>('');
+  const [editLatePenaltyMode, setEditLatePenaltyMode] = useState<'none' | 'fixed'>('none');
+  const [editLatePenaltyMarks, setEditLatePenaltyMarks] = useState<number>(5);
+  const [editPdfFileName, setEditPdfFileName] = useState<string | null>(null);
+  const [editPdfFileSize, setEditPdfFileSize] = useState<number | null>(null);
+  const [editPdfBase64, setEditPdfBase64] = useState<string | null>(null);
+  const [editPdfError, setEditPdfError] = useState<string | null>(null);
+  const [isReplacingPdf, setIsReplacingPdf] = useState<boolean>(false);
+  const [editSubmissionsCount, setEditSubmissionsCount] = useState<number>(0);
+  const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Delete Assessment State
+  const [deletingAssessment, setDeletingAssessment] = useState<AssessmentDTO | null>(null);
+  const [deleteCheckLoading, setDeleteCheckLoading] = useState<boolean>(false);
+  const [deleteCheckResult, setDeleteCheckResult] = useState<{
+    can_delete: boolean;
+    submissions_count: number;
+    evaluations_count: number;
+    is_published: boolean;
+    reason?: string | null;
+  } | null>(null);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Create Assessment Form State
   const [formTitle, setFormTitle] = useState('');
   const [formClassSubjectId, setFormClassSubjectId] = useState('c5100000-0000-0000-0000-000000000001');
+  const [availableClassSubjects, setAvailableClassSubjects] = useState<any[]>([]);
   const [formInstructions, setFormInstructions] = useState('');
   const [formDeadline, setFormDeadline] = useState('');
+  const [formMaxMarks, setFormMaxMarks] = useState<number>(50);
+  const [formMaxFiles, setFormMaxFiles] = useState<number>(1);
+  const [formAllowLate, setFormAllowLate] = useState<boolean>(false);
+  const [formExtensionDeadline, setFormExtensionDeadline] = useState<string>('');
+  const [formLatePenaltyMode, setFormLatePenaltyMode] = useState<'none' | 'fixed'>('none');
+  const [formLatePenaltyMarks, setFormLatePenaltyMarks] = useState<number>(5);
+  const [formPdfFileName, setFormPdfFileName] = useState<string | null>(null);
+  const [formPdfFileSize, setFormPdfFileSize] = useState<number | null>(null);
+  const [formPdfBase64, setFormPdfBase64] = useState<string | null>(null);
+  const [formPdfError, setFormPdfError] = useState<string | null>(null);
 
-  // Add Question Form State
-  const [questionPrompt, setQuestionPrompt] = useState('');
-  const [questionMaxMarks, setQuestionMaxMarks] = useState<number>(10);
+  // Student Multi-file Answer Submission State
+  const [studentAnswerFiles, setStudentAnswerFiles] = useState<Array<{ file: File; name: string; size: number; base64: string }>>([]);
+  const [isSubmittingAnswers, setIsSubmittingAnswers] = useState<boolean>(false);
 
-  // Rubric Builder State
-  const [rubricTitle, setRubricTitle] = useState('');
-  const [criteria, setCriteria] = useState<NewCriterionForm[]>([]);
+  // Late Reports State
+  const [lateReports, setLateReports] = useState<any[]>([]);
+  const [loadingReports, setLoadingReports] = useState<boolean>(false);
+  const [reportAssessmentFilter, setReportAssessmentFilter] = useState<string>('all');
+  const [reportSearchQuery, setReportSearchQuery] = useState<string>('');
 
   const isTeacher = activeRole === 'subject_teacher' || activeRole === 'hod';
+  const isStudent = activeRole === 'student';
+  const isStaff = ['subject_teacher', 'class_teacher', 'proctor', 'hod'].includes(activeRole);
   const [isOfflineFallback, setIsOfflineFallback] = useState(false);
+
+  useEffect(() => {
+    if (isTeacher) {
+      assessmentApi.getClassSubjectsForTeacher().then((csList) => {
+        if (csList && csList.length > 0) {
+          setAvailableClassSubjects(csList);
+          setFormClassSubjectId(csList[0].id);
+        } else {
+          setAvailableClassSubjects([]);
+        }
+      }).catch(() => {
+        setAvailableClassSubjects([]);
+      });
+    }
+  }, [isTeacher, activeRole]);
 
   const loadAssessments = async () => {
     setLoading(true);
     try {
       const { assessments: data, isOfflineFallback: fallback } = await assessmentApi.getAssessments();
       setIsOfflineFallback(fallback);
-      // If student, filter out draft assessments
-      if (!isTeacher) {
-        setAssessments(data.filter(a => a.status === 'published' || a.status === 'closed'));
+      if (isStudent) {
+        const studentAssessments = data.filter(a => a.status === 'published' || a.status === 'closed');
+        setAssessments(studentAssessments);
+        loadStudentSubmissionStatuses(studentAssessments);
       } else {
         setAssessments(data);
       }
@@ -87,19 +167,120 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     loadAssessments();
   }, [activeRole]);
 
+  useEffect(() => {
+    if (activeRole === 'proctor') {
+      setActiveTab('submissions_report');
+    } else if (initialTab) {
+      setActiveTab(initialTab === 'late_reports' ? 'submissions_report' : initialTab);
+    }
+  }, [initialTab, activeRole]);
+
   const selectedAssessment = assessments.find(a => a.id === selectedAssessmentId);
 
-  // Phase 4 Submission States
+  // Submissions State
   const [assessmentSubmissions, setAssessmentSubmissions] = useState<SubmissionDTO[]>([]);
-  const [activeTab, setActiveTab] = useState<'questions' | 'submissions'>('questions');
-  const [uploadingQId, setUploadingQId] = useState<string | null>(null);
-  const [expandedVersionsQId, setExpandedVersionsQId] = useState<string | null>(null);
+  const [submissionStatuses, setSubmissionStatuses] = useState<Record<string, {
+    state: 'loading' | 'submitted' | 'not_submitted' | 'error';
+    submission?: SubmissionDTO | null;
+  }>>({});
+
+  const loadStudentSubmissionStatuses = async (assessmentList: AssessmentDTO[]) => {
+    if (isTeacher || assessmentList.length === 0) return;
+
+    setSubmissionStatuses(prev => {
+      const next = { ...prev };
+      for (const ass of assessmentList) {
+        if (!next[ass.id]) {
+          next[ass.id] = { state: 'loading' };
+        }
+      }
+      return next;
+    });
+
+    await Promise.all(
+      assessmentList.map(async (ass) => {
+        try {
+          const res = await submissionApi.getStudentSubmissionStatus(ass.id);
+          setSubmissionStatuses(prev => ({
+            ...prev,
+            [ass.id]: {
+              state: res.state,
+              submission: res.submissions?.[0] || null
+            }
+          }));
+        } catch {
+          setSubmissionStatuses(prev => ({
+            ...prev,
+            [ass.id]: { state: 'error' }
+          }));
+        }
+      })
+    );
+  };
+
+  const renderStudentSubmissionBadge = (assessmentId: string) => {
+    const statusInfo = submissionStatuses[assessmentId];
+    if (!statusInfo || statusInfo.state === 'loading') {
+      return (
+        <span 
+          className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium border bg-academic-surface text-academic-muted border-academic-border"
+          role="status"
+          aria-label="Checking submission status"
+        >
+          <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin text-academic-muted" />
+          <span>Checking Status...</span>
+        </span>
+      );
+    }
+
+    if (statusInfo.state === 'error') {
+      return (
+        <StatusBadge 
+          label="Status Unavailable" 
+          variant="neutral" 
+          title="Could not verify submission status from server"
+        />
+      );
+    }
+
+    if (statusInfo.state === 'submitted') {
+      return (
+        <StatusBadge 
+          label="Submitted" 
+          variant="submitted" 
+        />
+      );
+    }
+
+    return (
+      <StatusBadge 
+        label="Not Submitted" 
+        variant="not_submitted" 
+      />
+    );
+  };
 
   const loadSubmissions = async (assessmentId: string) => {
     try {
       const subs = await submissionApi.getSubmissionsForAssessment(assessmentId);
       setAssessmentSubmissions(subs);
-    } catch {}
+      if (isStudent) {
+        setSubmissionStatuses(prev => ({
+          ...prev,
+          [assessmentId]: {
+            state: subs.length > 0 ? 'submitted' : 'not_submitted',
+            submission: subs[0] || null
+          }
+        }));
+      }
+    } catch {
+      if (isStudent) {
+        setSubmissionStatuses(prev => ({
+          ...prev,
+          [assessmentId]: { state: 'error' }
+        }));
+      }
+    }
   };
 
   useEffect(() => {
@@ -108,55 +289,256 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     }
   }, [selectedAssessmentId]);
 
-  const handlePdfUpload = async (questionId: string, file: File) => {
-    if (!selectedAssessmentId) return;
-    setErrorMessage(null);
-
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      setErrorMessage('Invalid file: Only PDF documents (.pdf) are accepted.');
-      return;
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      setErrorMessage(`File size (${(file.size / (1024 * 1024)).toFixed(2)} MB) exceeds maximum allowed limit of 5.00 MB.`);
-      return;
-    }
-
-    setUploadingQId(questionId);
+  // Load Late Submissions Report
+  const loadLateReports = async (assId?: string) => {
+    setLoadingReports(true);
     try {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        try {
-          const resultStr = reader.result as string;
-          const base64 = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
-          const receipt = await submissionApi.uploadSubmission({
-            assessment_id: selectedAssessmentId,
-            question_id: questionId,
-            file_name: file.name,
-            file_base64: base64
-          });
-          setActionMessage(
-            `Answer uploaded successfully! Version ${receipt.version} saved. SHA-256: ${receipt.sha256.substring(0, 16)}...`
-          );
-          await loadSubmissions(selectedAssessmentId);
-        } catch (err: any) {
-          setErrorMessage(err.message || 'Failed to upload submission');
-        } finally {
-          setUploadingQId(null);
-        }
-      };
-      reader.onerror = () => {
-        setErrorMessage('Failed to read file from disk.');
-        setUploadingQId(null);
-      };
-      reader.readAsDataURL(file);
+      const data = await submissionApi.getLateSubmissionsReport(assId && assId !== 'all' ? assId : undefined);
+      setLateReports(data);
     } catch (err: any) {
-      setErrorMessage(err.message || 'File processing error.');
-      setUploadingQId(null);
+      setErrorMessage(err.message || 'Failed to load late submissions report');
+    } finally {
+      setLoadingReports(false);
     }
   };
 
-  // Handle Assessment Creation
+  useEffect(() => {
+    if (activeTab === 'submissions_report') {
+      loadLateReports(reportAssessmentFilter);
+    }
+  }, [activeTab, reportAssessmentFilter]);
+
+  // Handle Assignment PDF File Selection in Create Modal
+  const handleAssignmentPdfSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormPdfError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
+      setFormPdfError('Only PDF files (.pdf) are accepted for the assignment document.');
+      return;
+    }
+
+    if (file.size > 20 * 1024 * 1024) {
+      setFormPdfError(`File size (${(file.size / (1024 * 1024)).toFixed(2)} MB) exceeds 20.00 MB limit.`);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const resultStr = reader.result as string;
+      const base64 = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
+      try {
+        const binaryHeader = atob(base64.substring(0, 16));
+        if (!binaryHeader.startsWith('%PDF-')) {
+          setFormPdfError('Invalid PDF file signature. The file is not a valid PDF.');
+          return;
+        }
+      } catch {
+        setFormPdfError('Failed to read file signature.');
+        return;
+      }
+      setFormPdfFileName(file.name);
+      setFormPdfFileSize(file.size);
+      setFormPdfBase64(base64);
+    };
+    reader.onerror = () => {
+      setFormPdfError('Failed to read file from disk.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Handle Document-Based Assessment Creation
+  const formatIsoForInput = (iso?: string | null): string => {
+    if (!iso) return '';
+    try {
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    } catch {
+      return '';
+    }
+  };
+
+  const openEditModal = async (assessment: AssessmentDTO) => {
+    setEditingAssessment(assessment);
+    setEditTitle(assessment.title || '');
+    setEditInstructions(assessment.instructions || '');
+    setEditDeadline(formatIsoForInput(assessment.deadline_at));
+    setEditMaxMarks(assessment.max_marks || 50);
+    setEditMaxFiles(assessment.max_files || 1);
+    setEditAllowLate(Boolean(assessment.allow_late));
+    setEditExtensionDeadline(formatIsoForInput(assessment.extension_deadline_at));
+    setEditLatePenaltyMode(assessment.late_penalty_mode || 'none');
+    setEditLatePenaltyMarks(assessment.late_penalty_marks || 5);
+    setEditPdfFileName(assessment.document_filename || null);
+    setEditPdfFileSize(assessment.document_size_bytes || null);
+    setEditPdfBase64(null);
+    setEditPdfError(null);
+    setIsReplacingPdf(false);
+    setEditError(null);
+    setEditSubmissionsCount(0);
+
+    try {
+      const check = await assessmentApi.checkAssessmentDeletion(assessment.id);
+      setEditSubmissionsCount(check.submissions_count || 0);
+    } catch {}
+  };
+
+  const handleEditPdfSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setEditPdfError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
+      setEditPdfError('Only PDF files (.pdf) are accepted for the assignment document.');
+      return;
+    }
+
+    if (file.size > 20 * 1024 * 1024) {
+      setEditPdfError(`File size (${(file.size / (1024 * 1024)).toFixed(2)} MB) exceeds 20.00 MB limit.`);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const resultStr = reader.result as string;
+      const base64 = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
+      try {
+        const binaryHeader = atob(base64.substring(0, 16));
+        if (!binaryHeader.startsWith('%PDF-')) {
+          setEditPdfError('Invalid PDF file signature. The file is not a valid PDF.');
+          return;
+        }
+      } catch {
+        setEditPdfError('Failed to read file signature.');
+        return;
+      }
+      setEditPdfFileName(file.name);
+      setEditPdfFileSize(file.size);
+      setEditPdfBase64(base64);
+      setIsReplacingPdf(true);
+    };
+    reader.onerror = () => {
+      setEditPdfError('Failed to read file from disk.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveEditAssessment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAssessment) return;
+    setEditError(null);
+
+    if (!editTitle.trim()) {
+      setEditError('Assessment title is required.');
+      return;
+    }
+
+    if (!editDeadline) {
+      setEditError('Submission deadline is required.');
+      return;
+    }
+
+    const deadlineDate = new Date(editDeadline);
+    if (isNaN(deadlineDate.getTime())) {
+      setEditError('Valid submission deadline is required.');
+      return;
+    }
+
+    if (editAllowLate) {
+      if (!editExtensionDeadline) {
+        setEditError('Extension deadline is required when late submissions are enabled.');
+        return;
+      }
+      const extensionDate = new Date(editExtensionDeadline);
+      if (extensionDate.getTime() <= deadlineDate.getTime()) {
+        setEditError('Extension deadline must be later than the submission deadline.');
+        return;
+      }
+    }
+
+    if (editAllowLate && editLatePenaltyMode === 'fixed' && editLatePenaltyMarks > editMaxMarks) {
+      setEditError('Late penalty marks cannot exceed maximum assessment marks.');
+      return;
+    }
+
+    setIsSavingEdit(true);
+    try {
+      const updatePayload: any = {
+        title: editTitle.trim(),
+        instructions: editInstructions.trim() || 'Refer to the uploaded Assignment PDF for questions, instructions, and rubric.',
+        deadline_at: deadlineDate.toISOString(),
+        max_marks: Number(editMaxMarks || 50),
+        max_files: Number(editMaxFiles || 1),
+        allow_late: editAllowLate,
+        extension_deadline_at: editAllowLate && editExtensionDeadline ? new Date(editExtensionDeadline).toISOString() : null,
+        late_penalty_mode: editAllowLate ? editLatePenaltyMode : 'none',
+        late_penalty_marks: editAllowLate && editLatePenaltyMode === 'fixed' ? Number(editLatePenaltyMarks || 5) : 0
+      };
+
+      if (isReplacingPdf && editPdfBase64 && editPdfFileName) {
+        updatePayload.document_base64 = editPdfBase64;
+        updatePayload.document_filename = editPdfFileName;
+      }
+
+      const result = await assessmentApi.updateAssessment(editingAssessment.id, updatePayload);
+
+      setActionMessage(`Assessment "${result.assessment.title}" updated successfully.`);
+      setEditingAssessment(null);
+      await loadAssessments();
+    } catch (err: any) {
+      setEditError(err.message || 'Failed to update assessment.');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const openDeleteModal = async (assessment: AssessmentDTO) => {
+    setDeletingAssessment(assessment);
+    setDeleteCheckLoading(true);
+    setDeleteError(null);
+    setDeleteCheckResult(null);
+
+    try {
+      const check = await assessmentApi.checkAssessmentDeletion(assessment.id);
+      setDeleteCheckResult(check);
+    } catch (err: any) {
+      setDeleteCheckResult({
+        can_delete: false,
+        submissions_count: 0,
+        evaluations_count: 0,
+        is_published: false,
+        reason: err.message || 'Failed to verify deletion status.'
+      });
+    } finally {
+      setDeleteCheckLoading(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingAssessment) return;
+    if (!deleteCheckResult?.can_delete) return;
+
+    setIsDeleting(true);
+    setDeleteError(null);
+
+    try {
+      await assessmentApi.deleteAssessment(deletingAssessment.id);
+      setActionMessage(`Assessment "${deletingAssessment.title}" was successfully deleted.`);
+      if (selectedAssessmentId === deletingAssessment.id) {
+        setSelectedAssessmentId(null);
+      }
+      setDeletingAssessment(null);
+      await loadAssessments();
+    } catch (err: any) {
+      setDeleteError(err.message || 'Failed to delete assessment.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const handleCreateAssessment = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
@@ -177,19 +559,54 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
       return;
     }
 
+    if (formAllowLate) {
+      if (!formExtensionDeadline) {
+        setErrorMessage('Extension deadline is required when late submissions are enabled.');
+        return;
+      }
+      const extensionDate = new Date(formExtensionDeadline);
+      if (extensionDate.getTime() <= deadlineDate.getTime()) {
+        setErrorMessage('Extension deadline must be later than the original submission deadline.');
+        return;
+      }
+    }
+
+    if (!formPdfBase64 || !formPdfFileName) {
+      setErrorMessage('Assignment PDF document is required.');
+      return;
+    }
+
     try {
       const newAssessment = await assessmentApi.createAssessment({
         class_subject_id: formClassSubjectId,
         title: formTitle.trim(),
-        instructions: formInstructions.trim() || 'Handwrite answers clearly and submit PDF before deadline.',
-        deadline_at: deadlineDate.toISOString()
+        instructions: formInstructions.trim() || 'Refer to the uploaded Assignment PDF for questions, instructions, and rubric.',
+        deadline_at: deadlineDate.toISOString(),
+        max_marks: Number(formMaxMarks || 50),
+        document_base64: formPdfBase64,
+        document_filename: formPdfFileName,
+        max_files: Number(formMaxFiles || 1),
+        allow_late: formAllowLate,
+        extension_deadline_at: formAllowLate && formExtensionDeadline ? new Date(formExtensionDeadline).toISOString() : undefined,
+        late_penalty_mode: formAllowLate ? formLatePenaltyMode : 'none',
+        late_penalty_marks: formAllowLate && formLatePenaltyMode === 'fixed' ? Number(formLatePenaltyMarks || 5) : 0
       });
 
-      setActionMessage(`Assessment "${newAssessment.title}" created in draft status.`);
+      setActionMessage(`Assessment "${newAssessment.title}" created successfully in draft status.`);
       setShowCreateModal(false);
       setFormTitle('');
       setFormInstructions('');
       setFormDeadline('');
+      setFormExtensionDeadline('');
+      setFormAllowLate(false);
+      setFormLatePenaltyMode('none');
+      setFormLatePenaltyMarks(5);
+      setFormMaxFiles(1);
+      setFormMaxMarks(50);
+      setFormPdfBase64(null);
+      setFormPdfFileName(null);
+      setFormPdfFileSize(null);
+      setFormPdfError(null);
       await loadAssessments();
       setSelectedAssessmentId(newAssessment.id);
     } catch (err: any) {
@@ -197,139 +614,94 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     }
   };
 
-  // Handle Add Question
-  const handleAddQuestion = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Student Answer File Selector (Multi-file PDF, PPT, PPTX)
+  const handleSelectStudentAnswerFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
     setErrorMessage(null);
+    if (!e.target.files || e.target.files.length === 0) return;
+    const newFiles = Array.from(e.target.files);
+    const maxAllowed = selectedAssessment?.max_files || 1;
 
-    if (!selectedAssessment) return;
-    if (!questionPrompt.trim()) {
-      setErrorMessage('Question prompt text cannot be blank.');
+    if (studentAnswerFiles.length + newFiles.length > maxAllowed) {
+      setErrorMessage(`Cannot exceed the maximum limit of ${maxAllowed} file(s) for this assessment.`);
       return;
     }
-    if (questionMaxMarks <= 0) {
-      setErrorMessage('Question maximum marks must be greater than zero.');
-      return;
-    }
 
-    try {
-      const nextOrder = (selectedAssessment.questions?.length || 0) + 1;
-      await assessmentApi.addQuestion(selectedAssessment.id, {
-        display_order: nextOrder,
-        prompt: questionPrompt.trim(),
-        max_marks: Number(questionMaxMarks)
-      });
-
-      setActionMessage(`Question ${nextOrder} added successfully.`);
-      setShowAddQuestionModal(false);
-      setQuestionPrompt('');
-      setQuestionMaxMarks(10);
-      await loadAssessments();
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to add question.');
-    }
-  };
-
-  // Open Rubric Builder for Question
-  const handleOpenRubricBuilder = (question: any) => {
-    setEditingRubricQuestionId(question.id);
-    setRubricTitle(question.rubric?.title || `${question.prompt.substring(0, 30)}... Rubric`);
-    if (question.rubric?.criteria && question.rubric.criteria.length > 0) {
-      setCriteria(
-        question.rubric.criteria.map((c: any) => ({
-          title: c.title,
-          description: c.description || '',
-          max_marks: Number(c.max_marks),
-          levels: c.levels || [
-            { label: 'Excellent', description: 'Fully accurate and comprehensive answer', score_percentage: 100 },
-            { label: 'Good', description: 'Accurate with minor omissions', score_percentage: 75 },
-            { label: 'Developing', description: 'Partial understanding demonstrated', score_percentage: 50 },
-            { label: 'Insufficient', description: 'Incorrect or inadequate response', score_percentage: 25 }
-          ]
-        }))
-      );
-    } else {
-      // Default initial criterion matching question max marks
-      setCriteria([
-        {
-          title: 'Technical Accuracy & Methodology',
-          description: 'Correctness of mathematical derivations and analytical concepts.',
-          max_marks: Number(question.max_marks),
-          levels: [
-            { label: 'Excellent', description: 'Flawless derivations and explanations', score_percentage: 100 },
-            { label: 'Good', description: 'Minor calculation or notation errors', score_percentage: 75 },
-            { label: 'Developing', description: 'Partial steps with conceptual gaps', score_percentage: 50 },
-            { label: 'Insufficient', description: 'Incorrect formulation', score_percentage: 25 }
-          ]
-        }
-      ]);
-    }
-  };
-
-  // Add Empty Criterion
-  const handleAddCriterion = () => {
-    setCriteria([
-      ...criteria,
-      {
-        title: `Criterion ${criteria.length + 1}`,
-        description: 'Performance description',
-        max_marks: 2,
-        levels: [
-          { label: 'Excellent', description: 'Exemplary standard met', score_percentage: 100 },
-          { label: 'Developing', description: 'Basic standard met', score_percentage: 50 }
-        ]
+    const allowedExts = ['.pdf', '.ppt', '.pptx'];
+    for (const f of newFiles) {
+      const ext = f.name.toLowerCase().substring(f.name.lastIndexOf('.'));
+      if (!allowedExts.includes(ext)) {
+        setErrorMessage(`Invalid file format: ${f.name}. Only PDF (.pdf), PowerPoint (.ppt), and PowerPoint XML (.pptx) are accepted.`);
+        return;
       }
-    ]);
+      if (f.size > 10 * 1024 * 1024) {
+        setErrorMessage(`File ${f.name} (${(f.size / (1024 * 1024)).toFixed(2)} MB) exceeds 10 MB limit.`);
+        return;
+      }
+    }
+
+    Promise.all(newFiles.map(file => {
+      return new Promise<{ file: File; name: string; size: number; base64: string }>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const resultStr = reader.result as string;
+          const base64 = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
+          resolve({ file, name: file.name, size: file.size, base64 });
+        };
+        reader.onerror = () => reject(new Error(`Failed to read file ${file.name}`));
+        reader.readAsDataURL(file);
+      });
+    })).then(processed => {
+      const currentTotal = studentAnswerFiles.reduce((sum, f) => sum + f.size, 0);
+      const newTotal = processed.reduce((sum, f) => sum + f.size, 0);
+      if (currentTotal + newTotal > 25 * 1024 * 1024) {
+        setErrorMessage('Total submission size cannot exceed 25.00 MB.');
+        return;
+      }
+      setStudentAnswerFiles(prev => [...prev, ...processed]);
+    }).catch(err => {
+      setErrorMessage(err.message || 'Error processing selected files.');
+    });
   };
 
-  // Remove Criterion
-  const handleRemoveCriterion = (index: number) => {
-    setCriteria(criteria.filter((_, idx) => idx !== index));
+  const handleRemoveStudentAnswerFile = (index: number) => {
+    setStudentAnswerFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Update Criterion Field
-  const handleUpdateCriterion = (index: number, field: keyof NewCriterionForm, val: any) => {
-    const updated = [...criteria];
-    updated[index] = { ...updated[index], [field]: val };
-    setCriteria(updated);
-  };
-
-  // Save Rubric with Invariant Check
-  const handleSaveRubric = async () => {
-    if (!selectedAssessment || !editingRubricQuestionId) return;
-    const targetQuestion = selectedAssessment.questions?.find(q => q.id === editingRubricQuestionId);
-    if (!targetQuestion) return;
-
-    const sumMarks = criteria.reduce((sum, c) => sum + Number(c.max_marks || 0), 0);
-    if (Math.abs(sumMarks - Number(targetQuestion.max_marks)) > 0.001) {
-      setErrorMessage(
-        `Rubric invariant violation: Sum of criterion marks (${sumMarks}) must exactly match question max marks (${targetQuestion.max_marks}).`
-      );
+  const handleSubmitStudentAnswers = async () => {
+    if (!selectedAssessment) return;
+    if (studentAnswerFiles.length === 0) {
+      setErrorMessage('Please select at least one answer file to submit.');
       return;
     }
 
+    setIsSubmittingAnswers(true);
+    setErrorMessage(null);
     try {
-      await assessmentApi.saveRubric(selectedAssessment.id, editingRubricQuestionId, {
-        title: rubricTitle.trim() || 'Assessment Rubric',
-        criteria: criteria.map((c, i) => ({
-          display_order: i + 1,
-          title: c.title.trim(),
-          description: c.description.trim(),
-          max_marks: Number(c.max_marks),
-          levels: c.levels.map((lvl, lIdx) => ({
-            display_order: lIdx + 1,
-            label: lvl.label,
-            description: lvl.description,
-            score_percentage: lvl.score_percentage
-          }))
+      const receipt = await submissionApi.uploadSubmission({
+        assessment_id: selectedAssessment.id,
+        files: studentAnswerFiles.map(f => ({
+          file_name: f.name,
+          file_base64: f.base64
         }))
       });
 
-      setActionMessage('Rubric successfully saved and attached to question.');
-      setEditingRubricQuestionId(null);
-      await loadAssessments();
+      const lateNotice = receipt.late_status === 'late' ? ' (LATE SUBMISSION recorded)' : ' (ON TIME)';
+      setActionMessage(
+        `Answer files successfully submitted! Version ${receipt.version} saved${lateNotice}. SHA-256: ${receipt.sha256.substring(0, 16)}...`
+      );
+      setStudentAnswerFiles([]);
+      setSubmissionStatuses(prev => ({
+        ...prev,
+        [selectedAssessment.id]: {
+          state: 'submitted',
+          submission: null
+        }
+      }));
+      await loadSubmissions(selectedAssessment.id);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to save rubric.');
+      setErrorMessage(err.message || 'Submission failed.');
+    } finally {
+      setIsSubmittingAnswers(false);
     }
   };
 
@@ -340,7 +712,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
 
     try {
       const published = await assessmentApi.publishAssessment(selectedAssessment.id);
-      setActionMessage(`Assessment "${published.title}" has been published and locked. It is now visible to enrolled students.`);
+      setActionMessage(`Assessment "${published.title}" has been published and locked. It is now open for student submissions.`);
       setShowPublishConfirmModal(false);
       await loadAssessments();
     } catch (err: any) {
@@ -349,18 +721,25 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     }
   };
 
-  // Current Question being edited for Rubric
-  const currentEditingQuestion = selectedAssessment?.questions?.find(q => q.id === editingRubricQuestionId);
-  const currentCriteriaSum = criteria.reduce((sum, c) => sum + Number(c.max_marks || 0), 0);
-  const currentQuestionMaxMarks = currentEditingQuestion ? Number(currentEditingQuestion.max_marks) : 0;
-  const isSumMatched = Math.abs(currentCriteriaSum - currentQuestionMaxMarks) < 0.001;
-
-  // Validation checks for publication readiness
+  // Publication checklist: Supports both document-based assessments and historical question-based assessments
   const publicationChecklist = () => {
     if (!selectedAssessment) return { valid: false, errors: [] };
     const errors: string[] = [];
-    const questions = selectedAssessment.questions || [];
 
+    // PDF-Based Assessment workflow: No separate question or rubric requirements
+    if (selectedAssessment.document_storage_key) {
+      const isFuture = new Date(selectedAssessment.deadline_at).getTime() > Date.now();
+      if (!isFuture) {
+        errors.push('Submission deadline must be in the future.');
+      }
+      return {
+        valid: errors.length === 0,
+        errors
+      };
+    }
+
+    // Historical Question & Rubric validation
+    const questions = selectedAssessment.questions || [];
     if (questions.length === 0) {
       errors.push('Assessment has zero questions. Add at least one question.');
     }
@@ -388,6 +767,27 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
   };
 
   const checklist = publicationChecklist();
+
+  // Filtered Late Submissions Report Data
+  const filteredLateReports = lateReports.filter(row => {
+    if (!reportSearchQuery.trim()) return true;
+    const query = reportSearchQuery.toLowerCase();
+    return (
+      (row.student_name && row.student_name.toLowerCase().includes(query)) ||
+      (row.student_usn && row.student_usn.toLowerCase().includes(query)) ||
+      (row.assessment_title && row.assessment_title.toLowerCase().includes(query))
+    );
+  });
+
+  const distinctReportAssessments = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of lateReports) {
+      if (r.assessment_id && r.assessment_title) {
+        map.set(r.assessment_id, r.assessment_title);
+      }
+    }
+    return Array.from(map.entries()).map(([id, title]) => ({ id, title }));
+  }, [lateReports]);
 
   return (
     <div className="space-y-6">
@@ -421,7 +821,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
           <div className="flex items-center space-x-2">
             <AlertCircle className="w-4 h-4 text-[#B28704] flex-shrink-0" />
             <span>
-              <strong>Offline Mock Mode:</strong> The backend API server (http://localhost:4000) is unreachable. Displaying read-only preview data. Changes cannot be saved until the API is running.
+              <strong>Offline Mock Mode:</strong> The backend API server (http://localhost:4000) is unreachable. Displaying read-only preview data.
             </span>
           </div>
         </div>
@@ -434,13 +834,27 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-academic-border">
             <div>
               <h2 className="text-xl font-bold text-academic-deepGreen flex items-center">
-                <BookOpen className="w-5 h-5 mr-2 text-academic-primaryGreen" />
-                {isTeacher ? 'Formative Assessment & Rubric Authoring' : 'Enrolled Course Assessments'}
+                {activeRole === 'proctor' ? (
+                  <FileSpreadsheet className="w-5 h-5 mr-2 text-academic-primaryGreen" />
+                ) : (
+                  <BookOpen className="w-5 h-5 mr-2 text-academic-primaryGreen" />
+                )}
+                {activeRole === 'proctor'
+                  ? 'Mentee Submissions Report'
+                  : isTeacher 
+                  ? 'Formative Assessments & Late Policies' 
+                  : isStudent 
+                  ? 'Enrolled Course Assessments' 
+                  : 'Academic Assessments & Submission Policies'}
               </h2>
               <p className="text-xs text-academic-muted mt-1">
-                {isTeacher 
-                  ? 'Author questions, configure immutable rubrics with criterion marks, and publish for student submissions.'
-                  : 'View published formative assessments, download prompts, and check grading criteria.'}
+                {activeRole === 'proctor'
+                  ? 'Monitor academic submission progress, deadlines, pending work, and evaluation status for your assigned mentees.'
+                  : isTeacher 
+                  ? 'Author document-based assessments, configure extension deadlines, manage multi-file submissions, and track late policies.'
+                  : isStudent
+                  ? 'View published assignments, download assignment PDFs, and submit multi-file answers.'
+                  : 'Review published assessments and monitor academic submissions across departments.'}
               </p>
             </div>
 
@@ -450,231 +864,95 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                 className="btn-primary text-xs flex items-center self-start sm:self-auto min-h-[44px]"
               >
                 <PlusCircle className="w-4 h-4 mr-2" />
-                <span>New Assessment</span>
+                <span>New PDF Assignment</span>
               </button>
             )}
           </div>
 
-          {/* Assessment Cards Grid */}
-          {loading ? (
-            <div className="card-surface text-center py-8 text-academic-muted text-xs">
-              Loading assessments...
-            </div>
-          ) : assessments.length === 0 ? (
-            <div className="card-surface text-center py-12">
-              <FileText className="w-10 h-10 text-academic-muted/50 mx-auto mb-3" />
-              <p className="text-sm font-semibold text-academic-deepGreen">No assessments found</p>
-              <p className="text-xs text-academic-muted mt-1">
-                {isTeacher 
-                  ? 'Get started by creating your first formative assessment for your assigned class.'
-                  : 'No published assessments are currently open for your enrolled subjects.'}
-              </p>
-              {isTeacher && (
-                <button
-                  onClick={() => setShowCreateModal(true)}
-                  className="btn-primary text-xs mt-4 inline-flex items-center min-h-[44px]"
-                >
-                  <PlusCircle className="w-4 h-4 mr-1.5" />
-                  <span>Create Assessment</span>
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {assessments.map(ass => {
-                const totalMarks = ass.questions?.reduce((acc, q) => acc + Number(q.max_marks), 0) || 0;
-                const questionCount = ass.questions?.length || 0;
-                const isDraft = ass.status === 'draft';
-                const isPublished = ass.status === 'published';
-
-                return (
-                  <div 
-                    key={ass.id} 
-                    className="card-surface flex flex-col justify-between hover:border-academic-primaryGreen/50 transition-all cursor-pointer group"
-                    onClick={() => setSelectedAssessmentId(ass.id)}
-                  >
-                    <div>
-                      <div className="flex items-start justify-between gap-3 mb-2">
-                        <StatusBadge 
-                          label={ass.status.toUpperCase()} 
-                          variant={isPublished ? 'published' : isDraft ? 'draft' : 'neutral'} 
-                        />
-                        <span className="text-[11px] font-mono text-academic-muted bg-academic-paleGreen px-2 py-0.5 rounded border border-academic-border">
-                          v{ass.version || 1}
-                        </span>
-                      </div>
-
-                      <h3 className="text-base font-bold text-academic-deepGreen group-hover:text-academic-primaryGreen transition-colors">
-                        {ass.title}
-                      </h3>
-
-                      <p className="text-xs text-academic-muted mt-1">
-                        {ass.class_details || 'MCA Sem 3-A'} • {ass.subject_details || 'MCA301 - Algorithms'}
-                      </p>
-
-                      <p className="text-xs text-academic-muted/80 mt-2 line-clamp-2">
-                        {ass.instructions}
-                      </p>
-                    </div>
-
-                    <div className="mt-4 pt-3 border-t border-academic-border/70 flex flex-col gap-2">
-                      <div className="flex items-center justify-between text-xs text-academic-muted">
-                        <span className="flex items-center">
-                          <Layers className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
-                          {questionCount} {questionCount === 1 ? 'Question' : 'Questions'} ({totalMarks} marks)
-                        </span>
-                        <span className="flex items-center">
-                          <Clock className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
-                          Due: {new Date(ass.deadline_at).toLocaleDateString()}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center justify-end text-xs font-semibold text-academic-primaryGreen group-hover:translate-x-0.5 transition-transform">
-                        <span>{isTeacher && isDraft ? 'Edit & Configure Rubrics' : 'View Assessment Details'}</span>
-                        <ChevronRight className="w-4 h-4 ml-1" />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      ) : (
-        /* Detailed Assessment & Rubric Builder View */
-        <div className="space-y-6">
-          {/* Back Navigation Bar */}
-          <div className="flex items-center justify-between pb-4 border-b border-academic-border">
-            <button
-              onClick={() => setSelectedAssessmentId(null)}
-              className="btn-secondary text-xs flex items-center min-h-[44px]"
-            >
-              <ArrowLeft className="w-4 h-4 mr-1.5" />
-              <span>Back to Assessment List</span>
-            </button>
-
-            <div className="flex items-center space-x-2">
-              <StatusBadge 
-                label={selectedAssessment?.status.toUpperCase() || 'DRAFT'} 
-                variant={selectedAssessment?.status === 'published' ? 'published' : 'draft'} 
-              />
-              {selectedAssessment?.status === 'published' && (
-                <span className="text-xs font-medium text-academic-primaryGreen flex items-center bg-academic-lightGreen px-2.5 py-1 rounded border border-academic-primaryGreen/30">
-                  <Lock className="w-3.5 h-3.5 mr-1" />
-                  Locked (Published)
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Assessment Summary Card */}
-          {selectedAssessment && (
-            <div className="card-surface space-y-4">
-              <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-bold text-academic-deepGreen">
-                    {selectedAssessment.title}
-                  </h2>
-                  <p className="text-xs text-academic-muted mt-1">
-                    Class: <span className="font-semibold text-academic-deepGreen">{selectedAssessment.class_details || 'MCA Sem 3-A'}</span> • 
-                    Subject: <span className="font-semibold text-academic-deepGreen">{selectedAssessment.subject_details || 'MCA301'}</span>
-                  </p>
-                </div>
-
-                {isTeacher && selectedAssessment.status === 'draft' && (
-                  <button
-                    onClick={() => setShowPublishConfirmModal(true)}
-                    className="btn-primary text-xs flex items-center self-start min-h-[44px]"
-                  >
-                    <CheckCircle2 className="w-4 h-4 mr-1.5" />
-                    <span>Publish Assessment</span>
-                  </button>
-                )}
-              </div>
-
-              <div className="p-3 bg-academic-paleGreen/60 rounded-md border border-academic-border text-xs text-academic-deepGreen space-y-1">
-                <span className="font-semibold block">Instructions for Students:</span>
-                <p className="leading-relaxed">{selectedAssessment.instructions}</p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-1">
-                <div className="flex items-center space-x-2 text-academic-muted">
-                  <Calendar className="w-4 h-4 text-academic-primaryGreen" />
-                  <span>Due: {new Date(selectedAssessment.deadline_at).toLocaleString()}</span>
-                </div>
-                <div className="flex items-center space-x-2 text-academic-muted">
-                  <Layers className="w-4 h-4 text-academic-primaryGreen" />
-                  <span>
-                    {selectedAssessment.questions?.length || 0} Questions • 
-                    {selectedAssessment.questions?.reduce((acc, q) => acc + Number(q.max_marks), 0) || 0} Total Marks
-                  </span>
-                </div>
-                <div className="flex items-center space-x-2 text-academic-muted">
-                  <Lock className="w-4 h-4 text-academic-primaryGreen" />
-                  <span>
-                    Status: {selectedAssessment.status === 'published' ? 'Frozen & Published' : 'Draft (Editable)'}
-                  </span>
-                </div>
-              </div>
-
-              {selectedAssessment.status === 'published' && (
-                <div className="p-2.5 bg-academic-paleGreen/40 border border-academic-border rounded text-[11px] text-academic-muted flex items-center space-x-2">
-                  <Lock className="w-4 h-4 text-academic-primaryGreen flex-shrink-0" />
-                  <span>
-                    Academic Integrity Constraint: Questions and rubrics are locked and immutable after publication.
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Phase 4: Teacher Tab Switcher (Published Assessments) */}
-          {isTeacher && selectedAssessment?.status === 'published' && (
+          {/* Top Level Staff Tab Switcher (Assessments vs Submissions Report) */}
+          {isStaff && activeRole !== 'proctor' && (
             <div className="flex border-b border-academic-border gap-2">
               <button
                 onClick={() => setActiveTab('questions')}
                 className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors ${
-                  activeTab === 'questions'
+                  activeTab !== 'submissions_report'
                     ? 'border-academic-primaryGreen text-academic-deepGreen'
                     : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
                 }`}
               >
-                Questions & Rubrics ({selectedAssessment.questions?.length || 0})
+                Assessments Catalog ({assessments.length})
               </button>
               <button
-                onClick={() => setActiveTab('submissions')}
-                className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors ${
-                  activeTab === 'submissions'
+                onClick={() => setActiveTab('submissions_report')}
+                className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors flex items-center space-x-2 ${
+                  activeTab === 'submissions_report'
                     ? 'border-academic-primaryGreen text-academic-deepGreen'
                     : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
                 }`}
               >
-                Student Submissions & Private PDFs ({assessmentSubmissions.length})
+                <FileSpreadsheet className="w-4 h-4 text-academic-primaryGreen" />
+                <span>Submissions Report</span>
               </button>
             </div>
           )}
 
-          {/* Phase 4: Teacher Submissions View */}
-          {isTeacher && selectedAssessment?.status === 'published' && activeTab === 'submissions' ? (
+          {/* Tab 1: Submissions Report View */}
+          {activeRole === 'proctor' ? (
+            <ProctorMenteeReport />
+          ) : isStaff && activeTab === 'submissions_report' ? (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
-                    <FileCheck2 className="w-4 h-4 mr-2 text-academic-primaryGreen" />
-                    Enrolled Student Submissions
-                  </h3>
-                  <p className="text-xs text-academic-muted mt-0.5">
-                    Original handwritten student PDFs stored securely in private storage bucket.
-                  </p>
+              {/* Filter and Search Bar */}
+              <div className="card-surface p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-academic-muted" />
+                    <input
+                      type="text"
+                      placeholder="Search by student name or USN..."
+                      value={reportSearchQuery}
+                      onChange={(e) => setReportSearchQuery(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 text-xs border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[40px]"
+                    />
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Filter className="w-4 h-4 text-academic-muted flex-shrink-0" />
+                    <select
+                      value={reportAssessmentFilter}
+                      onChange={(e) => setReportAssessmentFilter(e.target.value)}
+                      className="text-xs px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[40px]"
+                    >
+                      <option value="all">All Assessments</option>
+                      {(activeRole === 'proctor' && assessments.length === 0 ? distinctReportAssessments : assessments).map(a => (
+                        <option key={a.id} value={a.id}>{a.title}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
+
+                <button
+                  onClick={() => loadLateReports(reportAssessmentFilter)}
+                  disabled={loadingReports}
+                  className="btn-secondary text-xs flex items-center justify-center min-h-[40px]"
+                >
+                  <span>{loadingReports ? 'Refreshing...' : 'Refresh Report'}</span>
+                </button>
               </div>
 
-              {assessmentSubmissions.length === 0 ? (
+              {/* Report Table */}
+              {loadingReports ? (
+                <div className="card-surface text-center py-10 text-xs text-academic-muted">
+                  Loading {activeRole === 'proctor' ? 'mentee' : 'class'} submissions report...
+                </div>
+              ) : filteredLateReports.length === 0 ? (
                 <div className="card-surface text-center py-12">
                   <FileText className="w-10 h-10 text-academic-muted/40 mx-auto mb-2" />
-                  <p className="text-xs font-semibold text-academic-deepGreen">No submissions received yet</p>
-                  <p className="text-[11px] text-academic-muted mt-0.5">
-                    Enrolled students have not submitted PDF answers for this assessment.
+                  <p className="text-sm font-semibold text-academic-deepGreen">
+                    {activeRole === 'proctor' ? 'No mentee submission records found' : 'No student records matching criteria'}
+                  </p>
+                  <p className="text-xs text-academic-muted mt-0.5">
+                    {activeRole === 'proctor'
+                      ? 'No submission records found for your assigned mentees. Ensure you have mentees assigned in Proctor Mentors.'
+                      : 'No enrolled student records found for the selected assessment and filters.'}
                   </p>
                 </div>
               ) : (
@@ -684,49 +962,76 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                       <tr>
                         <th className="p-3">Student Name</th>
                         <th className="p-3">USN</th>
-                        <th className="p-3">Question</th>
-                        <th className="p-3">Version</th>
+                        <th className="p-3">Assessment & Subject</th>
+                        <th className="p-3">Original Deadline</th>
+                        <th className="p-3">Extension Deadline</th>
+                        <th className="p-3">Submission Status</th>
                         <th className="p-3">Submitted At</th>
-                        <th className="p-3">Size</th>
-                        <th className="p-3 text-right">Action</th>
+                        <th className="p-3">Timing Status</th>
+                        <th className="p-3">Evaluation Status</th>
+                        <th className="p-3 text-right">Published Score</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-academic-border bg-academic-surface">
-                      {assessmentSubmissions.map((sub) => {
-                        const qObj = selectedAssessment.questions?.find(q => q.id === sub.question_id);
+                      {filteredLateReports.map((row, idx) => {
+                        const isSubmitted = Boolean(row.is_submitted || row.submitted_at || row.submission_id);
                         return (
-                          <tr key={sub.id} className="hover:bg-academic-paleGreen/30 transition-colors">
-                            <td className="p-3 font-semibold text-academic-deepGreen">
-                              {sub.student_name || 'Enrolled Student'}
+                          <tr key={idx} className="hover:bg-academic-paleGreen/30 transition-colors">
+                            <td className="p-3 font-semibold text-academic-deepGreen">{row.student_name || 'Student'}</td>
+                            <td className="p-3 font-mono text-[11px] text-academic-muted">{row.student_usn || '—'}</td>
+                            <td className="p-3">
+                              <p className="font-semibold text-academic-deepGreen">{row.assessment_title}</p>
+                              <p className="text-[10px] text-academic-muted">{row.subject_name || row.class_name}</p>
                             </td>
-                            <td className="p-3 font-mono text-[11px] text-academic-muted">
-                              {sub.student_usn || '—'}
+                            <td className="p-3 text-[11px] text-academic-muted">
+                              {row.original_deadline ? new Date(row.original_deadline).toLocaleString() : (row.deadline_at ? new Date(row.deadline_at).toLocaleString() : '—')}
                             </td>
-                            <td className="p-3 text-academic-deepGreen">
-                              Q{qObj?.display_order || '1'} ({qObj?.max_marks || 10} marks)
+                            <td className="p-3 text-[11px] text-academic-muted">
+                              {row.extension_deadline ? new Date(row.extension_deadline).toLocaleString() : (row.extension_deadline_at ? new Date(row.extension_deadline_at).toLocaleString() : '—')}
                             </td>
                             <td className="p-3">
-                              <span className="px-2 py-0.5 rounded bg-academic-paleGreen border border-academic-border text-[11px] font-bold text-academic-deepGreen">
-                                v{sub.active_version?.version || 1}
-                              </span>
+                              {isSubmitted ? (
+                                <StatusBadge label="Submitted" variant="submitted" />
+                              ) : (
+                                <StatusBadge label="Not Submitted" variant="neutral" />
+                              )}
                             </td>
-                            <td className="p-3 text-academic-muted text-[11px]">
-                              {sub.active_version?.uploaded_at ? new Date(sub.active_version.uploaded_at).toLocaleString() : '—'}
+                            <td className="p-3 text-[11px] text-academic-muted">
+                              {row.submitted_at ? new Date(row.submitted_at).toLocaleString() : '—'}
                             </td>
-                            <td className="p-3 font-mono text-[11px] text-academic-muted">
-                              {sub.active_version?.size_bytes ? `${(sub.active_version.size_bytes / 1024).toFixed(1)} KB` : '—'}
+                            <td className="p-3">
+                              {!isSubmitted ? (
+                                <span className="text-academic-muted text-[11px]">—</span>
+                              ) : row.is_late || row.late_status === 'late' ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-[#FDF6E2] text-[#A63214] border border-[#D9BD71]">
+                                  LATE
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-academic-lightGreen text-academic-primaryGreen border border-academic-primaryGreen/30">
+                                  ON TIME
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              {!isSubmitted ? (
+                                <span className="text-academic-muted text-[11px] italic">Not Submitted</span>
+                              ) : row.evaluation_status === 'published' ? (
+                                <StatusBadge label="Published" variant="completed" />
+                              ) : row.evaluation_status === 'completed' ? (
+                                <StatusBadge label="Evaluated" variant="completed" />
+                              ) : row.evaluation_status === 'draft' ? (
+                                <StatusBadge label="Under Evaluation" variant="processing" />
+                              ) : (
+                                <StatusBadge label="Pending Evaluation" variant="neutral" />
+                              )}
                             </td>
                             <td className="p-3 text-right">
-                              {sub.active_version && (
-                                <a
-                                  href={submissionApi.downloadPdfUrl(sub.id, sub.active_version.id)}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="btn-secondary text-xs inline-flex items-center min-h-[36px]"
-                                >
-                                  <Download className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
-                                  <span>Download PDF</span>
-                                </a>
+                              {row.published_score !== null && row.published_score !== undefined ? (
+                                <span className="font-bold text-academic-deepGreen font-mono">
+                                  {row.published_score} Marks
+                                </span>
+                              ) : (
+                                <span className="text-academic-muted text-[11px] italic">—</span>
                               )}
                             </td>
                           </tr>
@@ -738,297 +1043,711 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
               )}
             </div>
           ) : (
-            /* Questions & Rubrics Section */
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
-                  <FileText className="w-4 h-4 mr-2 text-academic-primaryGreen" />
-                  Questions & Grading Rubrics
-                </h3>
+            /* Tab 2: Assessment Cards Grid */
+            <>
+              {loading ? (
+                <div className="card-surface text-center py-8 text-academic-muted text-xs">
+                  Loading assessments...
+                </div>
+              ) : assessments.length === 0 ? (
+                <div className="card-surface text-center py-12">
+                  <FileText className="w-10 h-10 text-academic-muted/50 mx-auto mb-3" />
+                  <p className="text-sm font-semibold text-academic-deepGreen">No assessments found</p>
+                  <p className="text-xs text-academic-muted mt-1">
+                    {isTeacher 
+                      ? 'Get started by creating your first document-based assessment.'
+                      : 'No published assessments are currently open for your enrolled subjects.'}
+                  </p>
+                  {isTeacher && (
+                    <button
+                      onClick={() => setShowCreateModal(true)}
+                      className="btn-primary text-xs mt-4 inline-flex items-center min-h-[44px]"
+                    >
+                      <PlusCircle className="w-4 h-4 mr-1.5" />
+                      <span>Create Assignment</span>
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {assessments.map(ass => {
+                    const isDraft = ass.status === 'draft';
+                    const isPublished = ass.status === 'published';
+                    const isDocBased = Boolean(ass.document_storage_key);
 
-                {isTeacher && selectedAssessment?.status === 'draft' && (
-                  <button
-                    onClick={() => setShowAddQuestionModal(true)}
-                    className="btn-secondary text-xs flex items-center min-h-[44px]"
-                  >
-                    <PlusCircle className="w-3.5 h-3.5 mr-1.5" />
-                    <span>Add Question</span>
-                  </button>
-                )}
-              </div>
-
-            {selectedAssessment?.questions?.length === 0 ? (
-              <div className="card-surface text-center py-8">
-                <p className="text-xs text-academic-muted">No questions created for this assessment yet.</p>
-                {isTeacher && selectedAssessment?.status === 'draft' && (
-                  <button
-                    onClick={() => setShowAddQuestionModal(true)}
-                    className="btn-primary text-xs mt-3 inline-flex items-center min-h-[44px]"
-                  >
-                    <PlusCircle className="w-3.5 h-3.5 mr-1" />
-                    <span>Add First Question</span>
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {selectedAssessment?.questions?.map((q, index) => {
-                  const rubric = q.rubric;
-                  const criteriaSum = rubric?.criteria?.reduce((sum: number, c: any) => sum + Number(c.max_marks), 0) || 0;
-                  const isBalanced = Math.abs(criteriaSum - Number(q.max_marks)) < 0.001;
-
-                  return (
-                    <div key={q.id} className="card-surface space-y-4 border border-academic-border">
-                      {/* Question Header */}
-                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-3 border-b border-academic-border">
-                        <div className="space-y-1">
-                          <div className="flex items-center space-x-2">
-                            <span className="px-2 py-0.5 rounded bg-academic-deepGreen text-white text-[11px] font-bold font-mono">
-                              Q{q.display_order || index + 1}
-                            </span>
-                            <span className="text-xs font-semibold text-academic-deepGreen">
-                              Maximum Marks: {q.max_marks}
+                    return (
+                      <div 
+                        key={ass.id} 
+                        className="card-surface flex flex-col justify-between hover:border-academic-primaryGreen/50 transition-all cursor-pointer group"
+                        onClick={() => setSelectedAssessmentId(ass.id)}
+                      >
+                        <div>
+                          <div className="flex items-start justify-between gap-3 mb-2">
+                            <div className="flex items-center space-x-2">
+                              {isTeacher ? (
+                                <>
+                                  <StatusBadge 
+                                    label={ass.status.toUpperCase()} 
+                                    variant={isPublished ? 'published' : isDraft ? 'draft' : 'neutral'} 
+                                  />
+                                  {isDocBased && (
+                                    <span className="text-[10px] font-bold text-academic-primaryGreen bg-academic-lightGreen px-2 py-0.5 rounded border border-academic-primaryGreen/30">
+                                      PDF-Based
+                                    </span>
+                                  )}
+                                </>
+                              ) : isStudent ? (
+                                renderStudentSubmissionBadge(ass.id)
+                              ) : (
+                                <StatusBadge 
+                                  label={ass.status.toUpperCase()} 
+                                  variant={isPublished ? 'published' : isDraft ? 'draft' : 'neutral'} 
+                                />
+                              )}
+                            </div>
+                            <span className="text-[11px] font-mono text-academic-muted bg-academic-paleGreen px-2 py-0.5 rounded border border-academic-border">
+                              v{ass.version || 1}
                             </span>
                           </div>
+
+                          <h3 className="text-base font-bold text-academic-deepGreen group-hover:text-academic-primaryGreen transition-colors">
+                            {ass.title}
+                          </h3>
+
+                          <p className="text-xs text-academic-muted mt-1">
+                            {ass.class_details || 'Class Allocation'} • {ass.subject_details || 'Subject'}
+                          </p>
+
+                          <p className="text-xs text-academic-muted/80 mt-2 line-clamp-2">
+                            {ass.instructions}
+                          </p>
+                        </div>
+
+                        <div className="mt-4 pt-3 border-t border-academic-border/70 flex flex-col gap-2">
+                          <div className="flex items-center justify-between text-xs text-academic-muted">
+                            <span className="flex items-center">
+                              <Layers className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
+                              {isDocBased ? `Max ${ass.max_files || 1} File(s) • ${ass.max_marks || 50} Marks` : `${ass.questions?.length || 0} Questions`}
+                            </span>
+                            <span className="flex items-center">
+                              <Clock className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
+                              Due: {new Date(ass.deadline_at).toLocaleDateString()}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1">
+                            {isTeacher ? (
+                              <div className="flex items-center space-x-1.5" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={() => openEditModal(ass)}
+                                  className="px-2.5 py-1 text-xs font-semibold rounded text-academic-deepGreen hover:bg-academic-paleGreen border border-academic-border flex items-center transition-colors min-h-[32px]"
+                                  title="Edit Assignment"
+                                >
+                                  <Pencil className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
+                                  <span>Edit</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openDeleteModal(ass)}
+                                  className="px-2.5 py-1 text-xs font-semibold rounded text-red-700 hover:bg-red-50 border border-red-200 flex items-center transition-colors min-h-[32px]"
+                                  title="Delete Assignment"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5 mr-1" />
+                                  <span>Delete</span>
+                                </button>
+                              </div>
+                            ) : <div />}
+
+                            <div className="flex items-center text-xs font-semibold text-academic-primaryGreen group-hover:translate-x-0.5 transition-transform">
+                              <span>{isTeacher && isDraft ? 'Review & Publish' : 'View Assessment'}</span>
+                              <ChevronRight className="w-4 h-4 ml-1" />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      ) : selectedAssessment ? (
+        /* Detailed Assessment & Submission View */
+        <div className="space-y-6">
+          {/* Back Navigation Bar */}
+          <div className="flex items-center justify-between pb-4 border-b border-academic-border">
+            <button
+              onClick={() => setSelectedAssessmentId(null)}
+              className="btn-secondary text-xs flex items-center min-h-[44px]"
+            >
+              <ArrowLeft className="w-4 h-4 mr-1.5" />
+              <span>Back to Assessments</span>
+            </button>
+
+            <div className="flex items-center space-x-2">
+              {isTeacher ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => openEditModal(selectedAssessment)}
+                    className="btn-secondary text-xs flex items-center min-h-[38px] px-3"
+                    title="Edit Assignment Details"
+                  >
+                    <Pencil className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+                    <span>Edit Assignment</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openDeleteModal(selectedAssessment)}
+                    className="px-3 py-1.5 text-xs font-semibold rounded text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 flex items-center min-h-[38px] transition-colors"
+                    title="Delete Assignment"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                    <span>Delete</span>
+                  </button>
+                  <StatusBadge 
+                    label={selectedAssessment.status.toUpperCase()} 
+                    variant={selectedAssessment.status === 'published' ? 'published' : 'draft'} 
+                  />
+                  {selectedAssessment.status === 'published' && (
+                    <span className="text-xs font-medium text-academic-primaryGreen flex items-center bg-academic-lightGreen px-2.5 py-1 rounded border border-academic-primaryGreen/30">
+                      <Lock className="w-3.5 h-3.5 mr-1" />
+                      Locked (Published)
+                    </span>
+                  )}
+                </>
+              ) : (
+                renderStudentSubmissionBadge(selectedAssessment.id)
+              )}
+            </div>
+          </div>
+
+          {/* Assessment Summary Card */}
+          <div className="card-surface space-y-4">
+            <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center space-x-2">
+                  <h2 className="text-xl font-bold text-academic-deepGreen">
+                    {selectedAssessment.title}
+                  </h2>
+                  {selectedAssessment.document_storage_key && (
+                    <span className="text-[10px] font-bold text-academic-primaryGreen bg-academic-lightGreen px-2 py-0.5 rounded border border-academic-primaryGreen/30">
+                      Document-Based
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-academic-muted mt-1">
+                  Class: <span className="font-semibold text-academic-deepGreen">{selectedAssessment.class_details || 'MCA'}</span> • 
+                  Subject: <span className="font-semibold text-academic-deepGreen">{selectedAssessment.subject_details || 'Subject'}</span>
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                {selectedAssessment.document_storage_key && (
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadDocument(selectedAssessment.id, selectedAssessment.document_filename)}
+                    disabled={downloadingDocId === selectedAssessment.id}
+                    className="btn-secondary text-xs flex items-center min-h-[44px]"
+                    title="Download PDF for offline access"
+                  >
+                    {downloadingDocId === selectedAssessment.id ? (
+                      <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-academic-primaryGreen" />
+                    ) : (
+                      <Download className="w-4 h-4 mr-1.5 text-academic-primaryGreen" />
+                    )}
+                    <span>Assignment PDF</span>
+                  </button>
+                )}
+
+                {isTeacher && selectedAssessment.status === 'draft' && (
+                  <button
+                    onClick={() => setShowPublishConfirmModal(true)}
+                    className="btn-primary text-xs flex items-center self-start min-h-[44px]"
+                  >
+                    <CheckCircle2 className="w-4 h-4 mr-1.5" />
+                    <span>Publish Assessment</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Instructions Banner */}
+            <div className="p-3 bg-academic-paleGreen/60 rounded-md border border-academic-border text-xs text-academic-deepGreen space-y-1">
+              <span className="font-semibold block">Instructions:</span>
+              <p className="leading-relaxed">{selectedAssessment.instructions}</p>
+            </div>
+
+            {/* Deadlines & Late Policy Info Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-1">
+              <div className="p-3 rounded border border-academic-border bg-academic-surface space-y-1">
+                <div className="flex items-center space-x-1.5 text-academic-muted">
+                  <Calendar className="w-4 h-4 text-academic-primaryGreen" />
+                  <span className="font-semibold text-academic-deepGreen">Original Deadline</span>
+                </div>
+                <p className="font-mono text-academic-deepGreen text-[11px]">
+                  {new Date(selectedAssessment.deadline_at).toLocaleString()}
+                </p>
+              </div>
+
+              <div className="p-3 rounded border border-academic-border bg-academic-surface space-y-1">
+                <div className="flex items-center space-x-1.5 text-academic-muted">
+                  <Clock className="w-4 h-4 text-academic-primaryGreen" />
+                  <span className="font-semibold text-academic-deepGreen">Late Policy</span>
+                </div>
+                <p className="text-[11px] text-academic-deepGreen">
+                  {selectedAssessment.allow_late ? (
+                    <>
+                      <span className="font-bold text-[#A63214]">Extension until: </span>
+                      {selectedAssessment.extension_deadline_at ? new Date(selectedAssessment.extension_deadline_at).toLocaleString() : '—'}
+                      <span className="block text-[10px] text-academic-muted mt-0.5">
+                        {selectedAssessment.late_penalty_mode === 'fixed'
+                          ? `Fixed penalty: -${selectedAssessment.late_penalty_marks || 0} Marks`
+                          : 'No automatic deduction (Teacher discretion)'}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-academic-muted font-medium">Late submissions not permitted</span>
+                  )}
+                </p>
+              </div>
+
+              <div className="p-3 rounded border border-academic-border bg-academic-surface space-y-1">
+                <div className="flex items-center space-x-1.5 text-academic-muted">
+                  <Paperclip className="w-4 h-4 text-academic-primaryGreen" />
+                  <span className="font-semibold text-academic-deepGreen">Submission Rules</span>
+                </div>
+                <p className="text-[11px] text-academic-deepGreen">
+                  Max Files: <span className="font-bold">{selectedAssessment.max_files || 1} file(s)</span> (PDF, PPT, PPTX)
+                </p>
+                <p className="text-[10px] text-academic-muted">
+                  Total Marks: {selectedAssessment.max_marks || 50} Marks
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Teacher Tab Switcher for Published Assessment */}
+          {isTeacher && selectedAssessment.status === 'published' && (
+            <div className="flex border-b border-academic-border gap-2">
+              <button
+                onClick={() => setActiveTab('questions')}
+                className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors ${
+                  activeTab === 'questions'
+                    ? 'border-academic-primaryGreen text-academic-deepGreen'
+                    : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+                }`}
+              >
+                Assignment Document
+              </button>
+              <button
+                onClick={() => setActiveTab('submissions')}
+                className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors ${
+                  activeTab === 'submissions'
+                    ? 'border-academic-primaryGreen text-academic-deepGreen'
+                    : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+                }`}
+              >
+                Student Submissions ({assessmentSubmissions.length})
+              </button>
+            </div>
+          )}
+
+          {/* Teacher Submissions View */}
+          {isTeacher && selectedAssessment.status === 'published' && activeTab === 'submissions' ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
+                    <FileCheck2 className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                    Student Answer Submissions
+                  </h3>
+                  <p className="text-xs text-academic-muted mt-0.5">
+                    Original student answer documents stored securely in private institutional storage.
+                  </p>
+                </div>
+              </div>
+
+              {assessmentSubmissions.length === 0 ? (
+                <div className="card-surface text-center py-12">
+                  <FileText className="w-10 h-10 text-academic-muted/40 mx-auto mb-2" />
+                  <p className="text-xs font-semibold text-academic-deepGreen">No submissions received yet</p>
+                  <p className="text-[11px] text-academic-muted mt-0.5">
+                    Enrolled students have not submitted answer files for this assessment.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto border border-academic-border rounded-lg bg-academic-surface">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-academic-paleGreen text-academic-deepGreen border-b border-academic-border text-[11px] font-semibold">
+                      <tr>
+                        <th className="p-3">Student Name</th>
+                        <th className="p-3">USN</th>
+                        <th className="p-3">Version</th>
+                        <th className="p-3">Status</th>
+                        <th className="p-3">Submitted At</th>
+                        <th className="p-3">Files Submitted</th>
+                        <th className="p-3 text-right">Download</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-academic-border bg-academic-surface">
+                      {assessmentSubmissions.map((sub) => {
+                        const isLate = sub.active_version?.late_status === 'late';
+                        const files = sub.active_version?.files || [];
+
+                        return (
+                          <tr key={sub.id} className="hover:bg-academic-paleGreen/30 transition-colors">
+                            <td className="p-3 font-semibold text-academic-deepGreen">
+                              {sub.student_name || 'Enrolled Student'}
+                            </td>
+                            <td className="p-3 font-mono text-[11px] text-academic-muted">
+                              {sub.student_usn || '—'}
+                            </td>
+                            <td className="p-3">
+                              <span className="px-2 py-0.5 rounded bg-academic-paleGreen border border-academic-border text-[11px] font-bold text-academic-deepGreen">
+                                v{sub.active_version?.version || 1}
+                              </span>
+                            </td>
+                            <td className="p-3">
+                              {isLate ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-[#FDF6E2] text-[#A63214] border border-[#D9BD71]">
+                                  ⚠️ LATE
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-academic-lightGreen text-academic-primaryGreen border border-academic-primaryGreen/30">
+                                  ✓ ON TIME
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 text-academic-muted text-[11px]">
+                              {sub.active_version?.uploaded_at ? new Date(sub.active_version.uploaded_at).toLocaleString() : '—'}
+                            </td>
+                            <td className="p-3 text-academic-deepGreen">
+                              {files.length > 0 ? (
+                                <span className="font-semibold">{files.length} file(s)</span>
+                              ) : (
+                                <span className="text-academic-muted font-mono text-[11px]">
+                                  {sub.active_version?.original_name || '1 file'}
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 text-right">
+                              {files.length > 0 ? (
+                                <div className="flex flex-wrap items-center justify-end gap-1.5">
+                                  {files.map((f: any) => (
+                                    <a
+                                      key={f.id}
+                                      href={submissionApi.downloadFileUrl(sub.id, sub.active_version!.id, f.id)}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="btn-secondary text-[11px] py-1 px-2 inline-flex items-center"
+                                      title={`${f.original_name} (${(f.size_bytes / 1024).toFixed(1)} KB)`}
+                                    >
+                                      <Download className="w-3 h-3 mr-1 text-academic-primaryGreen" />
+                                      <span className="max-w-[120px] truncate">{f.original_name}</span>
+                                    </a>
+                                  ))}
+                                </div>
+                              ) : sub.active_version ? (
+                                <a
+                                  href={submissionApi.downloadPdfUrl(sub.id, sub.active_version.id)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="btn-secondary text-xs inline-flex items-center min-h-[36px]"
+                                >
+                                  <Download className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
+                                  <span>Download</span>
+                                </a>
+                              ) : null}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Document-Based Assessment Details / Student Submission View */
+            <div className="space-y-4">
+              {/* Document Banner */}
+              {selectedAssessment.document_storage_key ? (
+                <div className="card-surface p-5 border border-academic-border space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-academic-border">
+                    <div className="space-y-1">
+                      <span className="text-xs font-bold uppercase tracking-wider text-academic-primaryGreen">
+                        Authoritative Assignment Document
+                      </span>
+                      <h4 className="text-base font-bold text-academic-deepGreen flex items-center">
+                        <FileText className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                        {selectedAssessment.document_filename || 'Assignment Document.pdf'}
+                      </h4>
+                      {selectedAssessment.document_size_bytes && (
+                        <p className="text-[11px] text-academic-muted font-mono">
+                          Size: {(selectedAssessment.document_size_bytes / 1024).toFixed(1)} KB • PDF Format
+                        </p>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadDocument(selectedAssessment.id, selectedAssessment.document_filename)}
+                      disabled={downloadingDocId === selectedAssessment.id}
+                      className="btn-secondary text-xs inline-flex items-center self-start sm:self-auto min-h-[44px]"
+                      title="Download PDF for offline access"
+                    >
+                      {downloadingDocId === selectedAssessment.id ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin text-academic-primaryGreen" />
+                      ) : (
+                        <Download className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                      )}
+                      <span>Download PDF</span>
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-academic-muted leading-relaxed">
+                    This PDF contains all authoritative questions, instructions, and grading rubrics. You can read the assignment directly below or download a copy for offline access.
+                  </p>
+
+                  {/* Embedded PDF Viewer */}
+                  <div className="pt-2">
+                    <PdfViewer
+                      assessmentId={selectedAssessment.id}
+                      filename={selectedAssessment.document_filename}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Student Multi-File Submission Panel */}
+              {isStudent && selectedAssessment.status === 'published' && (() => {
+                const sub = assessmentSubmissions[0];
+                const now = Date.now();
+                const origDeadline = new Date(selectedAssessment.deadline_at).getTime();
+                const extDeadline = selectedAssessment.allow_late && selectedAssessment.extension_deadline_at
+                  ? new Date(selectedAssessment.extension_deadline_at).getTime()
+                  : origDeadline;
+                const isWindowClosed = now > extDeadline;
+                const isInExtensionWindow = now > origDeadline && now <= extDeadline;
+
+                return (
+                  <div className="card-surface p-5 border border-academic-border space-y-4">
+                    <div className="flex items-center justify-between pb-3 border-b border-academic-border">
+                      <div>
+                        <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
+                          <FileCheck2 className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                          Your Submission Answers
+                        </h3>
+                        <p className="text-xs text-academic-muted mt-0.5">
+                          Upload up to {selectedAssessment.max_files || 1} answer file(s) (PDF, PPT, PPTX). Max 10MB per file, 25MB total.
+                        </p>
+                      </div>
+
+                      {sub ? (
+                        <span className="inline-flex items-center text-xs font-semibold text-academic-primaryGreen bg-academic-lightGreen px-2.5 py-1 rounded border border-academic-primaryGreen/30">
+                          <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                          Submitted (v{sub.active_version?.version || 1})
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center text-xs font-medium text-academic-muted bg-academic-paleGreen px-2.5 py-1 rounded border border-academic-border">
+                          <Clock className="w-3.5 h-3.5 mr-1" />
+                          Pending Submission
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Active Submission Details */}
+                    {sub && sub.active_version && (
+                      <div className="p-4 bg-academic-paleGreen/40 rounded border border-academic-border space-y-3 text-xs">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <span className="font-bold text-academic-deepGreen">Active Version: v{sub.active_version.version}</span>
+                            {sub.active_version.late_status === 'late' ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#FDF6E2] text-[#A63214] border border-[#D9BD71]">
+                                ⚠️ LATE SUBMISSION
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-academic-lightGreen text-academic-primaryGreen border border-academic-primaryGreen/30">
+                                ✓ ON TIME
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[11px] text-academic-muted">
+                            Uploaded on {new Date(sub.active_version.uploaded_at).toLocaleString()}
+                          </span>
+                        </div>
+
+                        {/* Submitted Files List */}
+                        <div className="space-y-1.5 pt-1">
+                          <span className="font-semibold text-academic-deepGreen block">Submitted Answer Files:</span>
+                          {sub.active_version.files && sub.active_version.files.length > 0 ? (
+                            sub.active_version.files.map((f: any) => (
+                              <div key={f.id} className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between">
+                                <div className="flex items-center space-x-2">
+                                  <Paperclip className="w-3.5 h-3.5 text-academic-primaryGreen" />
+                                  <span className="font-medium text-academic-deepGreen">{f.original_name}</span>
+                                  <span className="text-[11px] font-mono text-academic-muted">
+                                    ({(f.size_bytes / 1024).toFixed(1)} KB)
+                                  </span>
+                                </div>
+                                <a
+                                  href={submissionApi.downloadFileUrl(sub.id, sub.active_version!.id, f.id)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="btn-secondary text-[11px] py-1 px-2.5 inline-flex items-center"
+                                >
+                                  <Download className="w-3 h-3 mr-1 text-academic-primaryGreen" />
+                                  <span>Download</span>
+                                </a>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between">
+                              <span className="font-medium text-academic-deepGreen">{sub.active_version.original_name}</span>
+                              <a
+                                href={submissionApi.downloadPdfUrl(sub.id, sub.active_version.id)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="btn-secondary text-[11px] py-1 px-2.5 inline-flex items-center"
+                              >
+                                <Download className="w-3 h-3 mr-1 text-academic-primaryGreen" />
+                                <span>Download PDF</span>
+                              </a>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="text-[10px] text-academic-muted font-mono bg-academic-surface p-1.5 rounded border border-academic-border/60 break-all">
+                          SHA-256: {sub.active_version.sha256}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Multi-File Upload Form (if open) */}
+                    {!isWindowClosed ? (
+                      <div className="space-y-3 pt-2">
+                        {isInExtensionWindow && (
+                          <div className="p-3 bg-[#FDF6E2] border border-[#D9BD71] rounded text-xs text-[#6D5200] flex items-center space-x-2">
+                            <AlertTriangle className="w-4 h-4 text-[#B28704] flex-shrink-0" />
+                            <span>
+                              <strong>Late Extension Active:</strong> The original deadline has passed. You are submitting during the extension window. A late penalty may apply according to assignment policy.
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Selected Files Staging List */}
+                        {studentAnswerFiles.length > 0 && (
+                          <div className="space-y-2 p-3 bg-academic-paleGreen/20 border border-academic-border rounded">
+                            <span className="font-semibold text-xs text-academic-deepGreen block">
+                              Files selected for submission ({studentAnswerFiles.length} of max {selectedAssessment.max_files || 1}):
+                            </span>
+                            <div className="space-y-1.5">
+                              {studentAnswerFiles.map((sf, idx) => (
+                                <div key={idx} className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between text-xs">
+                                  <div className="flex items-center space-x-2">
+                                    <Paperclip className="w-3.5 h-3.5 text-academic-primaryGreen" />
+                                    <span className="font-medium text-academic-deepGreen">{sf.name}</span>
+                                    <span className="text-[11px] font-mono text-academic-muted">
+                                      ({(sf.size / 1024).toFixed(1)} KB)
+                                    </span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveStudentAnswerFile(idx)}
+                                    className="text-academic-muted hover:text-red-700 p-1"
+                                    title="Remove file"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                          {studentAnswerFiles.length < (selectedAssessment.max_files || 1) && (
+                            <label className="btn-secondary text-xs flex items-center cursor-pointer min-h-[44px]">
+                              <Upload className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+                              <span>Select Answer File ({studentAnswerFiles.length} / {selectedAssessment.max_files || 1})</span>
+                              <input
+                                type="file"
+                                accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                                className="hidden"
+                                onChange={handleSelectStudentAnswerFiles}
+                                disabled={isSubmittingAnswers}
+                              />
+                            </label>
+                          )}
+
+                          {studentAnswerFiles.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={handleSubmitStudentAnswers}
+                              disabled={isSubmittingAnswers}
+                              className="btn-primary text-xs flex items-center min-h-[44px]"
+                            >
+                              <CheckCircle2 className="w-4 h-4 mr-1.5" />
+                              <span>{isSubmittingAnswers ? 'Uploading & Verifying...' : `Submit ${studentAnswerFiles.length} File(s)`}</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-[#FDF6E2] border border-[#D9BD71] rounded text-xs text-[#6D5200] flex items-center space-x-2">
+                        <Lock className="w-4 h-4 text-[#B28704] flex-shrink-0" />
+                        <span>Submissions locked. The assessment submission deadline has passed. Resubmissions are disabled.</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Historical Question List (Preserved for backwards compatibility) */}
+              {!selectedAssessment.document_storage_key && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
+                      <FileText className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                      Questions (Legacy Assessment)
+                    </h3>
+                  </div>
+
+                  {selectedAssessment.questions?.map((q, index) => (
+                    <div key={q.id} className="card-surface space-y-4 border border-academic-border">
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-3 border-b border-academic-border">
+                        <div className="space-y-1">
+                          <span className="px-2 py-0.5 rounded bg-academic-deepGreen text-white text-[11px] font-bold font-mono">
+                            Q{q.display_order || index + 1}
+                          </span>
+                          <span className="text-xs font-semibold text-academic-deepGreen ml-2">
+                            Maximum Marks: {q.max_marks}
+                          </span>
                           <p className="text-xs text-[#27452C] font-medium leading-relaxed pt-1">
                             {q.prompt}
                           </p>
                         </div>
-
-                        {isTeacher && selectedAssessment?.status === 'draft' && (
-                          <button
-                            onClick={() => handleOpenRubricBuilder(q)}
-                            className="btn-secondary text-xs flex items-center self-start flex-shrink-0 min-h-[44px]"
-                          >
-                            <Sliders className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
-                            <span>{rubric ? 'Edit Rubric' : 'Create Rubric'}</span>
-                          </button>
-                        )}
                       </div>
-
-                      {/* Attached Rubric Details */}
-                      <div>
-                        {rubric ? (
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="font-semibold text-academic-deepGreen flex items-center">
-                                <Sparkles className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
-                                Rubric: {rubric.title} (v{rubric.version})
-                              </span>
-
-                              {isBalanced ? (
-                                <span className="inline-flex items-center text-[11px] font-medium text-academic-primaryGreen bg-academic-lightGreen px-2 py-0.5 rounded border border-academic-primaryGreen/30">
-                                  <CheckCircle2 className="w-3 h-3 mr-1" />
-                                  Invariant Balanced ({criteriaSum} / {q.max_marks} marks)
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center text-[11px] font-medium text-[#B28704] bg-[#FDF6E2] px-2 py-0.5 rounded border border-[#D9BD71]">
-                                  <AlertCircle className="w-3 h-3 mr-1" />
-                                  Sum Mismatch: {criteriaSum} / {q.max_marks} marks
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Criteria Table */}
-                            <div className="overflow-x-auto border border-academic-border rounded-md">
-                              <table className="w-full text-left text-xs">
-                                <thead className="bg-academic-paleGreen text-academic-deepGreen border-b border-academic-border text-[11px] font-semibold">
-                                  <tr>
-                                    <th className="p-2.5 w-12 text-center">#</th>
-                                    <th className="p-2.5">Criterion & Description</th>
-                                    <th className="p-2.5 w-24 text-right">Max Marks</th>
-                                    <th className="p-2.5">Performance Guidance Levels</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-academic-border bg-academic-surface">
-                                  {rubric.criteria?.map((crit: any, cIdx: number) => (
-                                    <tr key={crit.id || cIdx} className="hover:bg-academic-paleGreen/30">
-                                      <td className="p-2.5 text-center font-mono text-[11px] text-academic-muted">
-                                        {crit.display_order || cIdx + 1}
-                                      </td>
-                                      <td className="p-2.5">
-                                        <p className="font-semibold text-academic-deepGreen">{crit.title}</p>
-                                        <p className="text-[11px] text-academic-muted mt-0.5">{crit.description}</p>
-                                      </td>
-                                      <td className="p-2.5 text-right font-mono font-bold text-academic-deepGreen">
-                                        {crit.max_marks}
-                                      </td>
-                                      <td className="p-2.5">
-                                        <div className="flex flex-wrap gap-1.5">
-                                          {crit.levels?.map((lvl: any, lIdx: number) => (
-                                            <span 
-                                              key={lvl.id || lIdx}
-                                              className="inline-flex items-center text-[10px] px-2 py-0.5 rounded bg-academic-paleGreen border border-academic-border text-academic-deepGreen"
-                                              title={lvl.description}
-                                            >
-                                              <span className="font-medium mr-1">{lvl.label}</span>
-                                            </span>
-                                          ))}
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="p-3 bg-academic-paleGreen/30 border border-dashed border-academic-border rounded-md text-xs text-academic-muted flex items-center justify-between">
-                            <span className="flex items-center">
-                              <HelpCircle className="w-4 h-4 mr-2 text-academic-muted" />
-                              No rubric defined yet for Question {q.display_order || index + 1}. A rubric is required before publishing.
-                            </span>
-                            {isTeacher && selectedAssessment?.status === 'draft' && (
-                              <button
-                                onClick={() => handleOpenRubricBuilder(q)}
-                                className="text-academic-primaryGreen font-semibold hover:underline"
-                              >
-                                Build Rubric now
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Phase 4: Student Submission Panel */}
-                      {!isTeacher && selectedAssessment.status === 'published' && (() => {
-                        const sub = assessmentSubmissions.find(s => s.question_id === q.id);
-                        const isDeadlinePassed = new Date(selectedAssessment.deadline_at).getTime() <= Date.now();
-
-                        return (
-                          <div className="pt-3 border-t border-academic-border space-y-3">
-                            <div className="flex items-center justify-between">
-                              <span className="font-semibold text-academic-deepGreen text-xs flex items-center">
-                                <FileCheck2 className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
-                                Your Handwritten PDF Answer
-                              </span>
-                              {sub ? (
-                                <span className="inline-flex items-center text-[11px] font-semibold text-academic-primaryGreen bg-academic-lightGreen px-2 py-0.5 rounded border border-academic-primaryGreen/30">
-                                  <CheckCircle2 className="w-3 h-3 mr-1" />
-                                  Submitted (v{sub.active_version?.version || 1})
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center text-[11px] font-medium text-academic-muted bg-academic-paleGreen px-2 py-0.5 rounded border border-academic-border">
-                                  <Clock className="w-3 h-3 mr-1" />
-                                  Pending Submission
-                                </span>
-                              )}
-                            </div>
-
-                            {sub && sub.active_version && (
-                              <div className="p-3 bg-academic-paleGreen/40 rounded border border-academic-border space-y-2 text-xs">
-                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                                  <div>
-                                    <p className="font-semibold text-academic-deepGreen">{sub.active_version.original_name}</p>
-                                    <p className="text-[11px] text-academic-muted mt-0.5">
-                                      {(sub.active_version.size_bytes / 1024).toFixed(1)} KB • Uploaded {new Date(sub.active_version.uploaded_at).toLocaleString()}
-                                    </p>
-                                  </div>
-                                  <a
-                                    href={submissionApi.downloadPdfUrl(sub.id, sub.active_version.id)}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="btn-secondary text-xs inline-flex items-center self-start sm:self-auto min-h-[36px]"
-                                  >
-                                    <Download className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
-                                    <span>Download PDF</span>
-                                  </a>
-                                </div>
-                                <div className="text-[10px] text-academic-muted font-mono bg-academic-surface/80 p-1.5 rounded border border-academic-border/60 break-all">
-                                  SHA-256: {sub.active_version.sha256}
-                                </div>
-
-                                {/* Historical Version Accordion */}
-                                {sub.versions && sub.versions.length > 1 && (
-                                  <div className="pt-2 border-t border-academic-border/60">
-                                    <button
-                                      type="button"
-                                      onClick={() => setExpandedVersionsQId(expandedVersionsQId === q.id ? null : q.id)}
-                                      className="text-[11px] font-semibold text-academic-deepGreen hover:text-academic-primaryGreen flex items-center"
-                                    >
-                                      <History className="w-3 h-3 mr-1" />
-                                      <span>Version History ({sub.versions.length} versions)</span>
-                                      <ChevronDown className={`w-3.5 h-3.5 ml-1 transition-transform ${expandedVersionsQId === q.id ? 'rotate-180' : ''}`} />
-                                    </button>
-
-                                    {expandedVersionsQId === q.id && (
-                                      <div className="mt-2 space-y-1.5 pl-2 border-l-2 border-academic-primaryGreen/30">
-                                        {sub.versions.map((ver: any) => (
-                                          <div key={ver.id} className="text-[11px] flex items-center justify-between p-1.5 rounded bg-academic-surface border border-academic-border">
-                                            <div>
-                                              <span className="font-bold text-academic-deepGreen mr-2">v{ver.version}</span>
-                                              <span className="text-academic-muted">{ver.original_name}</span>
-                                              {ver.superseded_at && (
-                                                <span className="ml-2 text-[10px] text-academic-muted/80 bg-academic-paleGreen px-1.5 py-0.5 rounded">
-                                                  Superseded on {new Date(ver.superseded_at).toLocaleDateString()}
-                                                </span>
-                                              )}
-                                            </div>
-                                            <a
-                                              href={submissionApi.downloadPdfUrl(sub.id, ver.id)}
-                                              target="_blank"
-                                              rel="noreferrer"
-                                              className="text-academic-primaryGreen hover:underline text-[11px] font-semibold ml-2"
-                                            >
-                                              Download
-                                            </a>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-
-                            {/* File Upload / Resubmit Box */}
-                            {!isDeadlinePassed ? (
-                              <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
-                                <label className="btn-secondary text-xs flex items-center cursor-pointer min-h-[44px]">
-                                  <Upload className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
-                                  <span>{sub ? 'Resubmit Revised PDF Answer' : 'Choose PDF Answer File'}</span>
-                                  <input
-                                    type="file"
-                                    accept="application/pdf"
-                                    className="hidden"
-                                    onChange={(e) => {
-                                      const file = e.target.files?.[0];
-                                      if (file) handlePdfUpload(q.id, file);
-                                    }}
-                                    disabled={uploadingQId === q.id}
-                                  />
-                                </label>
-                                <span className="text-[11px] text-academic-muted">
-                                  {uploadingQId === q.id ? 'Uploading & validating PDF...' : 'Max 5 MB. PDF only. Resubmissions permitted until deadline.'}
-                                </span>
-                              </div>
-                            ) : (
-                              <div className="p-2.5 bg-[#FDF6E2] border border-[#D9BD71] rounded text-[11px] text-[#6D5200] flex items-center space-x-1.5">
-                                <Lock className="w-3.5 h-3.5 text-[#B28704] flex-shrink-0" />
-                                <span>Submissions locked. The assessment deadline has passed. Resubmissions are disabled.</span>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    )}
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : null}
 
-      {/* MODAL 1: Create Assessment Modal */}
+      {/* MODAL 1: Create Assessment Modal (Document-Based & Late Policy) */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-academic-deepGreen/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-academic-surface border border-academic-border rounded-lg shadow-xl max-w-lg w-full p-6 space-y-4">
+          <div className="bg-academic-surface border border-academic-border rounded-lg shadow-xl max-w-xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-academic-border">
               <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
                 <BookOpen className="w-4 h-4 mr-2 text-academic-primaryGreen" />
-                New Formative Assessment
+                New PDF-Based Assignment
               </h3>
               <button 
                 onClick={() => setShowCreateModal(false)}
@@ -1041,12 +1760,12 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
             <form onSubmit={handleCreateAssessment} className="space-y-4 text-xs">
               <div>
                 <label className="block font-semibold text-academic-deepGreen mb-1">
-                  Assessment Title *
+                  Assignment Title *
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Formative Assessment 1: Algorithm Analysis"
+                  placeholder="e.g. Formative Assignment 1: Advanced Algorithms"
                   value={formTitle}
                   onChange={(e) => setFormTitle(e.target.value)}
                   className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
@@ -1062,41 +1781,190 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                   onChange={(e) => setFormClassSubjectId(e.target.value)}
                   className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
                 >
-                  <option value="c5100000-0000-0000-0000-000000000001">
-                    MCA Sem 3 Section A — MCA301 Analysis and Design of Algorithms
-                  </option>
-                  <option value="c5100000-0000-0000-0000-000000000002">
-                    MCA Sem 3 Section A — MCA302 Cloud Computing & Distributed Systems
-                  </option>
+                  {availableClassSubjects.length > 0 ? (
+                    availableClassSubjects.map((cs) => (
+                      <option key={cs.id} value={cs.id}>
+                        {cs.class ? formatClassName(cs.class) : (cs.class_name?.startsWith('MCA') ? 'MCA Semester 3' : (cs.class_name || 'Class'))} — {cs.subject ? `${cs.subject.code} ${cs.subject.name}` : (cs.subject_name || 'Subject')}
+                      </option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="c5100000-0000-0000-0000-000000000001">
+                        MCA Semester 3 — MCA301 Analysis and Design of Algorithms
+                      </option>
+                      <option value="c5100000-0000-0000-0000-000000000002">
+                        MCA Semester 3 — MCA302 Cloud Computing & Distributed Systems
+                      </option>
+                    </>
+                  )}
                 </select>
-                <p className="text-[11px] text-academic-muted mt-1">
-                  Only subjects assigned to you by the HOD can be selected.
-                </p>
               </div>
 
+              {/* Assignment PDF File Picker */}
               <div>
                 <label className="block font-semibold text-academic-deepGreen mb-1">
-                  Submission Deadline *
+                  Assignment PDF Document * (Contains Questions, Instructions & Rubric)
                 </label>
-                <input
-                  type="datetime-local"
-                  required
-                  value={formDeadline}
-                  onChange={(e) => setFormDeadline(e.target.value)}
-                  className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
-                />
-                <p className="text-[11px] text-academic-muted mt-1">
-                  Must be in the future. Submissions close automatically after this timestamp.
-                </p>
+                <div className="p-3 border border-academic-border rounded bg-academic-paleGreen/20 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="btn-secondary text-xs flex items-center cursor-pointer min-h-[40px]">
+                      <Upload className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+                      <span>{formPdfFileName ? 'Change PDF File' : 'Choose Assignment PDF'}</span>
+                      <input
+                        type="file"
+                        accept="application/pdf"
+                        className="hidden"
+                        onChange={handleAssignmentPdfSelect}
+                      />
+                    </label>
+                    <span className="text-[11px] text-academic-muted">
+                      Max 20.00 MB. PDF documents only.
+                    </span>
+                  </div>
+
+                  {formPdfFileName && (
+                    <div className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <FileText className="w-4 h-4 text-academic-primaryGreen" />
+                        <span className="font-semibold text-academic-deepGreen">{formPdfFileName}</span>
+                        <span className="text-[11px] font-mono text-academic-muted">
+                          ({formPdfFileSize ? (formPdfFileSize / 1024).toFixed(1) : 0} KB)
+                        </span>
+                      </div>
+                      <span className="text-[11px] font-bold text-academic-primaryGreen">✓ Validated</span>
+                    </div>
+                  )}
+
+                  {formPdfError && (
+                    <p className="text-[11px] font-semibold text-red-700">{formPdfError}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Deadlines and File Limits */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-academic-deepGreen mb-1">
+                    Original Submission Deadline *
+                  </label>
+                  <input
+                    type="datetime-local"
+                    required
+                    value={formDeadline}
+                    onChange={(e) => setFormDeadline(e.target.value)}
+                    className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-academic-deepGreen mb-1">
+                    Max Answer Files per Submission *
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    required
+                    value={formMaxFiles}
+                    onChange={(e) => setFormMaxFiles(Math.max(1, Math.min(10, Number(e.target.value))))}
+                    className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
+                  />
+                  <p className="text-[10px] text-academic-muted mt-0.5">Students can submit up to this number of files (1-10).</p>
+                </div>
+              </div>
+
+              {/* Late Submission Policy */}
+              <div className="p-3 border border-academic-border rounded bg-academic-paleGreen/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-academic-deepGreen text-xs">
+                    Late Submission Policy
+                  </span>
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formAllowLate}
+                      onChange={(e) => setFormAllowLate(e.target.checked)}
+                      className="rounded border-academic-border text-academic-primaryGreen focus:ring-academic-primaryGreen"
+                    />
+                    <span className="font-semibold text-academic-deepGreen text-xs">Allow Late Submissions</span>
+                  </label>
+                </div>
+
+                {formAllowLate && (
+                  <div className="space-y-3 pt-2 border-t border-academic-border/60">
+                    <div>
+                      <label className="block font-semibold text-academic-deepGreen mb-1">
+                        Extension Deadline * (Must be later than original deadline)
+                      </label>
+                      <input
+                        type="datetime-local"
+                        required={formAllowLate}
+                        value={formExtensionDeadline}
+                        onChange={(e) => setFormExtensionDeadline(e.target.value)}
+                        className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-semibold text-academic-deepGreen mb-1">
+                          Late Penalty Mode
+                        </label>
+                        <select
+                          value={formLatePenaltyMode}
+                          onChange={(e) => setFormLatePenaltyMode(e.target.value as any)}
+                          className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
+                        >
+                          <option value="none">No Automatic Deduction (Teacher Discretion)</option>
+                          <option value="fixed">Fixed Marks Deduction</option>
+                        </select>
+                      </div>
+
+                      {formLatePenaltyMode === 'fixed' && (
+                        <div>
+                          <label className="block font-semibold text-academic-deepGreen mb-1">
+                            Penalty Marks (e.g. 5 or 10)
+                          </label>
+                          <div className="flex items-center space-x-2">
+                            <input
+                              type="number"
+                              min="1"
+                              max={formMaxMarks}
+                              value={formLatePenaltyMarks}
+                              onChange={(e) => setFormLatePenaltyMarks(Number(e.target.value))}
+                              className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
+                            />
+                            <div className="flex space-x-1">
+                              <button
+                                type="button"
+                                onClick={() => setFormLatePenaltyMarks(5)}
+                                className={`px-2 py-1 text-xs rounded border ${formLatePenaltyMarks === 5 ? 'bg-academic-deepGreen text-white' : 'btn-secondary'}`}
+                              >
+                                5
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setFormLatePenaltyMarks(10)}
+                                className={`px-2 py-1 text-xs rounded border ${formLatePenaltyMarks === 10 ? 'bg-academic-deepGreen text-white' : 'btn-secondary'}`}
+                              >
+                                10
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>
                 <label className="block font-semibold text-academic-deepGreen mb-1">
-                  Submission Instructions
+                  Submission Instructions & Notes (Optional)
                 </label>
                 <textarea
-                  rows={3}
-                  placeholder="e.g. Write solutions by hand on ruled paper. Scan each question as a clear PDF under 5 MB."
+                  rows={2}
+                  placeholder="e.g. Handwritten answers on lined pages or typed slide decks. Submit before the deadline."
                   value={formInstructions}
                   onChange={(e) => setFormInstructions(e.target.value)}
                   className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen"
@@ -1115,7 +1983,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                   type="submit"
                   className="btn-primary text-xs min-h-[44px]"
                 >
-                  Create Draft Assessment
+                  Create Assignment
                 </button>
               </div>
             </form>
@@ -1123,241 +1991,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
         </div>
       )}
 
-      {/* MODAL 2: Add Question Modal */}
-      {showAddQuestionModal && (
-        <div className="fixed inset-0 bg-academic-deepGreen/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-academic-surface border border-academic-border rounded-lg shadow-xl max-w-lg w-full p-6 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-academic-border">
-              <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
-                <FileText className="w-4 h-4 mr-2 text-academic-primaryGreen" />
-                Add Question to Assessment
-              </h3>
-              <button 
-                onClick={() => setShowAddQuestionModal(false)}
-                className="text-academic-muted hover:text-academic-deepGreen p-1"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleAddQuestion} className="space-y-4 text-xs">
-              <div>
-                <label className="block font-semibold text-academic-deepGreen mb-1">
-                  Question Prompt Text *
-                </label>
-                <textarea
-                  rows={4}
-                  required
-                  placeholder="e.g. Explain Time Complexity of QuickSort in Best, Average, and Worst Case scenarios with recurrence trees."
-                  value={questionPrompt}
-                  onChange={(e) => setQuestionPrompt(e.target.value)}
-                  className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen"
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-academic-deepGreen mb-1">
-                  Maximum Marks *
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="100"
-                  required
-                  value={questionMaxMarks}
-                  onChange={(e) => setQuestionMaxMarks(Number(e.target.value))}
-                  className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
-                />
-                <p className="text-[11px] text-academic-muted mt-1">
-                  The sum of rubric criterion marks will be required to equal this value.
-                </p>
-              </div>
-
-              <div className="flex items-center justify-end space-x-3 pt-3 border-t border-academic-border">
-                <button
-                  type="button"
-                  onClick={() => setShowAddQuestionModal(false)}
-                  className="btn-secondary text-xs min-h-[44px]"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn-primary text-xs min-h-[44px]"
-                >
-                  Add Question
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 3: Rubric Builder & Invariant Balancer */}
-      {editingRubricQuestionId && currentEditingQuestion && (
-        <div className="fixed inset-0 bg-academic-deepGreen/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-academic-surface border border-academic-border rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] flex flex-col">
-            {/* Header */}
-            <div className="p-4 sm:p-6 border-b border-academic-border flex items-center justify-between">
-              <div>
-                <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
-                  <Sliders className="w-4 h-4 mr-2 text-academic-primaryGreen" />
-                  Rubric Builder & Invariant Balancer
-                </h3>
-                <p className="text-xs text-academic-muted mt-0.5">
-                  Question Max Marks: <span className="font-bold text-academic-deepGreen">{currentQuestionMaxMarks}</span>
-                </p>
-              </div>
-              <button 
-                onClick={() => setEditingRubricQuestionId(null)}
-                className="text-academic-muted hover:text-academic-deepGreen p-1"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Invariant Banner */}
-            <div className={`px-6 py-2.5 border-b text-xs flex items-center justify-between ${
-              isSumMatched 
-                ? 'bg-academic-paleGreen border-academic-primaryGreen/30 text-academic-deepGreen' 
-                : 'bg-[#FDF6E2] border-[#D9BD71] text-[#6D5200]'
-            }`}>
-              <div className="flex items-center space-x-2">
-                {isSumMatched ? (
-                  <CheckCircle2 className="w-4 h-4 text-academic-primaryGreen flex-shrink-0" />
-                ) : (
-                  <AlertCircle className="w-4 h-4 text-[#B28704] flex-shrink-0" />
-                )}
-                <span>
-                  <strong>Criterion Sum: {currentCriteriaSum} marks</strong> / Question Target: {currentQuestionMaxMarks} marks
-                </span>
-              </div>
-              <span className="font-semibold">
-                {isSumMatched ? '✓ Invariant Satisfied' : '⚠️ Must Balance Before Saving'}
-              </span>
-            </div>
-
-            {/* Scrollable Content */}
-            <div className="p-4 sm:p-6 overflow-y-auto space-y-5 text-xs flex-1">
-              <div>
-                <label className="block font-semibold text-academic-deepGreen mb-1">
-                  Rubric Title *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={rubricTitle}
-                  onChange={(e) => setRubricTitle(e.target.value)}
-                  className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
-                />
-              </div>
-
-              {/* Criteria List */}
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-academic-deepGreen uppercase tracking-wider text-[11px]">
-                    Evaluation Criteria ({criteria.length})
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleAddCriterion}
-                    className="btn-secondary text-xs flex items-center min-h-[44px]"
-                  >
-                    <PlusCircle className="w-3.5 h-3.5 mr-1.5" />
-                    <span>Add Criterion</span>
-                  </button>
-                </div>
-
-                {criteria.map((crit, idx) => (
-                  <div key={idx} className="p-4 rounded-md border border-academic-border bg-academic-paleGreen/20 space-y-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div className="sm:col-span-2">
-                          <label className="block font-semibold text-academic-deepGreen mb-1">
-                            Criterion {idx + 1} Title *
-                          </label>
-                          <input
-                            type="text"
-                            value={crit.title}
-                            onChange={(e) => handleUpdateCriterion(idx, 'title', e.target.value)}
-                            className="w-full px-2.5 py-1.5 border border-academic-border rounded bg-academic-surface text-academic-deepGreen min-h-[44px]"
-                          />
-                        </div>
-                        <div>
-                          <label className="block font-semibold text-academic-deepGreen mb-1">
-                            Max Marks *
-                          </label>
-                          <input
-                            type="number"
-                            min="0.5"
-                            step="0.5"
-                            value={crit.max_marks}
-                            onChange={(e) => handleUpdateCriterion(idx, 'max_marks', Number(e.target.value))}
-                            className="w-full px-2.5 py-1.5 border border-academic-border rounded bg-academic-surface text-academic-deepGreen font-mono font-bold min-h-[44px]"
-                          />
-                        </div>
-                      </div>
-
-                      {criteria.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveCriterion(idx)}
-                          className="text-academic-muted hover:text-red-700 p-1 mt-6"
-                          title="Remove criterion"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="block font-semibold text-academic-deepGreen mb-1">
-                        Criterion Description / Scoring Guidance
-                      </label>
-                      <input
-                        type="text"
-                        value={crit.description}
-                        onChange={(e) => handleUpdateCriterion(idx, 'description', e.target.value)}
-                        placeholder="What evidence is expected for full marks?"
-                        className="w-full px-2.5 py-1.5 border border-academic-border rounded bg-academic-surface text-academic-deepGreen min-h-[44px]"
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="p-4 sm:p-6 border-t border-academic-border flex items-center justify-between bg-academic-paleGreen/30">
-              <span className="text-xs text-academic-muted">
-                {isSumMatched 
-                  ? 'Criteria correctly balanced.' 
-                  : `Please adjust criterion marks by ${Math.abs(currentQuestionMaxMarks - currentCriteriaSum)} marks to match.`}
-              </span>
-
-              <div className="flex items-center space-x-3">
-                <button
-                  type="button"
-                  onClick={() => setEditingRubricQuestionId(null)}
-                  className="btn-secondary text-xs min-h-[44px]"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={!isSumMatched}
-                  onClick={handleSaveRubric}
-                  className={`btn-primary text-xs min-h-[44px] ${!isSumMatched ? 'opacity-50 cursor-not-allowed' : ''}`}
-                >
-                  Save & Bind Rubric
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 4: Publish Checklist & Confirmation Modal */}
+      {/* MODAL 2: Publish Checklist & Confirmation Modal */}
       {showPublishConfirmModal && selectedAssessment && (
         <div className="fixed inset-0 bg-academic-deepGreen/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-academic-surface border border-academic-border rounded-lg shadow-xl max-w-lg w-full p-6 space-y-4">
@@ -1376,14 +2010,18 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
 
             <div className="space-y-3 text-xs">
               <p className="text-academic-deepGreen">
-                Publishing locks this assessment permanently. Review the pre-flight verification checklist:
+                Publishing locks this assessment and opens it to enrolled students:
               </p>
 
               <div className="space-y-2 p-3 bg-academic-paleGreen/30 rounded border border-academic-border">
                 {checklist.errors.length === 0 ? (
                   <div className="flex items-start space-x-2 text-academic-primaryGreen">
                     <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                    <span>All validation rules passed: Questions exist, rubrics are attached, criterion sums match question marks, and deadline is in the future.</span>
+                    <span>
+                      {selectedAssessment.document_storage_key
+                        ? 'All validation rules passed: Assignment PDF is uploaded, deadline is in the future, and late policy is configured.'
+                        : 'All validation rules passed: Questions exist, rubrics are attached, and deadline is in the future.'}
+                    </span>
                   </div>
                 ) : (
                   <div className="space-y-1.5 text-red-700">
@@ -1398,13 +2036,6 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                     </ul>
                   </div>
                 )}
-              </div>
-
-              <div className="p-3 bg-academic-paleGreen/50 border border-academic-border rounded text-[11px] text-academic-muted space-y-1">
-                <p className="font-bold text-academic-deepGreen">Post-Publication Invariant:</p>
-                <p>
-                  Once published, questions and rubrics become immutable. They cannot be edited, reordered, or deleted to protect academic integrity during submissions.
-                </p>
               </div>
             </div>
 
@@ -1423,6 +2054,338 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                 className={`btn-primary text-xs min-h-[44px] ${!checklist.valid ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 Confirm & Publish
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* MODAL 3: Edit Assessment Modal */}
+      {editingAssessment && (
+        <div className="fixed inset-0 bg-academic-deepGreen/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-academic-surface border border-academic-border rounded-lg shadow-xl max-w-xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-academic-border">
+              <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
+                <Pencil className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                Edit Assignment: {editingAssessment.title}
+              </h3>
+              <button 
+                onClick={() => setEditingAssessment(null)}
+                className="text-academic-muted hover:text-academic-deepGreen p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Historical Records Warning */}
+            {editSubmissionsCount > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg flex items-start space-x-2 text-xs text-amber-900">
+                <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">Academic Integrity Notice</p>
+                  <p className="text-[11px] mt-0.5">
+                    This assessment already has <strong>{editSubmissionsCount} student submission(s)</strong>.
+                    Updated deadlines and late policies apply to new submissions; previously submitted student files, rubric evaluations, and published grades will remain protected and preserved.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {editError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded text-xs text-red-700 flex items-center space-x-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{editError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveEditAssessment} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-semibold text-academic-deepGreen mb-1">
+                  Assignment Title *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
+                />
+              </div>
+
+              {/* Assignment PDF Replacement */}
+              <div>
+                <label className="block font-semibold text-academic-deepGreen mb-1">
+                  Assignment PDF Document
+                </label>
+                <div className="p-3 border border-academic-border rounded bg-academic-paleGreen/20 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="btn-secondary text-xs flex items-center cursor-pointer min-h-[40px]">
+                      <Upload className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+                      <span>{isReplacingPdf ? 'Select Another PDF' : 'Replace Assignment PDF'}</span>
+                      <input
+                        type="file"
+                        accept="application/pdf"
+                        className="hidden"
+                        onChange={handleEditPdfSelect}
+                      />
+                    </label>
+                    {isReplacingPdf && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsReplacingPdf(false);
+                          setEditPdfFileName(editingAssessment.document_filename || null);
+                          setEditPdfFileSize(editingAssessment.document_size_bytes || null);
+                          setEditPdfBase64(null);
+                        }}
+                        className="text-[11px] font-semibold text-academic-muted hover:text-red-700 underline"
+                      >
+                        Keep Existing PDF
+                      </button>
+                    )}
+                  </div>
+
+                  {editPdfFileName && (
+                    <div className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <FileText className="w-4 h-4 text-academic-primaryGreen" />
+                        <span className="font-semibold text-academic-deepGreen">{editPdfFileName}</span>
+                        <span className="text-[11px] font-mono text-academic-muted">
+                          ({editPdfFileSize ? (editPdfFileSize / 1024).toFixed(1) : 0} KB)
+                        </span>
+                      </div>
+                      <span className="text-[11px] font-bold text-academic-primaryGreen">
+                        {isReplacingPdf ? '✓ Replacement Ready' : 'Current Active PDF'}
+                      </span>
+                    </div>
+                  )}
+
+                  {editPdfError && (
+                    <p className="text-[11px] font-semibold text-red-700">{editPdfError}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Deadlines and File Limits */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-academic-deepGreen mb-1">
+                    Original Submission Deadline *
+                  </label>
+                  <input
+                    type="datetime-local"
+                    required
+                    value={editDeadline}
+                    onChange={(e) => setEditDeadline(e.target.value)}
+                    className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-academic-deepGreen mb-1">
+                    Max Marks *
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="1000"
+                    required
+                    value={editMaxMarks}
+                    onChange={(e) => setEditMaxMarks(Number(e.target.value))}
+                    className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-academic-deepGreen mb-1">
+                  Max Answer Files per Submission (1-10) *
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  required
+                  value={editMaxFiles}
+                  onChange={(e) => setEditMaxFiles(Math.max(1, Math.min(10, Number(e.target.value))))}
+                  className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
+                />
+              </div>
+
+              {/* Late Submission Policy */}
+              <div className="p-3 border border-academic-border rounded bg-academic-paleGreen/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-academic-deepGreen text-xs">
+                    Late Submission Policy
+                  </span>
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editAllowLate}
+                      onChange={(e) => setEditAllowLate(e.target.checked)}
+                      className="rounded border-academic-border text-academic-primaryGreen focus:ring-academic-primaryGreen"
+                    />
+                    <span className="font-semibold text-academic-deepGreen text-xs">Allow Late Submissions</span>
+                  </label>
+                </div>
+
+                {editAllowLate && (
+                  <div className="space-y-3 pt-2 border-t border-academic-border/60">
+                    <div>
+                      <label className="block font-semibold text-academic-deepGreen mb-1">
+                        Extension Deadline * (Must be later than original deadline)
+                      </label>
+                      <input
+                        type="datetime-local"
+                        required={editAllowLate}
+                        value={editExtensionDeadline}
+                        onChange={(e) => setEditExtensionDeadline(e.target.value)}
+                        className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-semibold text-academic-deepGreen mb-1">
+                          Late Penalty Mode
+                        </label>
+                        <select
+                          value={editLatePenaltyMode}
+                          onChange={(e) => setEditLatePenaltyMode(e.target.value as any)}
+                          className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
+                        >
+                          <option value="none">No Automatic Deduction (Teacher Discretion)</option>
+                          <option value="fixed">Fixed Marks Deduction</option>
+                        </select>
+                      </div>
+
+                      {editLatePenaltyMode === 'fixed' && (
+                        <div>
+                          <label className="block font-semibold text-academic-deepGreen mb-1">
+                            Penalty Marks
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            max={editMaxMarks}
+                            value={editLatePenaltyMarks}
+                            onChange={(e) => setEditLatePenaltyMarks(Number(e.target.value))}
+                            className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block font-semibold text-academic-deepGreen mb-1">
+                  Submission Instructions & Notes
+                </label>
+                <textarea
+                  rows={3}
+                  value={editInstructions}
+                  onChange={(e) => setEditInstructions(e.target.value)}
+                  className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen"
+                />
+              </div>
+
+              <div className="flex items-center justify-end space-x-3 pt-3 border-t border-academic-border">
+                <button
+                  type="button"
+                  onClick={() => setEditingAssessment(null)}
+                  className="btn-secondary text-xs min-h-[44px]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEdit}
+                  className="btn-primary text-xs min-h-[44px] flex items-center"
+                >
+                  {isSavingEdit && <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />}
+                  <span>{isSavingEdit ? 'Saving Changes...' : 'Save Assessment Changes'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 4: Delete Assessment Confirmation Modal */}
+      {deletingAssessment && (
+        <div className="fixed inset-0 bg-academic-deepGreen/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-academic-surface border border-academic-border rounded-lg shadow-xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-academic-border">
+              <h3 className="text-base font-bold text-red-700 flex items-center">
+                <Trash2 className="w-4 h-4 mr-2 text-red-600" />
+                Delete Assessment
+              </h3>
+              <button 
+                onClick={() => setDeletingAssessment(null)}
+                className="text-academic-muted hover:text-academic-deepGreen p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <p className="text-academic-deepGreen font-semibold">
+                Are you sure you want to delete <span className="font-bold underline">{deletingAssessment.title}</span>?
+              </p>
+
+              {deleteCheckLoading ? (
+                <div className="p-4 bg-academic-paleGreen/30 rounded border border-academic-border text-center text-academic-muted flex items-center justify-center space-x-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-academic-primaryGreen" />
+                  <span>Checking student submissions and academic records...</span>
+                </div>
+              ) : deleteCheckResult?.can_delete ? (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg space-y-2 text-red-800">
+                  <div className="flex items-center space-x-2 font-bold text-xs">
+                    <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                    <span>Permanent Deletion Warning</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed">
+                    Zero student submissions are attached. Deleting this assessment will permanently remove the assignment configuration, associated questions, and attached brief document from storage.
+                  </p>
+                </div>
+              ) : (
+                <div className="p-3 bg-red-50 border border-red-300 rounded-lg space-y-2 text-red-900">
+                  <div className="flex items-center space-x-2 font-bold text-xs text-red-700">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-600" />
+                    <span>Deletion Blocked: Academic Records Attached</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed">
+                    This assignment has <strong>{deleteCheckResult?.submissions_count || 0} student submission(s)</strong> and recorded grades. To ensure complete academic integrity and prevent loss of student course credit, assessments with submitted work cannot be deleted.
+                  </p>
+                </div>
+              )}
+
+              {deleteError && (
+                <div className="p-2.5 bg-red-100 border border-red-300 rounded text-red-800 font-semibold text-[11px]">
+                  {deleteError}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-3 border-t border-academic-border">
+              <button
+                type="button"
+                onClick={() => setDeletingAssessment(null)}
+                className="btn-secondary text-xs min-h-[44px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deleteCheckLoading || !deleteCheckResult?.can_delete || isDeleting}
+                onClick={handleConfirmDelete}
+                className={`px-4 py-2 text-xs font-semibold rounded bg-red-600 text-white hover:bg-red-700 transition-colors flex items-center min-h-[44px] ${
+                  deleteCheckLoading || !deleteCheckResult?.can_delete || isDeleting ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
+              >
+                {isDeleting && <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />}
+                <span>{isDeleting ? 'Deleting...' : 'Delete Assignment'}</span>
               </button>
             </div>
           </div>

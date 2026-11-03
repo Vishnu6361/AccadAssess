@@ -1,3 +1,4 @@
+process.env.SMARTFA_TEST_MODE = 'true';
 import jwt from 'jsonwebtoken';
 import app from '../../apps/api/src/index.js';
 import http from 'http';
@@ -90,7 +91,7 @@ async function runTests() {
   try {
     // 1. Unauthenticated request
     const res1 = await makeRequest({
-      path: '/api/v1/admin/hod/departments',
+      path: '/api/v1/admin/hod/programmes',
       method: 'GET'
     });
     assert(
@@ -102,7 +103,7 @@ async function runTests() {
     // 2. Cryptographic signature tampering (Token signed with wrong key)
     const forgedToken = createToken('a1000000-0000-0000-0000-000000000001', 'hod@smartfa.edu', FORGED_SECRET);
     const res2 = await makeRequest({
-      path: '/api/v1/admin/hod/departments',
+      path: '/api/v1/admin/hod/programmes',
       method: 'GET',
       token: forgedToken
     });
@@ -115,7 +116,7 @@ async function runTests() {
     // 3. Student identity denied HOD access
     const studentToken = createToken('a4000000-0000-0000-0000-000000000001', 'student.a@smartfa.edu');
     const res3 = await makeRequest({
-      path: '/api/v1/admin/hod/departments',
+      path: '/api/v1/admin/hod/programmes',
       method: 'GET',
       token: studentToken
     });
@@ -127,10 +128,10 @@ async function runTests() {
 
     // 4. Role tampering in body/header
     const res4 = await makeRequest({
-      path: '/api/v1/admin/hod/departments',
+      path: '/api/v1/admin/hod/programmes',
       method: 'POST',
       token: studentToken,
-      body: { code: 'HACK', name: 'Tampered Dept', role: 'hod' }
+      body: { code: 'HACK', name: 'Tampered Prog', role: 'hod' }
     });
     assert(
       res4.status === 403 && res4.body?.error?.code === 'FORBIDDEN',
@@ -141,7 +142,7 @@ async function runTests() {
     // 5. Proctor identity denied HOD access
     const proctorToken = createToken('a3000000-0000-0000-0000-000000000001', 'proctor@smartfa.edu');
     const res5 = await makeRequest({
-      path: '/api/v1/admin/hod/departments',
+      path: '/api/v1/admin/hod/programmes',
       method: 'GET',
       token: proctorToken
     });
@@ -154,7 +155,7 @@ async function runTests() {
     // 6. Inactive user denied access
     const inactiveToken = createToken('a9000000-0000-0000-0000-000000000001', 'inactive@smartfa.edu');
     const res6 = await makeRequest({
-      path: '/api/v1/admin/hod/departments',
+      path: '/api/v1/admin/hod/programmes',
       method: 'GET',
       token: inactiveToken
     });
@@ -167,27 +168,49 @@ async function runTests() {
     // 7. Authorized HOD allowed
     const hodToken = createToken('a1000000-0000-0000-0000-000000000001', 'hod@smartfa.edu');
     const res7 = await makeRequest({
-      path: '/api/v1/admin/hod/departments',
+      path: '/api/v1/admin/hod/programmes',
       method: 'GET',
       token: hodToken
     });
     assert(
-      res7.status === 200 && Array.isArray(res7.body?.departments),
-      'Test 7: Authorized HOD accesses departments (200 OK)',
+      res7.status === 200 && Array.isArray(res7.body?.programmes),
+      'Test 7: Authorized HOD accesses programmes (200 OK)',
       `Status: ${res7.status}`
     );
 
-    // 8. HOD self-modification prevention (Cannot alter own roles)
-    const res8 = await makeRequest({
+    // 8. HOD self-modification prevention: HOD cannot alter or revoke own HOD role; non-HOD self-assignment permitted
+    const res8Hod = await makeRequest({
       path: '/api/v1/admin/hod/users/a1000000-0000-0000-0000-000000000001/roles',
       method: 'POST',
       token: hodToken,
-      body: { role: 'student', active: true }
+      body: { role: 'hod', active: true }
     });
+    const res8DeleteHod = await makeRequest({
+      path: '/api/v1/admin/hod/users/a1000000-0000-0000-0000-000000000001/roles/hod',
+      method: 'DELETE',
+      token: hodToken
+    });
+    const res8AssignTeacher = await makeRequest({
+      path: '/api/v1/admin/hod/users/a1000000-0000-0000-0000-000000000001/roles',
+      method: 'POST',
+      token: hodToken,
+      body: { role: 'subject_teacher', active: true }
+    });
+    const res8RevokeTeacher = await makeRequest({
+      path: '/api/v1/admin/hod/users/a1000000-0000-0000-0000-000000000001/roles/subject_teacher',
+      method: 'DELETE',
+      token: hodToken
+    });
+
     assert(
-      res8.status === 403 && res8.body?.error?.code === 'FORBIDDEN_SELF_MODIFICATION',
-      'Test 8: Invariant enforced: HOD cannot self-modify roles (403)',
-      `Status: ${res8.status}`
+      res8Hod.status === 403 &&
+      res8Hod.body?.error?.code === 'FORBIDDEN_SELF_MODIFICATION' &&
+      res8DeleteHod.status === 403 &&
+      res8DeleteHod.body?.error?.code === 'FORBIDDEN_SELF_MODIFICATION' &&
+      res8AssignTeacher.status === 201 &&
+      res8RevokeTeacher.status === 200,
+      'Test 8: Invariant enforced: HOD cannot self-modify HOD role (403), non-HOD self-assignment permitted (201/200)',
+      `HodAssign: ${res8Hod.status}, HodDelete: ${res8DeleteHod.status}, TeacherAssign: ${res8AssignTeacher.status}, TeacherDelete: ${res8RevokeTeacher.status}`
     );
 
     // 9. HOD self-deactivation prevention

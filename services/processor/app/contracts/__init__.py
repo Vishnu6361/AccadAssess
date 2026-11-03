@@ -1,1 +1,1 @@
-"""Pydantic contracts for processing payloads and similarity metrics."""
+"""Pydantic contracts for processing payloads and document metrics."""

@@ -1,0 +1,482 @@
+import { Router, Request, Response } from 'express';
+import { 
+  SaveEvaluationRequestSchema,
+  PublishAssessmentResultsRequestSchema
+} from '@smartfa/contracts';
+import { logAuditEvent } from '../audit/auditService.js';
+import { authenticateJWT, supabaseAdmin, isLiveSupabaseConfigured } from '../auth/jwt.js';
+import { loadUserContext, requireRoles } from '../authorization/rbac.js';
+import { getEvaluationRepository } from '../storage/evaluationRepository.js';
+import { getSubmissionRepository } from '../storage/submissionRepository.js';
+import { getAssessmentRepository } from '../storage/assessmentRepository.js';
+import { getAcademicRepository } from '../storage/academicRepository.js';
+import { db } from '../storage/db.js';
+
+const router = Router();
+
+router.use(authenticateJWT);
+router.use(loadUserContext);
+function getAdminClient() {
+  if (!supabaseAdmin) throw new Error('Supabase admin client not initialized');
+  return supabaseAdmin;
+}
+
+
+// Stage 1: Published assignments overview for evaluating faculty
+router.get('/teacher/assignments-overview', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
+  const user = req.userContext!;
+  const assRepo = getAssessmentRepository();
+  const subRepo = getSubmissionRepository();
+  const evalRepo = getEvaluationRepository();
+
+  try {
+    const allAssessments = await assRepo.listAssessments(user);
+    const publishedAssessments = allAssessments.filter(a => a.status === 'published');
+
+    const overview = await Promise.all(
+      publishedAssessments.map(async (ass) => {
+        const fullAss = await assRepo.getFullAssessment(ass.id).catch(() => ass);
+
+        let enrolledCount = 0;
+        let isPublished = false;
+
+        if (isLiveSupabaseConfigured && Boolean(supabaseAdmin)) {
+          // 1. Get class_id from class_subjects
+          const { data: cs } = await getAdminClient().from('class_subjects')
+            .select('class_id')
+            .eq('id', ass.class_subject_id)
+            .maybeSingle();
+
+          if (cs) {
+            const { count } = await getAdminClient().from('enrollments')
+              .select('id', { count: 'exact', head: true })
+              .eq('class_id', cs.class_id)
+              .eq('status', 'active');
+            enrolledCount = count || 0;
+          }
+
+          // 2. Check if published
+          const { data: pubRec } = await getAdminClient().from('result_publications')
+            .select('id')
+            .eq('assessment_id', ass.id)
+            .maybeSingle();
+          isPublished = Boolean(pubRec);
+        } else {
+          const cs = db.classSubjects.find(c => c.id === ass.class_subject_id);
+          if (cs) {
+            enrolledCount = db.enrollments.filter(e => e.class_id === cs.class_id && e.status === 'active').length;
+          }
+          isPublished = db.resultPublications.some(rp => rp.assessment_id === ass.id);
+        }
+
+        const subs = await subRepo.listSubmissionsForAssessment(ass.id);
+        const evals = await evalRepo.listEvaluationsForAssessment(ass.id);
+
+        const submittedCount = subs.length;
+        const evaluatedCount = subs.filter(s => {
+          const ev = evals.find(e => e.submission_id === s.id);
+          return ev && (ev.status === 'completed' || ev.status === 'published');
+        }).length;
+
+        const awaitingCount = Math.max(0, submittedCount - evaluatedCount);
+        const publishedCount = isPublished ? evaluatedCount : evals.filter(e => e.status === 'published').length;
+
+        return {
+          id: ass.id,
+          title: fullAss?.title || ass.title,
+          max_marks: Number(fullAss?.max_marks || ass.max_marks || 50),
+          deadline_at: fullAss?.deadline_at || ass.deadline_at,
+          extension_deadline_at: fullAss?.extension_deadline_at || ass.extension_deadline_at || null,
+          allow_late: Boolean(ass.allow_late),
+          class_details: fullAss?.class_details || null,
+          subject_details: fullAss?.subject_details || null,
+          class_subject_id: ass.class_subject_id,
+          summary: {
+            total_enrolled: enrolledCount,
+            submitted_count: submittedCount,
+            evaluated_count: evaluatedCount,
+            awaiting_count: awaitingCount,
+            is_published: isPublished,
+            published_count: publishedCount
+          }
+        };
+      })
+    );
+
+    return res.status(200).json({ assignments: overview });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: { code: 'OVERVIEW_FETCH_FAILED', message: err.message || 'Failed to retrieve assignments overview' }
+    });
+  }
+});
+
+// Stage 2: Student submission ledger for selected assessment
+router.get('/assessment/:assessmentId/ledger', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
+  const user = req.userContext!;
+  const assRepo = getAssessmentRepository();
+  const subRepo = getSubmissionRepository();
+  const evalRepo = getEvaluationRepository();
+
+  const assessment = await assRepo.getFullAssessment(req.params.assessmentId);
+  if (!assessment) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Assessment not found' } });
+  }
+
+  if (!user.isHOD) {
+    const isAuth = await assRepo.isAuthorizedTeacher(user.profile.id, assessment.class_subject_id);
+    if (!isAuth) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Unauthorized teacher for this assessment' } });
+    }
+  }
+
+  try {
+    let enrolledStudents: any[] = [];
+    let isPublished = false;
+
+    if (isLiveSupabaseConfigured && Boolean(supabaseAdmin)) {
+      const { data: cs } = await getAdminClient().from('class_subjects')
+        .select('class_id')
+        .eq('id', assessment.class_subject_id)
+        .maybeSingle();
+
+      if (cs) {
+        const { data: enrollments } = await getAdminClient().from('enrollments')
+          .select('student_id, profiles(id, full_name, email, usn)')
+          .eq('class_id', cs.class_id)
+          .eq('status', 'active');
+
+        enrolledStudents = (enrollments || []).map(e => (e as any).profiles).filter(Boolean);
+      }
+
+      const { data: pubRec } = await getAdminClient().from('result_publications')
+        .select('id')
+        .eq('assessment_id', assessment.id)
+        .maybeSingle();
+      isPublished = Boolean(pubRec);
+    } else {
+      const cs = db.classSubjects.find(c => c.id === assessment.class_subject_id);
+      if (cs) {
+        enrolledStudents = db.enrollments
+          .filter(e => e.class_id === cs.class_id && e.status === 'active')
+          .map(e => db.profiles.find(p => p.id === e.student_id))
+          .filter(Boolean);
+      }
+      isPublished = db.resultPublications.some(rp => rp.assessment_id === assessment.id);
+    }
+
+    const subs = await subRepo.listSubmissionsForAssessment(assessment.id);
+    const evals = await evalRepo.listEvaluationsForAssessment(assessment.id);
+
+    // Build ledger rows for EVERY enrolled student
+    const ledger = enrolledStudents.map(student => {
+      const sub = subs.find(s => s.student_id === student.id);
+      const activeVer = sub?.active_version;
+      const evaluation = sub ? evals.find(e => e.submission_id === sub.id) : null;
+
+      const isSubmitted = Boolean(sub);
+      const isLate = Boolean(sub?.late_status === 'late' || activeVer?.late_status === 'late');
+
+      let evalStatus: 'not_submitted' | 'pending' | 'draft' | 'completed' | 'published' = 'not_submitted';
+      if (isSubmitted) {
+        if (isPublished || evaluation?.status === 'published') {
+          evalStatus = 'published';
+        } else if (evaluation?.status === 'completed') {
+          evalStatus = 'completed';
+        } else if (evaluation?.status === 'draft') {
+          evalStatus = 'draft';
+        } else {
+          evalStatus = 'pending';
+        }
+      }
+
+      const files = (activeVer?.files && Array.isArray(activeVer.files) && activeVer.files.length > 0)
+        ? activeVer.files
+        : (activeVer?.storage_path ? [{
+            id: 'primary',
+            storage_key: activeVer.storage_path,
+            original_filename: activeVer.original_name || 'submission.pdf',
+            file_size_bytes: activeVer.size_bytes || 0,
+            mime_type: activeVer.mime_type || 'application/pdf',
+            uploaded_at: activeVer.uploaded_at
+          }] : []);
+
+      return {
+        student_id: student.id,
+        student_name: student.full_name,
+        student_email: student.email,
+        student_usn: student.usn || '—',
+        is_submitted: isSubmitted,
+        submission_status: isSubmitted ? 'Submitted' : 'Not Submitted',
+        timing_status: isSubmitted ? (isLate ? 'Late' : 'On Time') : '—',
+        is_late: isLate,
+        submitted_at: activeVer?.uploaded_at || sub?.first_submitted_at || null,
+        version_number: activeVer?.version || 1,
+        files_count: files.length,
+        files,
+        evaluation_status: evalStatus,
+        evaluation: evaluation ? {
+          id: evaluation.id,
+          status: evaluation.status,
+          raw_score: evaluation.raw_score,
+          late_penalty_deducted: evaluation.late_penalty_deducted,
+          total_score: evaluation.total_score,
+          general_feedback: evaluation.general_feedback,
+          criterion_scores: evaluation.criterion_scores || [],
+          updated_at: evaluation.updated_at
+        } : null,
+        submission: sub ? {
+          id: sub.id,
+          active_version_id: sub.active_version_id,
+          status: sub.status,
+          late_status: sub.late_status
+        } : null
+      };
+    });
+
+    const submittedCount = ledger.filter(r => r.is_submitted).length;
+    const evaluatedCount = ledger.filter(r => r.evaluation_status === 'completed' || r.evaluation_status === 'published').length;
+    const awaitingCount = Math.max(0, submittedCount - evaluatedCount);
+
+    return res.status(200).json({
+      assessment,
+      ledger,
+      summary: {
+        total_enrolled: enrolledStudents.length,
+        submitted_count: submittedCount,
+        evaluated_count: evaluatedCount,
+        awaiting_count: awaitingCount,
+        is_published: isPublished
+      }
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: { code: 'LEDGER_FETCH_FAILED', message: err.message || 'Failed to retrieve assessment ledger' }
+    });
+  }
+});
+
+router.get('/assessment/:assessmentId', async (req: Request, res: Response) => {
+  const user = req.userContext!;
+  if (user.roles.includes('student') || user.activeRole === 'proctor' || (user.roles.includes('proctor') && !user.isHOD && !user.roles.includes('subject_teacher'))) {
+    return res.status(403).json({
+      error: { code: 'FORBIDDEN', message: 'Unauthorized to view assessment evaluations directly' }
+    });
+  }
+
+  const evalRepo = getEvaluationRepository();
+  const assRepo = getAssessmentRepository();
+
+  const assessment = await assRepo.getAssessmentById(req.params.assessmentId);
+  if (!assessment) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Assessment not found' } });
+  }
+
+  const evaluations = await evalRepo.listEvaluationsForAssessment(assessment.id);
+  let isPublished = false;
+
+  if (isLiveSupabaseConfigured && Boolean(supabaseAdmin)) {
+    const { data: pubRec } = await getAdminClient().from('result_publications')
+      .select('id')
+      .eq('assessment_id', assessment.id)
+      .maybeSingle();
+    isPublished = Boolean(pubRec);
+  } else {
+    isPublished = db.resultPublications.some(rp => rp.assessment_id === assessment.id);
+  }
+
+  return res.status(200).json({
+    evaluations,
+    is_published: isPublished
+  });
+});
+
+router.get('/submission/:submissionId', async (req: Request, res: Response) => {
+  const user = req.userContext!;
+  const evalRepo = getEvaluationRepository();
+  const subRepo = getSubmissionRepository();
+
+  const submission = await subRepo.getSubmissionById(req.params.submissionId);
+  if (!submission) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Submission not found' } });
+  }
+
+  if (user.roles.includes('student') && submission.student_id !== user.profile.id) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Access denied' } });
+  }
+
+  if (user.activeRole === 'proctor' || (user.roles.includes('proctor') && !user.isHOD && !user.roles.includes('subject_teacher'))) {
+    const academicRepo = getAcademicRepository();
+    const mentees = await academicRepo.listProctorAssignmentsByProctor(user.profile.id);
+    const isMentee = mentees.some(m => m.student_id === submission.student_id && !m.valid_to);
+    if (!isMentee) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You can only view evaluations for your assigned mentees' } });
+    }
+  }
+
+  const evaluation = await evalRepo.getEvaluationBySubmissionId(submission.id);
+  if (!evaluation) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Evaluation not found' } });
+  }
+
+  if (user.roles.includes('student') && evaluation.status !== 'published') {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Evaluation results not published yet' } });
+  }
+
+  return res.status(200).json({ evaluation });
+});
+
+router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
+  const user = req.userContext!;
+  const evalRepo = getEvaluationRepository();
+  const subRepo = getSubmissionRepository();
+  const assRepo = getAssessmentRepository();
+
+  const parseResult = SaveEvaluationRequestSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return res.status(400).json({
+      error: { code: 'INVALID_REQUEST', message: 'Invalid evaluation payload', details: parseResult.error.errors }
+    });
+  }
+
+  const body = parseResult.data;
+  const submission = await subRepo.getSubmissionById(body.submission_id);
+
+  if (!submission) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Submission not found' } });
+  }
+
+  const assessment = await assRepo.getAssessmentById(submission.assessment_id);
+  if (!assessment) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Assessment not found' } });
+  }
+
+  if (!user.isHOD) {
+    const isAuth = await assRepo.isAuthorizedTeacher(user.profile.id, assessment.class_subject_id);
+    if (!isAuth) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Unauthorized teacher for this assessment' } });
+    }
+  }
+
+  try {
+    const evaluation = await evalRepo.saveEvaluation({
+      submissionId: submission.id,
+      evaluatorId: user.profile.id,
+      status: body.status,
+      rawScore: body.raw_score,
+      generalFeedback: body.general_feedback || undefined,
+      criterionScores: body.criterion_scores
+    });
+
+    await logAuditEvent({
+      actorId: user.profile.id,
+      action: 'EVALUATION_SAVED',
+      resourceType: 'evaluation',
+      resourceId: evaluation.id,
+      after: {
+        raw_score: evaluation.raw_score,
+        late_penalty_deducted: evaluation.late_penalty_deducted,
+        total_score: evaluation.total_score,
+        status: evaluation.status
+      },
+      correlationId: req.headers['x-correlation-id'] as string
+    });
+
+    return res.status(200).json({ evaluation });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: { code: 'SERVER_ERROR', message: err.message || 'Failed to save evaluation' }
+    });
+  }
+});
+
+// Stage 4: Publish all grades for an assessment (strictly validated server-side)
+router.post('/assessment/:assessmentId/publish', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
+  const user = req.userContext!;
+  const evalRepo = getEvaluationRepository();
+  const assRepo = getAssessmentRepository();
+  const subRepo = getSubmissionRepository();
+
+  const assessment = await assRepo.getAssessmentById(req.params.assessmentId);
+  if (!assessment) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Assessment not found' } });
+  }
+
+  if (!user.isHOD) {
+    const isAuth = await assRepo.isAuthorizedTeacher(user.profile.id, assessment.class_subject_id);
+    if (!isAuth) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Unauthorized teacher for this assessment' } });
+    }
+  }
+
+  // 1. Prevent duplicate publication
+  let alreadyPublished = false;
+  if (isLiveSupabaseConfigured && Boolean(supabaseAdmin)) {
+    const { data: pubRec } = await getAdminClient().from('result_publications')
+      .select('id')
+      .eq('assessment_id', assessment.id)
+      .maybeSingle();
+    alreadyPublished = Boolean(pubRec);
+  } else {
+    alreadyPublished = db.resultPublications.some(rp => rp.assessment_id === assessment.id);
+  }
+
+  if (alreadyPublished) {
+    return res.status(400).json({
+      error: { code: 'ALREADY_PUBLISHED', message: 'Grades for this assessment have already been published.' }
+    });
+  }
+
+  // 2. Query all submissions for this assessment
+  const subs = await subRepo.listSubmissionsForAssessment(assessment.id);
+  if (subs.length === 0) {
+    return res.status(400).json({
+      error: { code: 'NO_SUBMISSIONS', message: 'Cannot publish grades: No student submissions exist for this assessment.' }
+    });
+  }
+
+  // 3. Verify that every submission has a completed evaluation
+  const evals = await evalRepo.listEvaluationsForAssessment(assessment.id);
+  const incompleteSubmissions = subs.filter(s => {
+    const ev = evals.find(e => e.submission_id === s.id);
+    return !ev || ev.status !== 'completed';
+  });
+
+  if (incompleteSubmissions.length > 0) {
+    return res.status(400).json({
+      error: {
+        code: 'INCOMPLETE_EVALUATIONS',
+        message: `Cannot publish grades: ${incompleteSubmissions.length} submitted assignment(s) are awaiting completed evaluation. All submitted coursework must be evaluated before publishing.`
+      }
+    });
+  }
+
+  const parseResult = PublishAssessmentResultsRequestSchema.safeParse(req.body);
+  const remarks = parseResult.success && parseResult.data.remarks ? parseResult.data.remarks : undefined;
+
+  const { publication, publishedCount } = await evalRepo.publishResults(assessment.id, user.profile.id, remarks);
+
+  await logAuditEvent({
+    actorId: user.profile.id,
+    action: 'RESULTS_PUBLISHED',
+    resourceType: 'result_publication',
+    resourceId: publication.id,
+    after: { assessment_id: assessment.id, published_evaluations_count: publishedCount },
+    correlationId: req.headers['x-correlation-id'] as string
+  });
+
+  return res.status(200).json({
+    publication,
+    published_evaluations_count: publishedCount
+  });
+});
+
+router.get('/student/my-results', requireRoles(['student']), async (req: Request, res: Response) => {
+  const user = req.userContext!;
+  const evalRepo = getEvaluationRepository();
+  const results = await evalRepo.getStudentPublishedResults(user.profile.id);
+
+  return res.status(200).json({ results });
+});
+
+export default router;
