@@ -20,43 +20,163 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 // Security and utility middlewares
-// Configure CORS using environment variables (e.g. deployed Vercel frontend URL) with dev fallback
-const corsOriginEnv = process.env.CORS_ORIGIN || process.env.FRONTEND_URL;
-const allowedOrigins = corsOriginEnv
-  ? corsOriginEnv.split(',').map(s => s.trim()).filter(Boolean)
-  : null;
 
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow non-browser requests (e.g. mobile apps, curl, server-to-server health probes)
-    if (!origin) return callback(null, true);
-    
-    // Explicit exact match (e.g. https://acadassess.vercel.app or custom domain)
-    if (allowedOrigins && allowedOrigins.includes(origin)) {
-      return callback(null, true);
+/**
+ * Normalizes an origin candidate to protocol://host[:port] in lowercase.
+ * Safely strips enclosing quotes, trailing slashes, paths, and trailing whitespace.
+ */
+export function normalizeOrigin(input: string): string {
+  if (!input) return '';
+  let cleaned = input.trim();
+  // Strip enclosing quotes ('...' or "...")
+  if (
+    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+    (cleaned.startsWith("'") && cleaned.endsWith("'"))
+  ) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+  // Strip trailing slashes
+  cleaned = cleaned.replace(/\/+$/, '');
+  if (!cleaned) return '';
+
+  // Preserve subdomain wildcard patterns like *.vercel.app or *.institution.edu
+  if (cleaned.startsWith('*.')) {
+    return cleaned.toLowerCase();
+  }
+
+  // Extract origin scheme + host + port
+  try {
+    const hasProtocol = /^https?:\/\//i.test(cleaned);
+    const url = new URL(hasProtocol ? cleaned : `https://${cleaned}`);
+    return url.origin.toLowerCase();
+  } catch {
+    return cleaned.toLowerCase();
+  }
+}
+
+// Built-in trusted production origins for AcadAssess
+const TRUSTED_PRODUCTION_ORIGINS = [
+  'https://acad-assess.vercel.app',
+  'https://acadassess.vercel.app'
+];
+
+// Local development origins
+const LOCAL_DEV_ORIGINS = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://localhost:4000',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:4000'
+];
+
+/**
+ * Resolves all configured and trusted allowed origins dynamically.
+ * Combines built-in production origins with environment variable configurations:
+ * CORS_ORIGIN, CORS_ORIGINS, FRONTEND_URL, CLIENT_URL, ALLOWED_ORIGINS.
+ */
+export function getAllowedOrigins(): Set<string> {
+  const allowed = new Set<string>();
+
+  // Always include trusted institutional production frontend origins
+  for (const origin of TRUSTED_PRODUCTION_ORIGINS) {
+    allowed.add(origin);
+  }
+
+  // Include local development origins when not running in strict production
+  if (process.env.NODE_ENV !== 'production') {
+    for (const origin of LOCAL_DEV_ORIGINS) {
+      allowed.add(origin);
     }
+  }
 
-    // Allow all origins only in non-production environments if unspecified or explicit wildcard
-    if (process.env.NODE_ENV !== 'production' && (!allowedOrigins || allowedOrigins.includes('*'))) {
-      return callback(null, true);
+  // Collect from all common environment variables
+  const envSources = [
+    process.env.CORS_ORIGIN,
+    process.env.CORS_ORIGINS,
+    process.env.FRONTEND_URL,
+    process.env.CLIENT_URL,
+    process.env.ALLOWED_ORIGINS
+  ];
+
+  for (const envVal of envSources) {
+    if (!envVal) continue;
+    // Split across commas, semicolons, whitespace, or newlines
+    const tokens = envVal.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+    for (const token of tokens) {
+      const normalized = normalizeOrigin(token);
+      if (normalized) {
+        allowed.add(normalized);
+      }
     }
+  }
 
-    // Support explicit configured subdomain wildcards (e.g. *.yourdomain.edu)
-    if (allowedOrigins) {
-      const matchesWildcard = allowedOrigins.some(allowed => {
-        if (allowed.startsWith('*.')) {
-          const rootDomain = allowed.slice(2);
-          return origin.endsWith(rootDomain);
+  return allowed;
+}
+
+/**
+ * Validates whether an incoming HTTP request origin is authorized.
+ */
+export function isOriginAllowed(origin: string | undefined): boolean {
+  // Allow non-browser requests (e.g. mobile apps, curl, server-to-server health probes)
+  if (!origin) return true;
+
+  const normalized = normalizeOrigin(origin);
+  const allowedSet = getAllowedOrigins();
+
+  // 1. Exact match against allowed origins
+  if (allowedSet.has(normalized)) return true;
+
+  // 2. Allow wildcard only in non-production environments if explicitly configured
+  if (process.env.NODE_ENV !== 'production' && allowedSet.has('*')) {
+    return true;
+  }
+
+  // 3. Support explicit subdomain wildcards (e.g. *.vercel.app, *.institution.edu)
+  for (const entry of allowedSet) {
+    if (entry.startsWith('*.')) {
+      const rootDomain = entry.slice(2);
+      try {
+        const host = new URL(normalized).hostname;
+        if (host === rootDomain || host.endsWith('.' + rootDomain)) {
+          return true;
         }
-        return false;
-      });
-      if (matchesWildcard) return callback(null, true);
+      } catch {
+        // Ignore parsing errors
+      }
     }
+  }
 
+  return false;
+}
+
+// Authoritative CORS Configuration
+export const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    if (isOriginAllowed(origin)) {
+      return callback(null, true);
+    }
     return callback(new Error(`Origin ${origin} not allowed by CORS`));
   },
-  credentials: true
-}));
+  credentials: true,
+  methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Active-Role',
+    'x-active-role',
+    'Accept',
+    'Origin',
+    'X-Requested-With'
+  ],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 86400,
+  optionsSuccessStatus: 204
+};
+
+app.use(cors(corsOptions));
+// Handle preflight OPTIONS requests across all routes
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -281,6 +401,16 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
         code: 'VALIDATION_ERROR',
         message: 'Invalid request payload',
         details: err.errors
+      }
+    });
+  }
+
+  if (err.message && err.message.includes('not allowed by CORS')) {
+    console.warn(`[CORS Blocked]: ${err.message}`);
+    return res.status(403).json({
+      error: {
+        code: 'CORS_FORBIDDEN',
+        message: err.message
       }
     });
   }
