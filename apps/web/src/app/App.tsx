@@ -27,6 +27,7 @@ const FeatureLoadingFallback: React.FC = () => (
 );
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import { LoginView } from '../features/auth/LoginView';
+import { ResetPasswordView } from '../features/auth/ResetPasswordView';
 import { PortalSelectionView } from '../features/portal/PortalSelectionView';
 import { AcadAssessLogo } from '../components/AcadAssessLogo';
 import { WorkspaceSelectionModal } from '../components/WorkspaceSelectionModal';
@@ -132,23 +133,26 @@ export const AppContent: React.FC = () => {
     );
   }
 
+  const cleanPath = (pathname ? pathname.replace(/\/+$/, '') : '') || '/';
+  const isResetPasswordRoute = cleanPath === '/reset-password';
+
   // 2. Unauthenticated State or Password Recovery State: Route to Selected Portal or Landing Page
-  if (!user || !session || isPasswordRecovery || pathname === '/reset-password') {
-    if (isPasswordRecovery || pathname === '/reset-password') {
+  if (!user || !session || isPasswordRecovery || isResetPasswordRoute) {
+    if (isPasswordRecovery || isResetPasswordRoute) {
       const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
       const queryPortal = urlParams?.get('portal');
-      const recoveryPortal: 'student' | 'faculty' = (queryPortal === 'faculty' || pathname.includes('faculty')) ? 'faculty' : 'student';
+      const recoveryPortal: 'student' | 'faculty' = queryPortal === 'student' ? 'student' : 'faculty';
       return (
-        <LoginView
+        <ResetPasswordView
           portal={recoveryPortal}
-          initialMode="reset_password"
+          onSuccessRedirect={() => navigate('/faculty/login')}
           onNavigatePortal={(p) => navigate(`/${p}/login`)}
           onBackToSelection={() => navigate('/')}
         />
       );
     }
 
-    if (pathname === '/student/login') {
+    if (cleanPath === '/student/login') {
       return (
         <LoginView
           portal="student"
@@ -158,7 +162,7 @@ export const AppContent: React.FC = () => {
       );
     }
 
-    if (pathname === '/faculty/login') {
+    if (cleanPath === '/faculty/login') {
       return (
         <LoginView
           portal="faculty"

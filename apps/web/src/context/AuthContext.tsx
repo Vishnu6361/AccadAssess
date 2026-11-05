@@ -542,11 +542,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const queryPortal = searchParams.get('portal') as 'student' | 'faculty' | null;
       const target = portal 
         ? `/${portal}/login` 
-        : queryPortal
-        ? `/${queryPortal}/login`
-        : window.location.pathname.includes('faculty') 
-        ? '/faculty/login' 
-        : '/student/login';
+        : queryPortal === 'student'
+        ? '/student/login'
+        : '/faculty/login';
       window.history.replaceState(null, '', target);
     }
   };
@@ -569,10 +567,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       };
     }
 
-    // Clean dedicated path without hash collisions
-    const redirectTo = portal
-      ? `${window.location.origin}/reset-password?portal=${portal}`
-      : `${window.location.origin}/reset-password`;
+    // Clean dedicated path without hash collisions; explicitly include target portal
+    const targetPortal = portal || 'faculty';
+    const redirectTo = `${window.location.origin}/reset-password?portal=${targetPortal}`;
 
     try {
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(trimmed, {
@@ -637,7 +634,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (typeof window !== 'undefined' && window.history?.replaceState) {
       const searchParams = new URLSearchParams(window.location.search);
       const queryPortal = searchParams.get('portal') as 'student' | 'faculty' | null;
-      const targetPortal = queryPortal ? `/${queryPortal}/login` : (window.location.pathname.includes('faculty') ? '/faculty/login' : '/student/login');
+      const targetPortal = queryPortal === 'student' ? '/student/login' : '/faculty/login';
       window.history.replaceState(null, '', targetPortal);
     }
 
