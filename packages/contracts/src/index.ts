@@ -580,6 +580,7 @@ export const AssessmentSchema = z.object({
   late_penalty_mode: z.enum(['none', 'fixed']).default('none'),
   late_penalty_marks: z.number().min(0).default(0),
   max_marks: z.number().positive().default(50),
+  idempotency_key: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string()
 });
@@ -651,6 +652,7 @@ export const CreateAssessmentRequestSchema = z.object({
   late_penalty_mode: z.enum(['none', 'fixed']).default('none').optional(),
   late_penalty_marks: z.number().min(0).default(0).optional(),
   max_marks: z.number().positive().default(50).optional(),
+  idempotency_key: z.string().trim().min(1).max(255).optional(),
   questions: z.array(QuestionInputSchema).optional().default([]).transform((qs) =>
     qs.map((q, idx) => ({
       ...q,

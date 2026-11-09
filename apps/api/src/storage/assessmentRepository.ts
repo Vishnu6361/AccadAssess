@@ -39,6 +39,7 @@ export interface IAssessmentRepository {
   getFullAssessment(id: string): Promise<any | null>;
   listAssessments(user: UserContext): Promise<any[]>;
   createAssessment(data: CreateAssessmentRequest, createdBy: string): Promise<Assessment>;
+  getAssessmentByIdempotencyKey?(createdBy: string, idempotencyKey: string): Promise<Assessment | null>;
   updateAssessment(id: string, updates: Partial<Assessment> & { document_base64?: string }): Promise<Assessment>;
   saveDraftAssessmentAtomic(assessmentId: string | null, data: any, callerId: string): Promise<any>;
   hasRelatedStudentRecords(assessmentId: string): Promise<{
@@ -217,7 +218,17 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
     return full.filter(Boolean);
   }
 
+  async getAssessmentByIdempotencyKey(createdBy: string, idempotencyKey: string): Promise<Assessment | null> {
+    const found = this.inMemoryDb.assessments.find(a => a.created_by === createdBy && a.idempotency_key === idempotencyKey);
+    return found || null;
+  }
+
   async createAssessment(data: CreateAssessmentRequest, createdBy: string): Promise<Assessment> {
+    if (data.idempotency_key) {
+      const existing = this.inMemoryDb.assessments.find(a => a.created_by === createdBy && a.idempotency_key === data.idempotency_key);
+      if (existing) return existing;
+    }
+
     const id = randomUUID();
     let storageKey = data.document_storage_key || null;
 
@@ -249,6 +260,7 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
       late_penalty_mode: data.late_penalty_mode || 'none',
       late_penalty_marks: data.late_penalty_marks || 0,
       max_marks: data.max_marks || 100,
+      idempotency_key: data.idempotency_key || null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
@@ -283,6 +295,13 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
   async saveDraftAssessmentAtomic(assessmentId: string | null, data: any, callerId: string): Promise<any> {
     let ass: Assessment;
     const nowIso = new Date().toISOString();
+
+    if (!assessmentId && data.idempotency_key) {
+      const existing = this.inMemoryDb.assessments.find(a => a.created_by === callerId && a.idempotency_key === data.idempotency_key);
+      if (existing) {
+        return this.getFullAssessment(existing.id);
+      }
+    }
 
     if (assessmentId) {
       const idx = this.inMemoryDb.assessments.findIndex(a => a.id === assessmentId);
@@ -327,6 +346,7 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
         late_penalty_mode: data.late_penalty_mode || 'none',
         late_penalty_marks: data.late_penalty_marks || 0,
         max_marks: 50,
+        idempotency_key: data.idempotency_key || null,
         created_at: nowIso,
         updated_at: nowIso
       };
@@ -1070,8 +1090,31 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
     return fullList.filter(Boolean);
   }
 
+  async getAssessmentByIdempotencyKey(createdBy: string, idempotencyKey: string): Promise<Assessment | null> {
+    this.assertStagingProject();
+    try {
+      const { data, error } = await this.client
+        .from('assessments')
+        .select('id')
+        .eq('created_by', createdBy)
+        .eq('idempotency_key', idempotencyKey)
+        .maybeSingle();
+
+      if (error || !data) return null;
+      return this.getFullAssessment(data.id);
+    } catch {
+      return null;
+    }
+  }
+
   async createAssessment(data: CreateAssessmentRequest, createdBy: string): Promise<Assessment> {
     this.assertStagingProject();
+
+    if (data.idempotency_key) {
+      const existing = await this.getAssessmentByIdempotencyKey(createdBy, data.idempotency_key);
+      if (existing) return existing;
+    }
+
     const id = randomUUID();
     let storageKey = data.document_storage_key || null;
     let sizeBytes = data.document_size_bytes || null;
@@ -1114,7 +1157,8 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
       extension_deadline_at: data.extension_deadline_at || null,
       late_penalty_mode: data.late_penalty_mode || 'none',
       late_penalty_marks: data.late_penalty_marks || 0,
-      max_marks: data.max_marks || 100
+      max_marks: data.max_marks || 100,
+      idempotency_key: data.idempotency_key || null
     };
 
     const { data: inserted, error: insertError } = await this.client
@@ -1124,6 +1168,10 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
       .single();
 
     if (insertError) {
+      if (insertError.code === '23505' && data.idempotency_key) {
+        const existing = await this.getAssessmentByIdempotencyKey(createdBy, data.idempotency_key);
+        if (existing) return existing;
+      }
       throw new Error(`Failed to insert assessment record: ${insertError.message}`);
     }
 
@@ -1539,6 +1587,14 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
 
   async saveDraftAssessmentAtomic(assessmentId: string | null, data: any, callerId: string): Promise<any> {
     this.assertStagingProject();
+
+    if (!assessmentId && data.idempotency_key) {
+      const existing = await this.getAssessmentByIdempotencyKey(callerId, data.idempotency_key);
+      if (existing) {
+        return existing;
+      }
+    }
+
     let storageKey = data.document_storage_key || null;
     let sizeBytes = data.document_size_bytes || null;
     let mimeType = data.document_mime_type || null;
@@ -1577,6 +1633,7 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
       p_document_size_bytes: sizeBytes,
       p_document_mime_type: mimeType,
       p_caller_id: callerId,
+      p_idempotency_key: data.idempotency_key || null,
       p_questions: (data.questions || []).map((q: any, idx: number) => ({
         id: q.id || null,
         prompt: q.prompt,
@@ -1616,6 +1673,7 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
             late_penalty_mode: data.late_penalty_mode || 'none',
             late_penalty_marks: data.late_penalty_marks || 0,
             max_marks: 50,
+            idempotency_key: data.idempotency_key || null,
             questions: []
           }, callerId);
           effectiveAssessmentId = created.id;
@@ -1629,6 +1687,7 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
             late_penalty_mode: data.late_penalty_mode || 'none',
             late_penalty_marks: data.late_penalty_marks || 0,
             max_marks: 50,
+            idempotency_key: data.idempotency_key || null,
             questions: []
           });
         }

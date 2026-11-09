@@ -406,6 +406,9 @@ router.get('/:id/document-url', async (req: Request, res: Response) => {
   });
 });
 
+// In-flight creation promises to prevent race conditions during concurrent identical submissions
+const inFlightCreations = new Map<string, Promise<{ status: number; body: any }>>();
+
 router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
   const user = req.userContext!;
   const repo = getAssessmentRepository();
@@ -426,6 +429,16 @@ router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, 
   }
   const body = parseResult.data;
 
+  // Header or body idempotency key
+  const rawIdempKey = req.headers['idempotency-key'] || body.idempotency_key;
+  const idempotencyKey = typeof rawIdempKey === 'string' && rawIdempKey.trim().length > 0 
+    ? rawIdempKey.trim() 
+    : undefined;
+
+  if (idempotencyKey) {
+    body.idempotency_key = idempotencyKey;
+  }
+
   if (!user.isHOD) {
     const isAuth = await repo.isAuthorizedTeacher(user.profile.id, body.class_subject_id);
     if (!isAuth) {
@@ -441,7 +454,37 @@ router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, 
     });
   }
 
-  try {
+  // Idempotency Deduplication Key (scoped to user and key)
+  const dedupKey = idempotencyKey ? `${user.profile.id}:${idempotencyKey}` : null;
+
+  // 1. If an identical creation is currently in-flight, await its completion and return existing result
+  if (dedupKey && inFlightCreations.has(dedupKey)) {
+    try {
+      const inFlightRes = await inFlightCreations.get(dedupKey)!;
+      return res.status(inFlightRes.status === 201 ? 200 : inFlightRes.status).json({
+        ...inFlightRes.body,
+        idempotent_replay: true
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: { code: 'SERVER_ERROR', message: err.message || 'Failed to create assessment' }
+      });
+    }
+  }
+
+  // 2. If already saved under this idempotency key in the repository, return existing draft immediately
+  if (idempotencyKey && repo.getAssessmentByIdempotencyKey) {
+    const existing = await repo.getAssessmentByIdempotencyKey(user.profile.id, idempotencyKey);
+    if (existing) {
+      return res.status(200).json({
+        assessment: existing,
+        idempotent_replay: true
+      });
+    }
+  }
+
+  // 3. Execution logic
+  const executeCreation = async () => {
     const assessment = repo.saveDraftAssessmentAtomic
       ? await repo.saveDraftAssessmentAtomic(null, body, user.profile.id)
       : await repo.createAssessment(body, user.profile.id);
@@ -455,11 +498,31 @@ router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, 
       correlationId: req.headers['x-correlation-id'] as string
     });
 
-    return res.status(201).json({ assessment });
-  } catch (err: any) {
-    return res.status(500).json({
-      error: { code: 'SERVER_ERROR', message: err.message || 'Failed to create assessment' }
-    });
+    return { status: 201, body: { assessment } };
+  };
+
+  if (dedupKey) {
+    const creationPromise = executeCreation();
+    inFlightCreations.set(dedupKey, creationPromise);
+    try {
+      const outcome = await creationPromise;
+      return res.status(outcome.status).json(outcome.body);
+    } catch (err: any) {
+      return res.status(500).json({
+        error: { code: 'SERVER_ERROR', message: err.message || 'Failed to create assessment' }
+      });
+    } finally {
+      inFlightCreations.delete(dedupKey);
+    }
+  } else {
+    try {
+      const outcome = await executeCreation();
+      return res.status(outcome.status).json(outcome.body);
+    } catch (err: any) {
+      return res.status(500).json({
+        error: { code: 'SERVER_ERROR', message: err.message || 'Failed to create assessment' }
+      });
+    }
   }
 });
 

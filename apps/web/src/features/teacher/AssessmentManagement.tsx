@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Pencil,
   BookOpen,
@@ -91,6 +91,24 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
 
   // Modal States
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [creationStage, setCreationStage] = useState<string | null>(null);
+  const isSubmittingCreateRef = useRef(false);
+  const [createIdempotencyKey, setCreateIdempotencyKey] = useState<string>(() => {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+    return 'idem-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 10);
+  });
+
+  const openCreateModal = () => {
+    const nextKey = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : 'idem-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 10);
+    setCreateIdempotencyKey(nextKey);
+    setErrorMessage(null);
+    setShowCreateModal(true);
+  };
   const [showPublishConfirmModal, setShowPublishConfirmModal] = useState(false);
 
   // Edit Assessment State
@@ -833,6 +851,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
 
   const handleCreateAssessment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingCreateRef.current) return;
     setErrorMessage(null);
 
     if (!formTitle.trim()) {
@@ -873,6 +892,10 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
       return;
     }
 
+    isSubmittingCreateRef.current = true;
+    setIsCreating(true);
+    setCreationStage(formPdfBase64 ? 'Uploading assignment document...' : 'Preparing assignment details...');
+
     try {
       const newAssessment = await assessmentApi.createAssessment({
         class_subject_id: formClassSubjectId,
@@ -880,6 +903,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
         instructions: formInstructions.trim() || 'Refer to the assignment document, questions, and evaluation rubric.',
         deadline_at: deadlineDate.toISOString(),
         max_marks: Number(formMaxMarks || 50),
+        idempotency_key: createIdempotencyKey,
         document_base64: formPdfBase64 || undefined,
         document_filename: formPdfFileName || undefined,
         max_files: Number(formMaxFiles || 1),
@@ -904,6 +928,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
         }
       });
 
+      setCreationStage('Finalizing assignment...');
       setActionMessage(`Assessment "${newAssessment.title}" created successfully in draft status.`);
       setShowCreateModal(false);
       setFormTitle('');
@@ -921,10 +946,26 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
       setFormPdfError(null);
       setFormQuestions([]);
       setFormRubricCriteria(DEFAULT_RUBRIC_CRITERIA);
-      await loadAssessments();
+
+      // Generate a fresh idempotency key for the next assignment creation intent
+      const nextKey = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : 'idem-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 10);
+      setCreateIdempotencyKey(nextKey);
+
+      // Optimistically insert into state and select immediately for responsive feedback
+      setAssessments(prev => [newAssessment, ...prev.filter(a => a.id !== newAssessment.id)]);
       setSelectedAssessmentId(newAssessment.id);
+
+      // Background refresh
+      loadAssessments().catch(console.error);
     } catch (err: any) {
+      // NOTE: Form state and createIdempotencyKey are preserved so that user can retry safely
       setErrorMessage(err.message || 'Failed to create assessment.');
+    } finally {
+      isSubmittingCreateRef.current = false;
+      setIsCreating(false);
+      setCreationStage(null);
     }
   };
 
@@ -1166,7 +1207,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
 
             {isTeacher && (
               <button
-                onClick={() => setShowCreateModal(true)}
+                onClick={openCreateModal}
                 className="btn-primary text-xs flex items-center self-start sm:self-auto min-h-[44px]"
               >
                 <PlusCircle className="w-4 h-4 mr-2" />
@@ -1366,7 +1407,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                   </p>
                   {isTeacher && (
                     <button
-                      onClick={() => setShowCreateModal(true)}
+                      onClick={openCreateModal}
                       className="btn-primary text-xs mt-4 inline-flex items-center min-h-[44px]"
                     >
                       <PlusCircle className="w-4 h-4 mr-1.5" />
@@ -2362,8 +2403,10 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                 Create New Assignment
               </h3>
               <button 
-                onClick={() => setShowCreateModal(false)}
-                className="text-academic-muted hover:text-academic-deepGreen p-1"
+                onClick={() => !isCreating && setShowCreateModal(false)}
+                disabled={isCreating}
+                className="text-academic-muted hover:text-academic-deepGreen p-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                title={isCreating ? "Cannot close while creating assignment" : "Close"}
               >
                 <X className="w-5 h-5" />
               </button>
@@ -2798,15 +2841,18 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
-                  className="btn-secondary text-xs min-h-[44px]"
+                  disabled={isCreating}
+                  className="btn-secondary text-xs min-h-[44px] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="btn-primary text-xs min-h-[44px]"
+                  disabled={isCreating}
+                  className="btn-primary text-xs min-h-[44px] flex items-center justify-center disabled:opacity-60 disabled:cursor-not-allowed font-medium"
                 >
-                  Create Assignment
+                  {isCreating && <Loader2 className="w-4 h-4 animate-spin mr-2 flex-shrink-0" />}
+                  <span>{isCreating ? (creationStage || 'Creating Assignment...') : 'Create Assignment'}</span>
                 </button>
               </div>
             </form>

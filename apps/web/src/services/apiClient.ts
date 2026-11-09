@@ -1407,6 +1407,7 @@ export interface AssessmentDTO {
   late_penalty_mode?: 'none' | 'fixed';
   late_penalty_marks?: number;
   max_marks?: number;
+  idempotency_key?: string | null;
 }
 
 const mockAssessments: AssessmentDTO[] = [
@@ -1585,6 +1586,7 @@ export const assessmentApi = {
     title: string;
     instructions: string;
     deadline_at: string;
+    idempotency_key?: string;
     document_base64?: string;
     document_filename?: string;
     max_files?: number;
@@ -1598,12 +1600,16 @@ export const assessmentApi = {
   }): Promise<AssessmentDTO> => {
     try {
       const authHeaders = await getAuthHeaders();
+      const headers: Record<string, string> = {
+        ...authHeaders,
+        'Content-Type': 'application/json'
+      };
+      if (payload.idempotency_key) {
+        headers['Idempotency-Key'] = payload.idempotency_key;
+      }
       const res = await fetchWithTimeout(`${API_BASE_URL}/assessments`, {
         method: 'POST',
-        headers: {
-          ...authHeaders,
-          'Content-Type': 'application/json'
-        },
+        headers,
         body: JSON.stringify(payload)
       });
       const data = await res.json();
