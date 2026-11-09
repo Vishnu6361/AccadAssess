@@ -64,6 +64,21 @@ export const Header: React.FC<HeaderProps> = ({
 
         <div className="flex items-center space-x-2.5">
           <AcadAssessLogo variant="compact" size="sm" showSubtitle={false} />
+          <div className="hidden sm:inline-flex items-center">
+            {availableRoles.includes('hod') ? (
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#8A3814]/10 text-[#8A3814] border border-[#8A3814]/30 uppercase tracking-wide">
+                Admin Portal
+              </span>
+            ) : availableRoles.includes('student') ? (
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-academic-lightGreen text-academic-deepGreen border border-academic-primaryGreen/30 uppercase tracking-wide">
+                Student Portal
+              </span>
+            ) : (
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-academic-paleGreen text-academic-deepGreen border border-academic-border uppercase tracking-wide">
+                Faculty Portal
+              </span>
+            )}
+          </div>
           {institutionName && (
             <div className="hidden sm:block border-l border-academic-border pl-2.5">
               <p className="text-[11px] text-academic-muted flex items-center">

@@ -88,7 +88,9 @@ export const WorkspaceSelectionModal: React.FC<WorkspaceSelectionModalProps> = (
                 Select Academic Workspace
               </h2>
               <p className="text-xs text-academic-muted">
-                Your faculty account has multiple authorized roles. Choose a workspace to proceed.
+                {availableRoles.includes('hod')
+                  ? 'Your Admin account has multiple authorized roles. You can operate in teaching workspaces without leaving the Admin Portal.'
+                  : 'Your institutional account has multiple authorized roles. Choose a workspace to proceed.'}
               </p>
             </div>
           </div>

@@ -149,7 +149,7 @@ export const authApi = {
     return data as UserAuthContext;
   },
 
-  verifyPortal: async (portal: 'student' | 'faculty'): Promise<{ authorized: boolean; portal: string; profile: any; roles: string[]; isHOD?: boolean; activeRole?: string }> => {
+  verifyPortal: async (portal: 'student' | 'faculty' | 'admin'): Promise<{ authorized: boolean; portal: string; profile: any; roles: string[]; isHOD?: boolean; activeRole?: string }> => {
     const authHeaders = await getAuthHeaders();
     const res = await fetch(`${API_BASE_URL}/auth/verify-portal`, {
       method: 'POST',
@@ -165,6 +165,24 @@ export const authApi = {
       const err: any = new Error(message);
       err.code = data.error?.code || 'PORTAL_ACCESS_DENIED';
       err.recommendedPortal = data.error?.recommendedPortal;
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  },
+
+  confirmPassword: async (password: string, assessmentId?: string): Promise<{ confirmed: boolean; reauth_token: string; expires_in: number }> => {
+    const authHeaders = await getAuthHeaders();
+    const res = await fetch(`${API_BASE_URL}/auth/confirm-password`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password, assessment_id: assessmentId, purpose: 'assignment_deletion' })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const message = data.error?.message || `Password confirmation failed (${res.status})`;
+      const err: any = new Error(message);
+      err.code = data.error?.code || 'AUTH_ERROR';
       err.status = res.status;
       throw err;
     }
@@ -1255,6 +1273,7 @@ export interface AssessmentDTO {
   class_details?: string;
   subject_details?: string;
   questions?: any[];
+  rubric?: any;
   document_storage_key?: string | null;
   document_filename?: string | null;
   document_size_bytes?: number | null;
@@ -1451,6 +1470,8 @@ export const assessmentApi = {
     late_penalty_mode?: 'none' | 'fixed';
     late_penalty_marks?: number;
     max_marks?: number;
+    questions?: any[];
+    rubric?: any;
   }): Promise<AssessmentDTO> => {
     try {
       const authHeaders = await getAuthHeaders();
@@ -1464,7 +1485,10 @@ export const assessmentApi = {
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error?.message || `Server error (${res.status}): Failed to create assessment`);
+        const errorMsg = data.error?.details && Array.isArray(data.error.details) && data.error.details.length > 0
+          ? `${data.error.message || 'Validation error'}: ${data.error.details.map((d: any) => `${d.path?.join('.') || 'field'}: ${d.message}`).join('; ')}`
+          : (data.error?.message || `Server error (${res.status}): Failed to create assessment`);
+        throw new Error(errorMsg);
       }
       return data.assessment;
     } catch (err: any) {
@@ -1478,7 +1502,7 @@ export const assessmentApi = {
   addQuestion: async (assessmentId: string, payload: {
     display_order: number;
     prompt: string;
-    max_marks: number;
+    max_marks?: number;
   }): Promise<any> => {
     try {
       const authHeaders = await getAuthHeaders();
@@ -1562,6 +1586,8 @@ export const assessmentApi = {
     late_penalty_mode?: 'none' | 'fixed';
     late_penalty_marks?: number;
     max_marks?: number;
+    questions?: any[];
+    rubric?: any;
   }): Promise<{ assessment: AssessmentDTO; warning?: string | null }> => {
     try {
       const authHeaders = await getAuthHeaders();
@@ -1575,7 +1601,10 @@ export const assessmentApi = {
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error?.message || `Update failed (${res.status})`);
+        const errorMsg = data.error?.details && Array.isArray(data.error.details) && data.error.details.length > 0
+          ? `${data.error.message || 'Validation error'}: ${data.error.details.map((d: any) => `${d.path?.join('.') || 'field'}: ${d.message}`).join('; ')}`
+          : (data.error?.message || `Update failed (${res.status})`);
+        throw new Error(errorMsg);
       }
       return data;
     } catch (err: any) {
@@ -1588,6 +1617,35 @@ export const assessmentApi = {
 
   checkAssessmentDeletion: async (assessmentId: string): Promise<{
     can_delete: boolean;
+    summary?: {
+      can_delete: boolean;
+      assessment_id: string;
+      title: string;
+      status: string;
+      counts: {
+        submissions: number;
+        submission_versions: number;
+        evaluations: number;
+        evaluation_criterion_scores: number;
+        questions: number;
+        rubric_versions: number;
+        rubric_criteria: number;
+        result_publications: number;
+        storage_files: number;
+      };
+      storage_keys: string[];
+    };
+    counts?: {
+      submissions: number;
+      submission_versions: number;
+      evaluations: number;
+      evaluation_criterion_scores: number;
+      questions: number;
+      rubric_versions: number;
+      rubric_criteria: number;
+      result_publications: number;
+      storage_files: number;
+    };
     submissions_count: number;
     evaluations_count: number;
     is_published: boolean;
@@ -1611,12 +1669,16 @@ export const assessmentApi = {
     }
   },
 
-  deleteAssessment: async (assessmentId: string): Promise<{ success: boolean; message: string }> => {
+  deleteAssessment: async (assessmentId: string, reauthToken?: string): Promise<{ success: boolean; message: string; deleted_counts?: any }> => {
     try {
       const authHeaders = await getAuthHeaders();
+      const headers: Record<string, string> = { ...authHeaders };
+      if (reauthToken) {
+        headers['X-Reauth-Token'] = reauthToken;
+      }
       const res = await fetch(`${API_BASE_URL}/assessments/${assessmentId}`, {
         method: 'DELETE',
-        headers: authHeaders
+        headers
       });
       const data = await res.json();
       if (!res.ok) {

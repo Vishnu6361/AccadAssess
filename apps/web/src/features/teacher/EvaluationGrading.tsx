@@ -168,9 +168,12 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
     const existing = row.evaluation;
 
     const initialScores: Record<string, { score: number; levelId: string | null; feedback: string }> = {};
+    const rubricCriteria = currentAssessment?.rubric?.criteria?.length
+      ? currentAssessment.rubric.criteria
+      : (question?.rubric?.criteria || []);
 
-    if (question?.rubric?.criteria && question.rubric.criteria.length > 0) {
-      for (const crit of question.rubric.criteria) {
+    if (rubricCriteria.length > 0) {
+      for (const crit of rubricCriteria) {
         const foundScore = existing?.criterion_scores?.find((cs: any) => cs.criterion_id === crit.id);
         initialScores[crit.id] = {
           score: foundScore ? foundScore.score : 0,
@@ -253,8 +256,10 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
   };
 
   // Calculation helpers
-  const activeQuestion = currentAssessment?.questions?.[0] || null;
-  const hasRubricCriteria = Boolean(activeQuestion?.rubric?.criteria && activeQuestion.rubric.criteria.length > 0);
+  const rubricCriteria = currentAssessment?.rubric?.criteria?.length
+    ? currentAssessment.rubric.criteria
+    : (currentAssessment?.questions?.[0]?.rubric?.criteria || []);
+  const hasRubricCriteria = Boolean(rubricCriteria.length > 0);
 
   const criteriaSum = Object.values(criterionScores).reduce((sum, item) => sum + (Number(item.score) || 0), 0);
   const liveRawScore = hasRubricCriteria ? criteriaSum : (typeof rawScoreInput === 'number' ? rawScoreInput : 0);
@@ -263,7 +268,7 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
   const hasFixedPenalty = currentAssessment?.late_penalty_mode === 'fixed';
   const penaltyMarks = (isLate && hasFixedPenalty) ? Number(currentAssessment?.late_penalty_marks || 0) : 0;
   const liveFinalScore = Math.max(0, liveRawScore - penaltyMarks);
-  const maxAssessmentMarks = Number(currentAssessment?.max_marks || (activeQuestion ? activeQuestion.max_marks : 50));
+  const maxAssessmentMarks = Number(currentAssessment?.max_marks || 50);
 
   // Save evaluation (Draft or Complete)
   const handleSaveEvaluation = async (status: 'draft' | 'completed') => {
@@ -275,10 +280,11 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
     try {
       if (status === 'completed') {
         if (hasRubricCriteria) {
-          for (const crit of activeQuestion.rubric.criteria) {
+          for (const crit of rubricCriteria) {
             const score = Number(criterionScores[crit.id]?.score || 0);
-            if (score < 0 || score > crit.max_score) {
-              throw new Error(`Criterion "${crit.title}" score must be between 0 and ${crit.max_score} marks.`);
+            const critMax = Number(crit.max_marks ?? crit.max_score ?? 10);
+            if (score < 0 || score > critMax) {
+              throw new Error(`Criterion "${crit.title}" score must be between 0 and ${critMax} marks.`);
             }
           }
         } else {
@@ -950,14 +956,15 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
 
                   {hasRubricCriteria ? (
                     <div className="space-y-4 max-h-[320px] overflow-y-auto pr-1">
-                      {activeQuestion.rubric.criteria.map((crit: any) => {
+                      {rubricCriteria.map((crit: any) => {
                         const critState = criterionScores[crit.id] || { score: 0, levelId: null, feedback: '' };
+                        const critMaxMarks = Number(crit.max_marks ?? crit.max_score ?? 10);
 
                         return (
                           <div key={crit.id} className="p-3 bg-academic-bg border border-academic-border/80 rounded-lg space-y-2">
                             <div className="flex items-center justify-between">
                               <span className="font-semibold text-xs text-academic-deepGreen">{crit.title}</span>
-                              <span className="text-[11px] font-mono text-academic-muted">Max: {crit.max_score}</span>
+                              <span className="text-[11px] font-mono text-academic-muted">Max: {critMaxMarks}</span>
                             </div>
                             {crit.description && (
                               <p className="text-[10px] text-academic-muted leading-tight">{crit.description}</p>
@@ -1002,7 +1009,7 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
                               <input
                                 type="number"
                                 min="0"
-                                max={crit.max_score}
+                                max={critMaxMarks}
                                 step="0.5"
                                 value={critState.score}
                                 onChange={(e) => {

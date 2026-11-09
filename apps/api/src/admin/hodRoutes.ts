@@ -42,14 +42,14 @@ import { getAssessmentRepository } from '../storage/assessmentRepository.js';
 import { getSubmissionRepository } from '../storage/submissionRepository.js';
 import { logAuditEvent, listAuditEvents } from '../audit/auditService.js';
 import { authenticateJWT, supabaseAdmin, isLiveSupabaseConfigured } from '../auth/jwt.js';
-import { loadUserContext, requireRoles, invalidateUserContextCache } from '../authorization/rbac.js';
+import { loadUserContext, requireRoles, requireHOD, invalidateUserContextCache } from '../authorization/rbac.js';
 
 const router = Router();
 
 // Secure all HOD endpoints with JWT + DB-verified 'hod' role check
 router.use(authenticateJWT);
 router.use(loadUserContext);
-router.use(requireRoles(['hod']));
+router.use(requireHOD);
 
 /**
  * -----------------------------------------------------------------------------

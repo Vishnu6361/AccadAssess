@@ -15,6 +15,13 @@ export const AppRoleSchema = z.enum([
 ]);
 export type AppRole = z.infer<typeof AppRoleSchema>;
 
+export const PortalTypeSchema = z.enum([
+  'student',
+  'faculty',
+  'admin'
+]);
+export type PortalType = z.infer<typeof PortalTypeSchema>;
+
 export const AccountStatusSchema = z.enum([
   'invited',
   'active',
@@ -26,7 +33,8 @@ export const AssessmentStatusSchema = z.enum([
   'draft',
   'published',
   'closed',
-  'archived'
+  'archived',
+  'deletion_pending'
 ]);
 export type AssessmentStatus = z.infer<typeof AssessmentStatusSchema>;
 
@@ -526,7 +534,8 @@ export type RubricCriterion = z.infer<typeof RubricCriterionSchema>;
 export const RubricVersionSchema = z.object({
   id: z.string().uuid(),
   template_id: z.string().uuid().nullable().optional(),
-  question_id: z.string().uuid(),
+  assessment_id: z.string().uuid().nullable().optional(),
+  question_id: z.string().uuid().nullable().optional(),
   version: z.number().int().min(1),
   title: z.string().min(1),
   frozen_at: z.string().nullable().optional(),
@@ -541,9 +550,9 @@ export const QuestionSchema = z.object({
   assessment_id: z.string().uuid(),
   display_order: z.number().int().min(1),
   prompt: z.string().min(1),
-  max_marks: z.number().positive(),
+  max_marks: z.number().nullable().optional(),
   rubric: RubricVersionSchema.nullable().optional(),
-  created_at: z.string()
+  created_at: z.string().optional()
 });
 export type Question = z.infer<typeof QuestionSchema>;
 
@@ -559,6 +568,7 @@ export const AssessmentSchema = z.object({
   published_by: z.string().uuid().nullable().optional(),
   version: z.number().int().min(1),
   questions: z.array(QuestionSchema).optional().default([]),
+  rubric: RubricVersionSchema.nullable().optional(),
   // Document-based Assignment fields
   document_storage_key: z.string().nullable().optional(),
   document_filename: z.string().nullable().optional(),
@@ -569,11 +579,55 @@ export const AssessmentSchema = z.object({
   extension_deadline_at: z.string().nullable().optional(),
   late_penalty_mode: z.enum(['none', 'fixed']).default('none'),
   late_penalty_marks: z.number().min(0).default(0),
-  max_marks: z.number().positive().default(100),
+  max_marks: z.number().positive().default(50),
   created_at: z.string(),
   updated_at: z.string()
 });
 export type Assessment = z.infer<typeof AssessmentSchema>;
+
+/**
+ * Question and Rubric Criteria Inputs for Unified Assessment Creation/Update
+ */
+export const QuestionInputSchema = z.object({
+  id: z.string().uuid().optional(),
+  prompt: z.string().min(1, 'Question prompt cannot be empty'),
+  display_order: z.number().int().min(1).optional(),
+  max_marks: z.number().nullable().optional()
+});
+export type QuestionInput = z.infer<typeof QuestionInputSchema>;
+
+export const RubricCriterionInputSchema = z.object({
+  id: z.string().uuid().optional(),
+  title: z.string().optional(),
+  criterion_title: z.string().optional(),
+  description: z.string().optional().default(''),
+  display_order: z.number().int().min(1).optional(),
+  max_marks: z.number().positive('Criterion marks must be positive')
+}).refine(data => Boolean((data.title && data.title.trim()) || (data.criterion_title && data.criterion_title.trim())), {
+  message: 'Criterion title cannot be empty',
+  path: ['title']
+}).transform((data) => ({
+  id: data.id,
+  title: ((data.title?.trim()) || (data.criterion_title?.trim()))!,
+  criterion_title: ((data.criterion_title?.trim()) || (data.title?.trim()))!,
+  description: data.description?.trim() || '',
+  display_order: data.display_order,
+  max_marks: data.max_marks
+}));
+export type RubricCriterionInput = z.infer<typeof RubricCriterionInputSchema>;
+
+export const AssignmentRubricInputSchema = z.object({
+  id: z.string().uuid().optional(),
+  title: z.string().min(1, 'Rubric title cannot be empty'),
+  criteria: z.array(RubricCriterionInputSchema).default([])
+}).transform((data) => ({
+  ...data,
+  criteria: data.criteria.map((c, idx) => ({
+    ...c,
+    display_order: c.display_order ?? (idx + 1)
+  }))
+}));
+export type AssignmentRubricInput = z.infer<typeof AssignmentRubricInputSchema>;
 
 /**
  * Assessment Request DTOs
@@ -596,7 +650,14 @@ export const CreateAssessmentRequestSchema = z.object({
   extension_deadline_at: z.string().nullable().optional(),
   late_penalty_mode: z.enum(['none', 'fixed']).default('none').optional(),
   late_penalty_marks: z.number().min(0).default(0).optional(),
-  max_marks: z.number().positive().default(100).optional()
+  max_marks: z.number().positive().default(50).optional(),
+  questions: z.array(QuestionInputSchema).optional().default([]).transform((qs) =>
+    qs.map((q, idx) => ({
+      ...q,
+      display_order: q.display_order || (idx + 1)
+    }))
+  ),
+  rubric: AssignmentRubricInputSchema.nullable().optional()
 }).refine(data => {
   if (data.allow_late && data.extension_deadline_at) {
     const ext = new Date(data.extension_deadline_at).getTime();
@@ -608,7 +669,7 @@ export const CreateAssessmentRequestSchema = z.object({
   message: 'Extension deadline must be later than the original deadline',
   path: ['extension_deadline_at']
 }).refine(data => {
-  const max = data.max_marks || 100;
+  const max = data.max_marks || 50;
   const penalty = data.late_penalty_marks || 0;
   return penalty <= max;
 }, {
@@ -633,21 +694,28 @@ export const UpdateAssessmentRequestSchema = z.object({
   extension_deadline_at: z.string().nullable().optional(),
   late_penalty_mode: z.enum(['none', 'fixed']).optional(),
   late_penalty_marks: z.number().min(0).optional(),
-  max_marks: z.number().positive().optional()
+  max_marks: z.number().positive().optional(),
+  questions: z.array(QuestionInputSchema).optional().transform((qs) =>
+    qs ? qs.map((q, idx) => ({
+      ...q,
+      display_order: q.display_order || (idx + 1)
+    })) : undefined
+  ),
+  rubric: AssignmentRubricInputSchema.nullable().optional()
 });
 export type UpdateAssessmentRequest = z.infer<typeof UpdateAssessmentRequestSchema>;
 
 export const CreateQuestionRequestSchema = z.object({
   display_order: z.number().int().min(1),
   prompt: z.string().min(3, 'Question prompt must be at least 3 characters'),
-  max_marks: z.number().positive('Question marks must be positive').max(100)
+  max_marks: z.number().nullable().optional()
 });
 export type CreateQuestionRequest = z.infer<typeof CreateQuestionRequestSchema>;
 
 export const UpdateQuestionRequestSchema = z.object({
   display_order: z.number().int().min(1).optional(),
   prompt: z.string().min(3).optional(),
-  max_marks: z.number().positive().max(100).optional()
+  max_marks: z.number().nullable().optional()
 });
 export type UpdateQuestionRequest = z.infer<typeof UpdateQuestionRequestSchema>;
 

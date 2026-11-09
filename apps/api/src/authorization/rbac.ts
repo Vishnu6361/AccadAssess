@@ -179,7 +179,13 @@ export const requireRoles = (allowedRoles: AppRole[]) => {
     // 2. Active Workspace Role Guard:
     // If the client explicitly operates within an active workspace (x-active-role header),
     // ensure that workspace role satisfies the permission for this endpoint.
-    if (req.userContext.activeRole && !allowedRoles.includes(req.userContext.activeRole)) {
+    // Exception: If the endpoint is an HOD-permitted endpoint and the user possesses the database 'hod' role,
+    // the HOD's administrative authority is maintained even when operating inside a teaching workspace.
+    if (
+      req.userContext.activeRole && 
+      !allowedRoles.includes(req.userContext.activeRole) &&
+      !(allowedRoles.includes('hod') && req.userContext.roles.includes('hod'))
+    ) {
       return res.status(403).json({
         error: {
           code: 'WORKSPACE_ROLE_UNAUTHORIZED',
@@ -192,4 +198,31 @@ export const requireRoles = (allowedRoles: AppRole[]) => {
 
     next();
   };
+};
+
+/**
+ * RBAC Guard: Ensures the authenticated user possesses the authoritative 'hod' role in the database.
+ * Does not block if the user's active UI workspace is currently switched to a teaching role.
+ */
+export const requireHOD = (req: Request, res: Response, next: NextFunction) => {
+  if (!req.userContext) {
+    return res.status(500).json({
+      error: {
+        code: 'SERVER_MISCONFIGURATION',
+        message: 'User context was not established before authorization check'
+      }
+    });
+  }
+
+  if (!req.userContext.roles.includes('hod')) {
+    return res.status(403).json({
+      error: {
+        code: 'FORBIDDEN',
+        message: 'Access denied. Requires active Head of Department (HOD) role.',
+        userRoles: req.userContext.roles
+      }
+    });
+  }
+
+  next();
 };

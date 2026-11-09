@@ -43,8 +43,154 @@ export const supabaseAdmin: SupabaseClient | null = isLiveSupabaseConfigured
   ? createClient(supabaseUrl!, supabaseServiceKey!)
   : null;
 
-// Dev secret used exclusively for local testing signature verification
-export const DEV_JWT_SECRET = process.env.JWT_DEV_SECRET || 'smartfa-test-hmac-dev-secret-key-32chars';
+// Secret used for high-privilege re-authentication tokens (e.g. permanent deletion)
+export const REAUTH_JWT_SECRET = process.env.REAUTH_JWT_SECRET || process.env.JWT_SECRET || process.env.JWT_DEV_SECRET || 'smartfa-test-hmac-dev-secret-key-32chars';
+export const DEV_JWT_SECRET = REAUTH_JWT_SECRET;
+
+// In-memory registry for local test suites / offline dev mode (jti -> expiresAt timestamp in ms)
+const inMemoryConsumedTokens = new Map<string, number>();
+
+export const clearConsumedTokensForTest = (): void => {
+  inMemoryConsumedTokens.clear();
+};
+
+export interface ConsumeReauthTokenParams {
+  jti: string;
+  purpose: string;
+  targetId?: string | null;
+  consumedBy?: string | null;
+  expiresAt: Date;
+}
+
+export interface ConsumeReauthTokenResult {
+  success: boolean;
+  code?: 'REAUTH_ALREADY_USED' | 'REAUTH_EXPIRED' | 'REAUTH_ERROR';
+  message?: string;
+}
+
+/**
+ * Atomically consumes a single-use re-authentication token.
+ * 
+ * Guarantees:
+ * 1. Single-use enforcement across concurrent requests (enforced via DB primary key uniqueness).
+ * 2. Multi-instance and restart resilience (backed by public.consumed_reauth_tokens table).
+ * 3. Graceful atomic fallback to in-memory registry for offline unit tests / mock environments.
+ */
+export async function consumeReauthTokenAtomic(
+  params: ConsumeReauthTokenParams
+): Promise<ConsumeReauthTokenResult> {
+  const { jti, purpose, targetId, consumedBy, expiresAt } = params;
+
+  if (!jti) {
+    return {
+      success: false,
+      code: 'REAUTH_ERROR',
+      message: 'Token identifier (jti) is required for replay verification.'
+    };
+  }
+
+  // 1. Check expiration
+  if (Date.now() >= expiresAt.getTime()) {
+    return {
+      success: false,
+      code: 'REAUTH_EXPIRED',
+      message: 'Password confirmation has expired. Please re-enter your institutional password.'
+    };
+  }
+
+  const isOfflineTestMode = process.env.NODE_ENV === 'test' || process.env.SMARTFA_TEST_MODE === 'true';
+
+  // 2. Primary: If Supabase admin client is active and not offline test mode, atomically insert into DB
+  if (supabaseAdmin && !isOfflineTestMode) {
+    try {
+      const { error } = await supabaseAdmin
+        .from('consumed_reauth_tokens')
+        .insert({
+          jti,
+          purpose,
+          target_id: targetId || null,
+          consumed_by: consumedBy || null,
+          consumed_at: new Date().toISOString(),
+          expires_at: expiresAt.toISOString()
+        });
+
+      if (error) {
+        // Unique key constraint violation: token was already consumed!
+        if (error.code === '23505' || error.message.includes('unique') || error.message.includes('duplicate')) {
+          inMemoryConsumedTokens.set(jti, expiresAt.getTime());
+          return {
+            success: false,
+            code: 'REAUTH_ALREADY_USED',
+            message: 'This password confirmation token has already been used and cannot be reused.'
+          };
+        }
+
+        // Table not created yet (e.g. migration pending in local dev)
+        if (error.code === '42P01') {
+          console.warn('[REAUTH] consumed_reauth_tokens table not found. Using in-memory single-use enforcement.');
+          return consumeInMemory(jti, expiresAt);
+        }
+
+        console.error('[REAUTH ERROR] Failed to record consumed token:', error);
+        return {
+          success: false,
+          code: 'REAUTH_ERROR',
+          message: `Database error verifying token single-use: ${error.message}`
+        };
+      }
+
+      inMemoryConsumedTokens.set(jti, expiresAt.getTime());
+      return { success: true };
+    } catch (err: any) {
+      console.error('[REAUTH ERROR] Exception recording consumed token:', err);
+      return {
+        success: false,
+        code: 'REAUTH_ERROR',
+        message: err.message || 'Error executing token single-use verification'
+      };
+    }
+  }
+
+  // 3. Fallback: Atomic in-memory check-and-set for local tests & offline environments
+  return consumeInMemory(jti, expiresAt);
+}
+
+function consumeInMemory(jti: string, expiresAt: Date): ConsumeReauthTokenResult {
+  // Purge any expired items lazily
+  const now = Date.now();
+  for (const [key, exp] of inMemoryConsumedTokens.entries()) {
+    if (exp <= now) {
+      inMemoryConsumedTokens.delete(key);
+    }
+  }
+
+  if (inMemoryConsumedTokens.has(jti)) {
+    return {
+      success: false,
+      code: 'REAUTH_ALREADY_USED',
+      message: 'This password confirmation token has already been used and cannot be reused.'
+    };
+  }
+
+  inMemoryConsumedTokens.set(jti, expiresAt.getTime());
+  return { success: true };
+}
+
+// Deprecated in-memory helpers preserved for backward compatibility
+export const consumedReauthTokens = {
+  has: (jti: string) => inMemoryConsumedTokens.has(jti),
+  add: (jti: string) => inMemoryConsumedTokens.set(jti, Date.now() + 10 * 60 * 1000),
+  delete: (jti: string) => inMemoryConsumedTokens.delete(jti),
+  clear: () => inMemoryConsumedTokens.clear()
+};
+
+export const markReauthTokenConsumed = (jti: string): void => {
+  inMemoryConsumedTokens.set(jti, Date.now() + 10 * 60 * 1000);
+};
+
+export const isReauthTokenConsumed = (jti: string): boolean => {
+  return inMemoryConsumedTokens.has(jti);
+};
 
 /**
  * Middleware: Verify Supabase JWT access token from Authorization header.

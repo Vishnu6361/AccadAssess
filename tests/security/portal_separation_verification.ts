@@ -34,6 +34,7 @@ async function makeApiRequest(
     path: string;
     method: string;
     token?: string;
+    headers?: Record<string, string>;
     body?: any;
   }
 ): Promise<{ status: number; body: any }> {
@@ -53,6 +54,7 @@ async function makeApiRequest(
           headers: {
             'Content-Type': 'application/json',
             ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
+            ...(options.headers || {}),
             ...(postData ? { 'Content-Length': Buffer.byteLength(postData) } : {})
           }
         },
@@ -102,13 +104,15 @@ async function run() {
   const appSrc = fs.readFileSync(appPath, 'utf-8');
   const authContextSrc = fs.readFileSync(authContextPath, 'utf-8');
 
-  // Test 1: Landing page links to both student and faculty login portals
+  // Test 1: Landing page links to student, faculty, and admin login portals
   assert(
     portalSelectionSrc.includes("onSelectPortal('student')") &&
     portalSelectionSrc.includes("onSelectPortal('faculty')") &&
+    portalSelectionSrc.includes("onSelectPortal('admin')") &&
     portalSelectionSrc.includes("Student Portal Login") &&
-    portalSelectionSrc.includes("Faculty Portal Login"),
-    'Landing page contains distinct action cards for Student Portal and Faculty Portal'
+    portalSelectionSrc.includes("Faculty Portal Login") &&
+    portalSelectionSrc.includes("Admin Portal Login"),
+    'Landing page contains distinct action cards for Student Portal, Faculty Portal, and Admin Portal'
   );
 
   // Test 2: Both login forms start with empty email and password state
@@ -142,12 +146,13 @@ async function run() {
     'Landing page has zero demo credentials or bypass shortcuts'
   );
 
-  // Test 5: App.tsx routes to /student/login, /faculty/login, and /
+  // Test 5: App.tsx routes to /student/login, /faculty/login, /admin/login, and /
   assert(
-    appSrc.includes("pathname === '/student/login'") &&
-    appSrc.includes("pathname === '/faculty/login'") &&
+    appSrc.includes("cleanPath === '/student/login'") &&
+    appSrc.includes("cleanPath === '/faculty/login'") &&
+    appSrc.includes("cleanPath === '/admin/login'") &&
     appSrc.includes("<PortalSelectionView"),
-    'App router routes correctly between /student/login, /faculty/login, and /'
+    'App router routes correctly between /student/login, /faculty/login, /admin/login, and /'
   );
 
   // --- 2. Live Supabase Connection & Accounts Verification ---
@@ -308,7 +313,7 @@ async function run() {
     'Faculty account without student role is rejected from Student Portal (HTTP 403 PORTAL_ACCESS_DENIED)'
   );
 
-  // Test 16: Authorized HOD account succeeds on Faculty Portal
+  // Test 16: HOD account is REJECTED from Faculty Portal (must use Admin Portal)
   const hodOnFacultyRes = await makeApiRequest(app, {
     path: '/api/v1/auth/verify-portal',
     method: 'POST',
@@ -317,14 +322,220 @@ async function run() {
   });
 
   assert(
-    hodOnFacultyRes.status === 200 && hodOnFacultyRes.body?.authorized === true && hodOnFacultyRes.body?.isHOD === true,
-    'Authorized HOD account succeeds on Faculty Portal with isHOD=true (HTTP 200)'
+    hodOnFacultyRes.status === 403 &&
+    hodOnFacultyRes.body?.error?.code === 'PORTAL_ACCESS_DENIED' &&
+    hodOnFacultyRes.body?.error?.recommendedPortal === 'admin',
+    'HOD account is rejected from Faculty Portal with HTTP 403 PORTAL_ACCESS_DENIED (recommendedPortal: admin)'
+  );
+
+  // Test 17: HOD account is REJECTED from Student Portal
+  const hodOnStudentRes = await makeApiRequest(app, {
+    path: '/api/v1/auth/verify-portal',
+    method: 'POST',
+    token: testHodToken,
+    body: { portal: 'student' }
+  });
+
+  assert(
+    hodOnStudentRes.status === 403 &&
+    hodOnStudentRes.body?.error?.code === 'PORTAL_ACCESS_DENIED' &&
+    hodOnStudentRes.body?.error?.recommendedPortal === 'admin',
+    'HOD account is rejected from Student Portal with HTTP 403 PORTAL_ACCESS_DENIED (recommendedPortal: admin)'
+  );
+
+  // Test 18: Authorized HOD account SUCCEEDS on Admin Portal
+  const hodOnAdminRes = await makeApiRequest(app, {
+    path: '/api/v1/auth/verify-portal',
+    method: 'POST',
+    token: testHodToken,
+    body: { portal: 'admin' }
+  });
+
+  assert(
+    hodOnAdminRes.status === 200 &&
+    hodOnAdminRes.body?.authorized === true &&
+    hodOnAdminRes.body?.isHOD === true &&
+    hodOnAdminRes.body?.portal === 'admin',
+    'Authorized HOD account succeeds on Admin Portal with isHOD=true (HTTP 200, portal: admin)'
+  );
+
+  // Test 19: Student account is REJECTED from Admin Portal
+  const studentOnAdminRes = await makeApiRequest(app, {
+    path: '/api/v1/auth/verify-portal',
+    method: 'POST',
+    token: testStudentToken,
+    body: { portal: 'admin' }
+  });
+
+  assert(
+    studentOnAdminRes.status === 403 &&
+    studentOnAdminRes.body?.error?.code === 'PORTAL_ACCESS_DENIED' &&
+    studentOnAdminRes.body?.error?.recommendedPortal === 'student',
+    'Student account is rejected from Admin Portal with HTTP 403 PORTAL_ACCESS_DENIED (recommendedPortal: student)'
+  );
+
+  // Test 20: Faculty account is REJECTED from Admin Portal
+  const facultyOnAdminRes = await makeApiRequest(app, {
+    path: '/api/v1/auth/verify-portal',
+    method: 'POST',
+    token: testTeacherToken,
+    body: { portal: 'admin' }
+  });
+
+  assert(
+    facultyOnAdminRes.status === 403 &&
+    facultyOnAdminRes.body?.error?.code === 'PORTAL_ACCESS_DENIED' &&
+    facultyOnAdminRes.body?.error?.recommendedPortal === 'faculty',
+    'Faculty account without HOD role is rejected from Admin Portal (HTTP 403 PORTAL_ACCESS_DENIED, recommendedPortal: faculty)'
+  );
+
+  // Multi-role Fixture Setup: HOD + Subject Teacher
+  const multiRoleHodId = 'a1000000-0000-0000-0000-000000000099';
+  db.profiles.push({
+    id: multiRoleHodId,
+    full_name: 'Dr. Multi-Role HOD',
+    email: 'multirole.hod@smartfa.edu',
+    status: 'active',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  });
+  db.roles.push(
+    {
+      id: 'r1000000-0000-0000-0000-000000000099',
+      user_id: multiRoleHodId,
+      role: 'hod',
+      scope_id: 'd1000000-0000-0000-0000-000000000001',
+      active: true,
+      created_at: new Date().toISOString()
+    },
+    {
+      id: 'r1000000-0000-0000-0000-000000000098',
+      user_id: multiRoleHodId,
+      role: 'subject_teacher',
+      scope_id: 'd1000000-0000-0000-0000-000000000001',
+      active: true,
+      created_at: new Date().toISOString()
+    }
+  );
+  const testMultiRoleHodToken = jwt.sign(
+    { sub: multiRoleHodId, email: 'multirole.hod@smartfa.edu' },
+    DEV_JWT_SECRET,
+    { expiresIn: '1h' }
+  );
+
+  // Hybrid Fixture Setup: Student + Subject Teacher
+  const hybridUserId = 'a4000000-0000-0000-0000-000000000099';
+  db.profiles.push({
+    id: hybridUserId,
+    full_name: 'Hybrid Student Teacher',
+    email: 'hybrid.student@smartfa.edu',
+    status: 'active',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  });
+  db.roles.push(
+    {
+      id: 'r4000000-0000-0000-0000-000000000098',
+      user_id: hybridUserId,
+      role: 'student',
+      active: true,
+      created_at: new Date().toISOString()
+    },
+    {
+      id: 'r4000000-0000-0000-0000-000000000099',
+      user_id: hybridUserId,
+      role: 'subject_teacher',
+      scope_id: 'd1000000-0000-0000-0000-000000000001',
+      active: true,
+      created_at: new Date().toISOString()
+    }
+  );
+  const testHybridToken = jwt.sign(
+    { sub: hybridUserId, email: 'hybrid.student@smartfa.edu' },
+    DEV_JWT_SECRET,
+    { expiresIn: '1h' }
+  );
+
+  // Test 21: Multi-role account (HOD + Subject Teacher) is REJECTED from Faculty Portal
+  const multiRoleHodOnFaculty = await makeApiRequest(app, {
+    path: '/api/v1/auth/verify-portal',
+    method: 'POST',
+    token: testMultiRoleHodToken,
+    body: { portal: 'faculty' }
+  });
+
+  assert(
+    multiRoleHodOnFaculty.status === 403 &&
+    multiRoleHodOnFaculty.body?.error?.code === 'PORTAL_ACCESS_DENIED' &&
+    multiRoleHodOnFaculty.body?.error?.recommendedPortal === 'admin',
+    'Multi-role account (HOD + Subject Teacher) is rejected from Faculty Portal (must use Admin Portal)'
+  );
+
+  // Test 22: Multi-role account (HOD + Subject Teacher) is REJECTED from Student Portal
+  const multiRoleHodOnStudent = await makeApiRequest(app, {
+    path: '/api/v1/auth/verify-portal',
+    method: 'POST',
+    token: testMultiRoleHodToken,
+    body: { portal: 'student' }
+  });
+
+  assert(
+    multiRoleHodOnStudent.status === 403 &&
+    multiRoleHodOnStudent.body?.error?.code === 'PORTAL_ACCESS_DENIED' &&
+    multiRoleHodOnStudent.body?.error?.recommendedPortal === 'admin',
+    'Multi-role account (HOD + Subject Teacher) is rejected from Student Portal (recommendedPortal: admin)'
+  );
+
+  // Test 23: Multi-role account (HOD + Subject Teacher) SUCCEEDS on Admin Portal
+  const multiRoleHodOnAdmin = await makeApiRequest(app, {
+    path: '/api/v1/auth/verify-portal',
+    method: 'POST',
+    token: testMultiRoleHodToken,
+    body: { portal: 'admin' }
+  });
+
+  assert(
+    multiRoleHodOnAdmin.status === 200 &&
+    multiRoleHodOnAdmin.body?.authorized === true &&
+    multiRoleHodOnAdmin.body?.portal === 'admin' &&
+    multiRoleHodOnAdmin.body?.isHOD === true,
+    'Multi-role account (HOD + Subject Teacher) succeeds on Admin Portal with isHOD=true'
+  );
+
+  // Test 24: Hybrid account (Student + Faculty) is REJECTED from Student Portal
+  const hybridOnStudent = await makeApiRequest(app, {
+    path: '/api/v1/auth/verify-portal',
+    method: 'POST',
+    token: testHybridToken,
+    body: { portal: 'student' }
+  });
+
+  assert(
+    hybridOnStudent.status === 403 &&
+    hybridOnStudent.body?.error?.code === 'PORTAL_ACCESS_DENIED' &&
+    hybridOnStudent.body?.error?.recommendedPortal === 'faculty',
+    'Hybrid account possessing faculty roles is rejected from Student Portal (recommendedPortal: faculty)'
+  );
+
+  // Test 25: Hybrid account (Student + Faculty) is ALSO REJECTED from Faculty Portal
+  const hybridOnFaculty = await makeApiRequest(app, {
+    path: '/api/v1/auth/verify-portal',
+    method: 'POST',
+    token: testHybridToken,
+    body: { portal: 'faculty' }
+  });
+
+  assert(
+    hybridOnFaculty.status === 403 &&
+    hybridOnFaculty.body?.error?.code === 'PORTAL_ACCESS_DENIED' &&
+    hybridOnFaculty.body?.error?.recommendedPortal === 'student',
+    'Hybrid account possessing student role is rejected from Faculty Portal (recommendedPortal: student)'
   );
 
   // --- 4. Cross-Role API Boundary Isolation ---
   console.log('\n--- 4. Cross-Role API Boundary & Privilege Escalation Invariants ---');
 
-  // Test 17: Student token is strictly forbidden from HOD admin endpoints
+  // Test 26: Student token is strictly forbidden from HOD admin endpoints
   const studentHODAttempt = await makeApiRequest(app, {
     path: '/api/v1/admin/hod/programmes',
     method: 'GET',
@@ -336,7 +547,7 @@ async function run() {
     `Student token forbidden from HOD endpoints (HTTP ${studentHODAttempt.status} ${studentHODAttempt.body?.error?.code || 'FORBIDDEN'})`
   );
 
-  // Test 18: Faculty account without HOD role is denied HOD-only endpoints
+  // Test 27: Faculty account without HOD role is denied HOD-only endpoints
   const teacherHODAttempt = await makeApiRequest(app, {
     path: '/api/v1/admin/hod/programmes',
     method: 'GET',
@@ -348,7 +559,7 @@ async function run() {
     `Faculty without HOD role strictly denied HOD-only endpoints (HTTP ${teacherHODAttempt.status} ${teacherHODAttempt.body?.error?.code || 'FORBIDDEN'})`
   );
 
-  // Test 19: Authorized HOD can access HOD endpoints
+  // Test 28: Authorized HOD can access HOD endpoints
   const hodAccessRes = await makeApiRequest(app, {
     path: '/api/v1/admin/hod/programmes',
     method: 'GET',
@@ -360,7 +571,34 @@ async function run() {
     `Authorized HOD successfully accesses HOD endpoints (HTTP 200, programmes retrieved)`
   );
 
-  // Test 20: Student token cannot create assessments
+  // Test 29: Multi-role HOD with X-Active-Role: subject_teacher STILL accesses HOD endpoints
+  // (Administrative authority maintained across teaching workspaces)
+  const hodWithTeacherWorkspace = await makeApiRequest(app, {
+    path: '/api/v1/admin/hod/programmes',
+    method: 'GET',
+    token: testMultiRoleHodToken,
+    headers: { 'X-Active-Role': 'subject_teacher' }
+  });
+
+  assert(
+    hodWithTeacherWorkspace.status === 200,
+    'HOD retaining database HOD role accesses HOD endpoints even when active workspace is subject_teacher'
+  );
+
+  // Test 30: Faculty member cannot spoof X-Active-Role: hod
+  const teacherSpoofHod = await makeApiRequest(app, {
+    path: '/api/v1/admin/hod/programmes',
+    method: 'GET',
+    token: testTeacherToken,
+    headers: { 'X-Active-Role': 'hod' }
+  });
+
+  assert(
+    teacherSpoofHod.status === 403 && teacherSpoofHod.body?.error?.code === 'FORBIDDEN_ROLE_SWITCH',
+    'Faculty member attempting X-Active-Role: hod is rejected with HTTP 403 FORBIDDEN_ROLE_SWITCH'
+  );
+
+  // Test 31: Student token cannot create assessments
   const studentCreateAssessment = await makeApiRequest(app, {
     path: '/api/v1/assessments',
     method: 'POST',
@@ -380,7 +618,7 @@ async function run() {
   // --- 5. Negative Security & Tampered Token Tests ---
   console.log('\n--- 5. Negative Security & Tampered Token Invariants ---');
 
-  // Test 21: Missing Authorization header rejected
+  // Test 32: Missing Authorization header rejected
   const noTokenRes = await makeApiRequest(app, {
     path: '/api/v1/auth/me',
     method: 'GET'
@@ -391,7 +629,7 @@ async function run() {
     'Missing authentication token rejected with HTTP 401 UNAUTHORIZED'
   );
 
-  // Test 22: Tampered JWT token rejected
+  // Test 33: Tampered JWT token rejected
   const tamperedTokenRes = await makeApiRequest(app, {
     path: '/api/v1/auth/me',
     method: 'GET',
@@ -403,7 +641,7 @@ async function run() {
     'Tampered JWT token rejected with HTTP 401'
   );
 
-  // Test 23: Client-side role spoofing in body is completely ignored by backend
+  // Test 34: Client-side role spoofing in body is completely ignored by backend
   const spoofAttemptRes = await makeApiRequest(app, {
     path: '/api/v1/auth/verify-portal',
     method: 'POST',
@@ -420,7 +658,7 @@ async function run() {
     'Client-supplied roles in request body are strictly ignored; backend queries authoritative DB records'
   );
 
-  // Test 24: Invalid portal parameter returns 400
+  // Test 35: Invalid portal parameter returns 400
   const invalidPortalRes = await makeApiRequest(app, {
     path: '/api/v1/auth/verify-portal',
     method: 'POST',

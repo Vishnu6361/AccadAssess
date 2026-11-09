@@ -16,14 +16,14 @@ import {
 } from 'lucide-react';
 
 export interface ResetPasswordViewProps {
-  portal?: 'student' | 'faculty';
+  portal?: 'student' | 'faculty' | 'admin';
   onSuccessRedirect?: () => void;
-  onNavigatePortal?: (portal: 'student' | 'faculty') => void;
+  onNavigatePortal?: (portal: 'student' | 'faculty' | 'admin') => void;
   onBackToSelection?: () => void;
 }
 
 export const ResetPasswordView: React.FC<ResetPasswordViewProps> = ({
-  portal = 'faculty',
+  portal = 'admin',
   onSuccessRedirect,
   onNavigatePortal,
   onBackToSelection
@@ -188,7 +188,7 @@ export const ResetPasswordView: React.FC<ResetPasswordViewProps> = ({
                     </p>
                     {countdown !== null && (
                       <p className="text-[11px] font-semibold text-[#166534] pt-0.5">
-                        Redirecting to Faculty Sign In in {countdown} second{countdown === 1 ? '' : 's'}...
+                        Redirecting to {portal === 'student' ? 'Student' : portal === 'admin' ? 'Admin' : 'Faculty'} Sign In in {countdown} second{countdown === 1 ? '' : 's'}...
                       </p>
                     )}
                   </div>
@@ -199,7 +199,7 @@ export const ResetPasswordView: React.FC<ResetPasswordViewProps> = ({
                   onClick={handleImmediateProceed}
                   className="btn-primary w-full text-xs sm:text-sm font-bold min-h-[42px] flex items-center justify-center space-x-2 shadow-sm"
                 >
-                  <span>Proceed to Faculty Sign In</span>
+                  <span>Proceed to {portal === 'student' ? 'Student' : portal === 'admin' ? 'Admin' : 'Faculty'} Sign In</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
@@ -226,11 +226,11 @@ export const ResetPasswordView: React.FC<ResetPasswordViewProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      clearRecovery('faculty');
+                      clearRecovery(portal);
                       if (onNavigatePortal) {
-                        onNavigatePortal('faculty');
+                        onNavigatePortal(portal);
                       } else if (typeof window !== 'undefined') {
-                        window.location.href = '/faculty/login';
+                        window.location.href = `/${portal}/login`;
                       }
                     }}
                     className="btn-primary w-full text-xs sm:text-sm font-bold min-h-[42px] flex items-center justify-center space-x-2 shadow-sm"
@@ -245,7 +245,7 @@ export const ResetPasswordView: React.FC<ResetPasswordViewProps> = ({
                     className="btn-secondary w-full text-xs font-semibold min-h-[40px] flex items-center justify-center space-x-2"
                   >
                     <ArrowLeft className="w-3.5 h-3.5" />
-                    <span>Return to Faculty Sign In</span>
+                    <span>Return to {portal === 'student' ? 'Student' : portal === 'admin' ? 'Admin' : 'Faculty'} Sign In</span>
                   </button>
                 </div>
               </div>

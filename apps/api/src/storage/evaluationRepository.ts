@@ -29,18 +29,27 @@ export class InMemoryEvaluationRepository implements IEvaluationRepository {
 
   async getEvaluationById(id: string): Promise<Evaluation | null> {
     const found = this.inMemoryDb.evaluations.find(e => e.id === id);
-    return found ? { ...found } : null;
+    if (!found) return null;
+    const criterion_scores = this.inMemoryDb.evaluationCriterionScores.filter(cs => cs.evaluation_id === found.id);
+    return { ...found, criterion_scores };
   }
 
   async getEvaluationBySubmissionId(submissionId: string): Promise<Evaluation | null> {
     const found = this.inMemoryDb.evaluations.find(e => e.submission_id === submissionId);
-    return found ? { ...found } : null;
+    if (!found) return null;
+    const criterion_scores = this.inMemoryDb.evaluationCriterionScores.filter(cs => cs.evaluation_id === found.id);
+    return { ...found, criterion_scores };
   }
 
   async listEvaluationsForAssessment(assessmentId: string): Promise<any[]> {
     const subs = this.inMemoryDb.submissions.filter(s => s.assessment_id === assessmentId);
     const subIds = subs.map(s => s.id);
-    return this.inMemoryDb.evaluations.filter(e => subIds.includes(e.submission_id));
+    return this.inMemoryDb.evaluations
+      .filter(e => subIds.includes(e.submission_id))
+      .map(e => ({
+        ...e,
+        criterion_scores: this.inMemoryDb.evaluationCriterionScores.filter(cs => cs.evaluation_id === e.id)
+      }));
   }
 
   async saveEvaluation(params: {
@@ -58,6 +67,11 @@ export class InMemoryEvaluationRepository implements IEvaluationRepository {
     if (!assessment) throw new Error('Assessment not found');
 
     const nowIso = new Date().toISOString();
+
+    if (this.inMemoryDb.resultPublications.some(rp => rp.assessment_id === submission.assessment_id)) {
+      throw new Error('Cannot grade assignment: Results have already been published for this assessment');
+    }
+
     let evaluation = this.inMemoryDb.evaluations.find(e => e.submission_id === params.submissionId);
 
     const isLate = submission.late_status === 'late';
@@ -75,7 +89,14 @@ export class InMemoryEvaluationRepository implements IEvaluationRepository {
 
     calculatedTotal = Math.max(0, finalRawScore - penaltyToDeduct);
 
+    if (params.status !== 'draft' && params.status !== 'completed') {
+      throw new Error(`Invalid evaluation status "${params.status}": Evaluations can only be saved as draft or completed. Result publication must proceed through publishResults.`);
+    }
+
     if (evaluation) {
+      if (evaluation.status === 'published') {
+        throw new Error('Cannot modify a published evaluation');
+      }
       evaluation.status = params.status;
       evaluation.raw_score = finalRawScore;
       evaluation.late_penalty_deducted = penaltyToDeduct;
@@ -118,14 +139,38 @@ export class InMemoryEvaluationRepository implements IEvaluationRepository {
       }
     }
 
-    return evaluation;
+    const criterion_scores = this.inMemoryDb.evaluationCriterionScores.filter(cs => cs.evaluation_id === evaluation!.id);
+    return { ...evaluation, criterion_scores };
   }
 
   async publishResults(assessmentId: string, publishedBy: string, remarks?: string): Promise<{ publication: ResultPublication; publishedCount: number }> {
     const nowIso = new Date().toISOString();
-    const subs = this.inMemoryDb.submissions.filter(s => s.assessment_id === assessmentId);
-    const subIds = subs.map(s => s.id);
 
+    if (this.inMemoryDb.resultPublications.some(rp => rp.assessment_id === assessmentId)) {
+      const err: any = new Error(`Grades for assessment ${assessmentId} have already been published`);
+      err.code = 'ALREADY_PUBLISHED';
+      throw err;
+    }
+
+    const subs = this.inMemoryDb.submissions.filter(s => s.assessment_id === assessmentId);
+    if (subs.length === 0) {
+      const err: any = new Error(`Cannot publish grades: No student submissions exist for assessment ${assessmentId}`);
+      err.code = 'NO_SUBMISSIONS';
+      throw err;
+    }
+
+    const incomplete = subs.filter(s => {
+      const ev = this.inMemoryDb.evaluations.find(e => e.submission_id === s.id);
+      return !ev || ev.status !== 'completed';
+    });
+
+    if (incomplete.length > 0) {
+      const err: any = new Error(`Cannot publish grades: ${incomplete.length} submitted assignment(s) are awaiting completed evaluation`);
+      err.code = 'INCOMPLETE_EVALUATIONS';
+      throw err;
+    }
+
+    const subIds = subs.map(s => s.id);
     let count = 0;
     for (const ev of this.inMemoryDb.evaluations) {
       if (subIds.includes(ev.submission_id) && ev.status === 'completed') {
@@ -153,7 +198,10 @@ export class InMemoryEvaluationRepository implements IEvaluationRepository {
 
     return this.inMemoryDb.evaluations
       .filter(e => subIds.includes(e.submission_id) && e.status === 'published')
-      .map(e => ({ ...e }));
+      .map(e => {
+        const criterion_scores = this.inMemoryDb.evaluationCriterionScores.filter(cs => cs.evaluation_id === e.id);
+        return { ...e, criterion_scores };
+      });
   }
 
   getMode(): 'supabase_postgresql' | 'in_memory_mock' {
@@ -247,7 +295,6 @@ export class SupabaseEvaluationRepository implements IEvaluationRepository {
 
     if (assErr || !assessment) throw new Error('Assessment not found in PostgreSQL');
 
-    const nowIso = new Date().toISOString();
     const isLate = submission.late_status === 'late';
     let penaltyToDeduct = 0;
     if (isLate && assessment.late_penalty_mode === 'fixed') {
@@ -256,112 +303,69 @@ export class SupabaseEvaluationRepository implements IEvaluationRepository {
 
     let finalRawScore = params.rawScore ?? 0;
     if (params.criterionScores && params.criterionScores.length > 0) {
-      finalRawScore = params.criterionScores.reduce((sum, cs) => sum + Number(cs.score || 0), 0);
+      finalRawScore = params.criterionScores.reduce((sum: number, cs: any) => sum + Number(cs.score || 0), 0);
     }
 
     const calculatedTotal = Math.max(0, finalRawScore - penaltyToDeduct);
-    const existing = await this.getEvaluationBySubmissionId(params.submissionId);
 
-    let evaluationResult: Evaluation;
-
-    if (existing) {
-      const { data: updated, error: updateErr } = await this.client
-        .from('evaluations')
-        .update({
-          status: params.status,
-          raw_score: finalRawScore,
-          late_penalty_deducted: penaltyToDeduct,
-          total_score: calculatedTotal,
-          general_feedback: params.generalFeedback || null,
-          updated_at: nowIso
-        })
-        .eq('id', existing.id)
-        .select()
-        .single();
-
-      if (updateErr) throw new Error(`Failed to update evaluation: ${updateErr.message}`);
-      evaluationResult = updated;
-    } else {
-      const { data: inserted, error: insertErr } = await this.client
-        .from('evaluations')
-        .insert({
-          id: randomUUID(),
-          submission_id: params.submissionId,
-          submission_version_id: submission.active_version_id || randomUUID(),
-          evaluator_id: params.evaluatorId,
-          status: params.status,
-          raw_score: finalRawScore,
-          late_penalty_deducted: penaltyToDeduct,
-          total_score: calculatedTotal,
-          general_feedback: params.generalFeedback || null,
-          created_at: nowIso,
-          updated_at: nowIso
-        })
-        .select()
-        .single();
-
-      if (insertErr) throw new Error(`Failed to insert evaluation: ${insertErr.message}`);
-      evaluationResult = inserted;
-    }
-
-    if (params.criterionScores && params.criterionScores.length > 0) {
-      await this.client.from('evaluation_criterion_scores').delete().eq('evaluation_id', evaluationResult.id);
-
-      const toInsert = params.criterionScores.map(cs => ({
-        id: randomUUID(),
-        evaluation_id: evaluationResult.id,
+    const { data: evalResult, error: evalErr } = await this.client.rpc('save_evaluation_atomic', {
+      p_submission_id: params.submissionId,
+      p_submission_version_id: submission.active_version_id || randomUUID(),
+      p_evaluator_id: params.evaluatorId,
+      p_status: params.status,
+      p_raw_score: finalRawScore,
+      p_late_penalty_deducted: penaltyToDeduct,
+      p_total_score: calculatedTotal,
+      p_general_feedback: params.generalFeedback || null,
+      p_criterion_scores: (params.criterionScores || []).map((cs: any) => ({
+        id: cs.id || randomUUID(),
         criterion_id: cs.criterion_id,
         selected_level_id: cs.selected_level_id || null,
         score: Number(cs.score),
-        feedback: cs.feedback || null,
-        created_at: nowIso
-      }));
+        feedback: cs.feedback || null
+      }))
+    });
 
-      await this.client.from('evaluation_criterion_scores').insert(toInsert);
+    if (evalErr) {
+      throw new Error(`Failed to save evaluation: ${evalErr.message}`);
     }
 
-    return evaluationResult;
+    const fullEval = await this.getEvaluationById(evalResult.id);
+    return fullEval as Evaluation;
   }
 
   async publishResults(assessmentId: string, publishedBy: string, remarks?: string): Promise<{ publication: ResultPublication; publishedCount: number }> {
     this.assertStagingProject();
-    const nowIso = new Date().toISOString();
 
-    const { data: subs } = await this.client
-      .from('submissions')
-      .select('id')
-      .eq('assessment_id', assessmentId);
+    const { data, error } = await this.client.rpc('publish_evaluation_results', {
+      p_assessment_id: assessmentId,
+      p_published_by: publishedBy,
+      p_remarks: remarks || null
+    });
 
-    const subIds = (subs || []).map(s => s.id);
-    let count = 0;
-
-    if (subIds.length > 0) {
-      const { data: updatedEvals, error: updateErr } = await this.client
-        .from('evaluations')
-        .update({ status: 'published', updated_at: nowIso })
-        .in('submission_id', subIds)
-        .eq('status', 'completed')
-        .select();
-
-      if (updateErr) throw new Error(`Failed to transition evaluations to published: ${updateErr.message}`);
-      count = updatedEvals ? updatedEvals.length : 0;
+    if (error) {
+      if (error.code === 'P0004' || error.message?.includes('already been published')) {
+        const err: any = new Error(error.message);
+        err.code = 'ALREADY_PUBLISHED';
+        throw err;
+      }
+      if (error.code === 'P0005' || error.message?.includes('No student submissions exist')) {
+        const err: any = new Error(error.message);
+        err.code = 'NO_SUBMISSIONS';
+        throw err;
+      }
+      if (error.code === 'P0006' || error.message?.includes('awaiting completed evaluation')) {
+        const err: any = new Error(error.message);
+        err.code = 'INCOMPLETE_EVALUATIONS';
+        throw err;
+      }
+      throw new Error(`Failed to publish evaluation results: ${error.message}`);
     }
 
-    const { data: publication, error: pubErr } = await this.client
-      .from('result_publications')
-      .insert({
-        id: randomUUID(),
-        assessment_id: assessmentId,
-        published_by: publishedBy,
-        published_at: nowIso,
-        remarks: remarks || null
-      })
-      .select()
-      .single();
-
-    if (pubErr) throw new Error(`Failed to record result publication: ${pubErr.message}`);
-
-    return { publication, publishedCount: count };
+    return {
+      publication: data.publication as ResultPublication,
+      publishedCount: data.published_count as number
+    };
   }
 
   async getStudentPublishedResults(studentId: string): Promise<any[]> {
@@ -375,7 +379,7 @@ export class SupabaseEvaluationRepository implements IEvaluationRepository {
 
     const { data: evals, error } = await this.client
       .from('evaluations')
-      .select('*')
+      .select('*, criterion_scores:evaluation_criterion_scores(*)')
       .in('submission_id', subIds)
       .eq('status', 'published')
       .order('updated_at', { ascending: false });
@@ -397,6 +401,10 @@ export const setEvaluationRepositoryForTesting = (repo: IEvaluationRepository | 
 
 export const getEvaluationRepository = (): IEvaluationRepository => {
   if (activeEvaluationRepoOverride) return activeEvaluationRepoOverride;
+
+  if (process.env.NODE_ENV === 'test' || process.env.SMARTFA_TEST_MODE === 'true') {
+    return new InMemoryEvaluationRepository(db);
+  }
 
   if (isLiveSupabaseConfigured && supabaseAdmin) {
     return new SupabaseEvaluationRepository(supabaseAdmin);

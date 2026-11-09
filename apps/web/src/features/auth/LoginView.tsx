@@ -14,15 +14,16 @@ import {
   EyeOff, 
   GraduationCap, 
   Users, 
+  Building2,
   ArrowRight 
 } from 'lucide-react';
 
 export type AuthViewMode = 'login' | 'forgot_password' | 'reset_password';
 
 export interface LoginViewProps {
-  portal: 'student' | 'faculty';
+  portal: 'student' | 'faculty' | 'admin';
   initialMode?: AuthViewMode;
-  onNavigatePortal?: (portal: 'student' | 'faculty') => void;
+  onNavigatePortal?: (portal: 'student' | 'faculty' | 'admin') => void;
   onBackToSelection?: () => void;
 }
 
@@ -66,7 +67,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [portalMismatch, setPortalMismatch] = useState<{
     denied: boolean;
     message: string;
-    targetPortal: 'student' | 'faculty';
+    targetPortal: 'student' | 'faculty' | 'admin';
   } | null>(null);
 
   // Auto-switch to reset_password if password recovery is active in session
@@ -100,8 +101,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
     try {
       await login(email, password, portal);
     } catch (err: any) {
-      if (err.code === 'PORTAL_ACCESS_DENIED' || err.message?.includes('PORTAL_ACCESS_DENIED') || err.message?.includes('Access denied: This portal')) {
-        const target = portal === 'student' ? 'faculty' : 'student';
+      if (err.code === 'PORTAL_ACCESS_DENIED' || err.message?.includes('PORTAL_ACCESS_DENIED') || err.message?.includes('Access denied:')) {
+        const target: 'student' | 'faculty' | 'admin' = err.recommendedPortal || (portal === 'student' ? 'faculty' : (portal === 'faculty' ? 'admin' : 'faculty'));
         setPortalMismatch({
           denied: true,
           message: err.message,
@@ -187,12 +188,27 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
   // Portal-specific configuration
   const isStudentPortal = portal === 'student';
-  const portalHeading = isStudentPortal ? 'AcadAssess Student Portal' : 'AcadAssess Faculty Portal';
+  const isAdminPortal = portal === 'admin';
+  const portalHeading = isStudentPortal 
+    ? 'AcadAssess Student Portal' 
+    : isAdminPortal 
+    ? 'AcadAssess Admin Portal' 
+    : 'AcadAssess Faculty Portal';
   const portalDescription = isStudentPortal 
     ? 'Sign in to view assessments, submit assignments, track submission history, and review published results.'
+    : isAdminPortal
+    ? 'Sign in as Head of Department (HOD) to manage academic structure, programmes, classes, user directory, and institutional oversight.'
     : 'Sign in to create assessments, configure rubrics, evaluate submissions, and manage authorized academic activities.';
-  const signInButtonLabel = isStudentPortal ? 'Student Sign In' : 'Faculty Sign In';
-  const emailPlaceholder = isStudentPortal ? 'e.g. adm25mca9718@sjbit.edu.in' : 'e.g. faculty@sjbit.edu.in';
+  const signInButtonLabel = isStudentPortal 
+    ? 'Student Sign In' 
+    : isAdminPortal
+    ? 'Admin Sign In'
+    : 'Faculty Sign In';
+  const emailPlaceholder = isStudentPortal 
+    ? 'e.g. adm25mca9718@sjbit.edu.in' 
+    : isAdminPortal
+    ? 'e.g. hod@sjbit.edu.in'
+    : 'e.g. faculty@sjbit.edu.in';
 
   return (
     <AcademicBackground>
@@ -245,13 +261,15 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     <h2 className="text-sm sm:text-base font-bold text-academic-deepGreen flex items-center space-x-2">
                       {isStudentPortal ? (
                         <GraduationCap className="w-4 h-4 sm:w-5 sm:h-5 text-academic-primaryGreen" />
+                      ) : isAdminPortal ? (
+                        <Building2 className="w-4 h-4 sm:w-5 sm:h-5 text-academic-primaryGreen" />
                       ) : (
                         <Users className="w-4 h-4 sm:w-5 sm:h-5 text-academic-primaryGreen" />
                       )}
-                      <span>{isStudentPortal ? 'Student Sign In' : 'Faculty Sign In'}</span>
+                      <span>{signInButtonLabel}</span>
                     </h2>
                     <p className="text-xs text-academic-muted mt-0.5">
-                      Enter your verified institutional credentials to access your {isStudentPortal ? 'student' : 'faculty'} workspace.
+                      Enter your verified institutional credentials to access your {isStudentPortal ? 'student' : isAdminPortal ? 'HOD administrative' : 'faculty'} workspace.
                     </p>
                   </div>
                 </div>
@@ -275,7 +293,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                           onClick={() => onNavigatePortal(portalMismatch.targetPortal)}
                           className="w-full py-2 px-3 rounded-lg bg-[#8C3A00] hover:bg-[#6E2E00] text-white font-bold text-xs flex items-center justify-center space-x-1.5 transition-colors min-h-[38px]"
                         >
-                          <span>Go to {portalMismatch.targetPortal === 'student' ? 'Student Portal' : 'Faculty Portal'}</span>
+                          <span>Go to {portalMismatch.targetPortal === 'student' ? 'Student Portal' : portalMismatch.targetPortal === 'admin' ? 'Admin Portal' : 'Faculty Portal'}</span>
                           <ArrowRight className="w-3.5 h-3.5" />
                         </button>
                       </div>
@@ -393,41 +411,76 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     {isSubmitting || isLoading ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Verifying {isStudentPortal ? 'Student' : 'Faculty'} Credentials...</span>
+                        <span>Verifying {isStudentPortal ? 'Student' : isAdminPortal ? 'Admin' : 'Faculty'} Credentials...</span>
                       </>
                     ) : (
                       <span>{signInButtonLabel}</span>
                     )}
                   </button>
 
-                  {/* Cross-Portal Switch Link */}
+                  {/* Cross-Portal Switch Links */}
                   {onNavigatePortal && (
-                    <div className="pt-2.5 border-t border-academic-borderSubtle text-center">
-                      <p className="text-xs text-academic-muted">
-                        {isStudentPortal ? (
-                          <>
-                            Are you faculty or an administrator?{' '}
-                            <button
-                              type="button"
-                              onClick={() => onNavigatePortal('faculty')}
-                              className="font-bold text-academic-primaryGreen hover:underline focus:outline-none"
-                            >
-                              Go to Faculty Portal &rarr;
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            Are you a student?{' '}
-                            <button
-                              type="button"
-                              onClick={() => onNavigatePortal('student')}
-                              className="font-bold text-academic-primaryGreen hover:underline focus:outline-none"
-                            >
-                              Go to Student Portal &rarr;
-                            </button>
-                          </>
-                        )}
-                      </p>
+                    <div className="pt-2.5 border-t border-academic-borderSubtle text-center space-y-1.5">
+                      {isStudentPortal && (
+                        <div className="flex flex-wrap items-center justify-center gap-x-2 text-xs text-academic-muted">
+                          <span>Faculty or Academic Head?</span>
+                          <button
+                            type="button"
+                            onClick={() => onNavigatePortal('faculty')}
+                            className="font-bold text-academic-primaryGreen hover:underline focus:outline-none"
+                          >
+                            Faculty Portal &rarr;
+                          </button>
+                          <span>&bull;</span>
+                          <button
+                            type="button"
+                            onClick={() => onNavigatePortal('admin')}
+                            className="font-bold text-academic-primaryGreen hover:underline focus:outline-none"
+                          >
+                            Admin Portal &rarr;
+                          </button>
+                        </div>
+                      )}
+                      {portal === 'faculty' && (
+                        <div className="flex flex-wrap items-center justify-center gap-x-2 text-xs text-academic-muted">
+                          <span>Student or Academic Head?</span>
+                          <button
+                            type="button"
+                            onClick={() => onNavigatePortal('student')}
+                            className="font-bold text-academic-primaryGreen hover:underline focus:outline-none"
+                          >
+                            Student Portal &rarr;
+                          </button>
+                          <span>&bull;</span>
+                          <button
+                            type="button"
+                            onClick={() => onNavigatePortal('admin')}
+                            className="font-bold text-academic-primaryGreen hover:underline focus:outline-none"
+                          >
+                            Admin Portal &rarr;
+                          </button>
+                        </div>
+                      )}
+                      {isAdminPortal && (
+                        <div className="flex flex-wrap items-center justify-center gap-x-2 text-xs text-academic-muted">
+                          <span>Faculty or Student?</span>
+                          <button
+                            type="button"
+                            onClick={() => onNavigatePortal('faculty')}
+                            className="font-bold text-academic-primaryGreen hover:underline focus:outline-none"
+                          >
+                            Faculty Portal &rarr;
+                          </button>
+                          <span>&bull;</span>
+                          <button
+                            type="button"
+                            onClick={() => onNavigatePortal('student')}
+                            className="font-bold text-academic-primaryGreen hover:underline focus:outline-none"
+                          >
+                            Student Portal &rarr;
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </form>
@@ -444,7 +497,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     Reset Account Password
                   </h2>
                   <p className="text-xs text-academic-muted mt-0.5">
-                    Enter your verified institutional email address to receive password-recovery instructions for your {isStudentPortal ? 'student' : 'faculty'} account.
+                    Enter your verified institutional email address to receive password-recovery instructions for your {isStudentPortal ? 'student' : isAdminPortal ? 'HOD administrative' : 'faculty'} account.
                   </p>
                 </div>
 
@@ -489,7 +542,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       className="btn-primary w-full text-xs sm:text-sm font-bold min-h-[42px] flex items-center justify-center space-x-2 shadow-sm"
                     >
                       <ArrowLeft className="w-4 h-4" />
-                      <span>Return to {isStudentPortal ? 'Student' : 'Faculty'} Sign In</span>
+                      <span>Return to {isStudentPortal ? 'Student' : isAdminPortal ? 'Admin' : 'Faculty'} Sign In</span>
                     </button>
                   </div>
                 ) : (
@@ -654,7 +707,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                         className="btn-secondary w-full text-xs font-semibold min-h-[40px] flex items-center justify-center space-x-2"
                       >
                         <ArrowLeft className="w-3.5 h-3.5" />
-                        <span>Return to {isStudentPortal ? 'Student' : 'Faculty'} Sign In</span>
+                        <span>Return to {isStudentPortal ? 'Student' : isAdminPortal ? 'Admin' : 'Faculty'} Sign In</span>
                       </button>
                     </div>
                   </div>

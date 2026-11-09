@@ -77,8 +77,9 @@ export const StudentResults: React.FC = () => {
       ) : (
         <div className="space-y-6">
           {results.map((result) => {
-            const percentage = result.question_max_marks 
-              ? Math.round((result.total_score / result.question_max_marks) * 100) 
+            const maxMarks = (result as any).assessment_max_marks || result.question_max_marks || 50;
+            const percentage = maxMarks 
+              ? Math.round((result.total_score / maxMarks) * 100) 
               : 0;
 
             return (
@@ -112,22 +113,27 @@ export const StudentResults: React.FC = () => {
                         Final Score
                       </span>
                       <div className="text-lg font-bold text-academic-deepGreen">
-                        {result.total_score} <span className="text-xs text-academic-muted font-normal">/ {result.question_max_marks} Marks</span>
+                        {result.total_score} <span className="text-xs text-academic-muted font-normal">/ {maxMarks} Marks</span>
                       </div>
-                      <span className="text-[11px] text-academic-primaryGreen font-semibold">
+                      <span className="text-[11px] text-academic-primaryGreen font-semibold block">
                         {percentage}% Score
                       </span>
+                      {Boolean(result.late_penalty_deducted && result.late_penalty_deducted > 0) && (
+                        <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-mono inline-block mt-1">
+                          Late Penalty: -{result.late_penalty_deducted} Marks
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
 
-                {/* Question Prompt */}
+                {/* Question Prompt or Instructions */}
                 <div className="p-5 border-b border-academic-border bg-[#FFFDF8] text-xs">
                   <span className="font-semibold text-academic-deepGreen block mb-1">
-                    Evaluated Question Prompt:
+                    {result.question_prompt ? 'Evaluated Question Prompt:' : 'Course Assessment Instructions:'}
                   </span>
                   <p className="text-academic-deepGreen leading-relaxed">
-                    {result.question_prompt}
+                    {result.question_prompt || (result as any).assessment_instructions || 'Refer to submitted coursework and published assignment brief.'}
                   </p>
                 </div>
 

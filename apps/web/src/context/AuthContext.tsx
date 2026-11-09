@@ -17,13 +17,13 @@ export interface AuthContextType {
   accountStatusMessage: string | null;
   isPasswordRecovery: boolean;
   recoveryError: string | null;
-  login: (email: string, password: string, portal?: 'student' | 'faculty') => Promise<void>;
+  login: (email: string, password: string, portal?: 'student' | 'faculty' | 'admin') => Promise<void>;
   logout: () => Promise<void>;
   switchRole: (role: string) => void;
   clearError: () => void;
   refreshContext: () => Promise<void>;
-  clearRecovery: (portal?: 'student' | 'faculty') => void;
-  requestPasswordReset: (email: string, portal?: 'student' | 'faculty') => Promise<{ success: boolean; message: string }>;
+  clearRecovery: (portal?: 'student' | 'faculty' | 'admin') => void;
+  requestPasswordReset: (email: string, portal?: 'student' | 'faculty' | 'admin') => Promise<{ success: boolean; message: string }>;
   updatePassword: (newPassword: string) => Promise<{ success: boolean; message?: string }>;
 }
 
@@ -395,7 +395,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
   }, []);
 
-  const login = async (email: string, password: string, portal?: 'student' | 'faculty'): Promise<void> => {
+  const login = async (email: string, password: string, portal?: 'student' | 'faculty' | 'admin'): Promise<void> => {
     setError(null);
     setIsLoading(true);
 
@@ -432,14 +432,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             try {
               await authApi.verifyPortal(portal);
             } catch (portalErr: any) {
-              // Sign out immediately so unauthorized role is not retained
-              if (supabase) {
-                await supabase.auth.signOut().catch(() => {});
-              }
-              setUser(null);
-              setSession(null);
-              setUserContext(null);
-              setActiveRole(null);
+              // SAFEGUARD 1: Do not sign out of Supabase if the user simply accessed the wrong portal.
+              // Preserve the valid authenticated session and surface the error to LoginView.
               throw portalErr;
             }
           }
@@ -454,15 +448,31 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const userRoles = demoRes.roles || [];
 
       // Enforce portal separation in fallback
-      if (portal === 'student' && !userRoles.includes('student')) {
-        localStorage.removeItem('smartfa_dev_token');
-        throw new Error('Access denied: This portal is restricted to students. Your account has faculty/staff credentials. Please sign in through the Faculty Portal.');
-      }
+      const hasHOD = userRoles.includes('hod');
+      const hasFaculty = userRoles.some((r: string) => ['subject_teacher', 'class_teacher', 'proctor'].includes(r));
+      const hasStudent = userRoles.includes('student');
 
-      const staffRoles = ['subject_teacher', 'class_teacher', 'proctor', 'hod'];
-      if (portal === 'faculty' && !userRoles.some((r: string) => staffRoles.includes(r))) {
-        localStorage.removeItem('smartfa_dev_token');
-        throw new Error('Access denied: This portal is restricted to faculty, instructors, and academic administrators. Please sign in through the Student Portal.');
+      if (portal === 'student') {
+        if (hasHOD || hasFaculty) {
+          throw new Error('Access denied: Accounts with faculty or administrative privileges cannot access the Student Portal.');
+        }
+        if (!hasStudent) {
+          throw new Error('Access denied: This portal is restricted to enrolled students.');
+        }
+      } else if (portal === 'faculty') {
+        if (hasHOD) {
+          throw new Error('Access denied: Accounts with Head of Department (HOD) privileges must sign in through the Admin Portal.');
+        }
+        if (hasStudent) {
+          throw new Error('Access denied: Student accounts cannot access the Faculty Portal.');
+        }
+        if (!hasFaculty) {
+          throw new Error('Access denied: This portal is restricted to faculty members. Please sign in through your designated portal.');
+        }
+      } else if (portal === 'admin') {
+        if (!hasHOD) {
+          throw new Error('Access denied: The Admin Portal is strictly reserved for the Head of Department (HOD).');
+        }
       }
 
       setUser({ id: demoRes.user.id, email: demoRes.user.email } as any);
@@ -534,22 +544,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const clearError = () => setError(null);
 
-  const clearRecovery = (portal?: 'student' | 'faculty') => {
+  const clearRecovery = (portal?: 'student' | 'faculty' | 'admin') => {
     setIsPasswordRecovery(false);
     setRecoveryError(null);
     if (typeof window !== 'undefined' && window.history?.replaceState) {
       const searchParams = new URLSearchParams(window.location.search);
-      const queryPortal = searchParams.get('portal') as 'student' | 'faculty' | null;
+      const queryPortal = searchParams.get('portal') as 'student' | 'faculty' | 'admin' | null;
       const target = portal 
         ? `/${portal}/login` 
         : queryPortal === 'student'
         ? '/student/login'
+        : queryPortal === 'admin'
+        ? '/admin/login'
         : '/faculty/login';
       window.history.replaceState(null, '', target);
     }
   };
 
-  const requestPasswordReset = async (email: string, portal?: 'student' | 'faculty'): Promise<{ success: boolean; message: string }> => {
+  const requestPasswordReset = async (email: string, portal?: 'student' | 'faculty' | 'admin'): Promise<{ success: boolean; message: string }> => {
     const trimmed = email.trim().toLowerCase();
     if (!trimmed) {
       throw new Error('Please enter your institutional email address.');
@@ -568,7 +580,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     // Clean dedicated path without hash collisions; explicitly include target portal
-    const targetPortal = portal || 'faculty';
+    const targetPortal = portal || 'admin';
     const redirectTo = `${window.location.origin}/reset-password?portal=${targetPortal}`;
 
     try {

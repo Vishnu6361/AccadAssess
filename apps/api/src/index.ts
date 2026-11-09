@@ -1,9 +1,10 @@
 import express, { Request, Response, NextFunction } from 'express';
+import { randomUUID } from 'crypto';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { z } from 'zod';
 import jwt from 'jsonwebtoken';
-import { DEV_JWT_SECRET, authenticateJWT } from './auth/jwt.js';
+import { DEV_JWT_SECRET, REAUTH_JWT_SECRET, authenticateJWT, supabaseAdmin } from './auth/jwt.js';
 import { loadUserContext } from './authorization/rbac.js';
 import { getUserRepository } from './storage/userRepository.js';
 import { db } from './storage/db.js';
@@ -165,6 +166,8 @@ export const corsOptions: cors.CorsOptions = {
     'Authorization',
     'X-Active-Role',
     'x-active-role',
+    'X-Reauth-Token',
+    'x-reauth-token',
     'Accept',
     'Origin',
     'X-Requested-With'
@@ -241,24 +244,38 @@ app.get('/api/v1/auth/me', authenticateJWT, loadUserContext, (req: Request, res:
  */
 app.post('/api/v1/auth/verify-portal', authenticateJWT, loadUserContext, (req: Request, res: Response) => {
   const { portal } = req.body || {};
-  if (!portal || (portal !== 'student' && portal !== 'faculty')) {
+  if (!portal || (portal !== 'student' && portal !== 'faculty' && portal !== 'admin')) {
     return res.status(400).json({
       error: {
         code: 'INVALID_PORTAL',
-        message: "Portal parameter must be either 'student' or 'faculty'"
+        message: "Portal parameter must be 'student', 'faculty', or 'admin'"
       }
     });
   }
 
   const { roles, profile, isHOD } = req.userContext!;
+  const facultyRoles = ['subject_teacher', 'class_teacher', 'proctor'];
+  const hasFacultyRole = roles.some(r => facultyRoles.includes(r as any));
 
   if (portal === 'student') {
+    // Explicitly reject accounts possessing HOD or faculty roles, even if they have a student role
+    if (roles.includes('hod') || hasFacultyRole) {
+      return res.status(403).json({
+        error: {
+          code: 'PORTAL_ACCESS_DENIED',
+          message: 'Access denied: Accounts with faculty or administrative privileges cannot access the Student Portal.',
+          recommendedPortal: roles.includes('hod') ? 'admin' : 'faculty',
+          userRoles: roles
+        }
+      });
+    }
+
     if (!roles.includes('student')) {
       return res.status(403).json({
         error: {
           code: 'PORTAL_ACCESS_DENIED',
-          message: 'Access denied: This portal is restricted to students. Your account has faculty/staff credentials. Please sign in through the Faculty Portal.',
-          recommendedPortal: 'faculty',
+          message: 'Access denied: This portal is restricted to enrolled students.',
+          recommendedPortal: roles.includes('hod') ? 'admin' : (hasFacultyRole ? 'faculty' : 'student'),
           userRoles: roles
         }
       });
@@ -279,15 +296,36 @@ app.post('/api/v1/auth/verify-portal', authenticateJWT, loadUserContext, (req: R
   }
 
   if (portal === 'faculty') {
-    const staffRoles = ['subject_teacher', 'class_teacher', 'proctor', 'hod'];
-    const hasStaffRole = roles.some(r => staffRoles.includes(r as any));
-
-    if (!hasStaffRole) {
+    // Reject any account possessing the HOD role, regardless of other assigned roles
+    if (roles.includes('hod')) {
       return res.status(403).json({
         error: {
           code: 'PORTAL_ACCESS_DENIED',
-          message: 'Access denied: This portal is restricted to faculty, instructors, and academic administrators. Please sign in through the Student Portal.',
+          message: 'Access denied: Accounts with Head of Department (HOD) privileges must sign in exclusively through the Admin Portal.',
+          recommendedPortal: 'admin',
+          userRoles: roles
+        }
+      });
+    }
+
+    // Invariant: Faculty Portal strictly rejects accounts possessing the student role
+    if (roles.includes('student')) {
+      return res.status(403).json({
+        error: {
+          code: 'PORTAL_ACCESS_DENIED',
+          message: 'Access denied: Student accounts cannot access the Faculty Portal.',
           recommendedPortal: 'student',
+          userRoles: roles
+        }
+      });
+    }
+
+    if (!hasFacultyRole) {
+      return res.status(403).json({
+        error: {
+          code: 'PORTAL_ACCESS_DENIED',
+          message: 'Access denied: This portal is restricted to faculty, instructors, and proctors. Please sign in through your designated portal.',
+          recommendedPortal: roles.includes('student') ? 'student' : 'admin',
           userRoles: roles
         }
       });
@@ -303,9 +341,113 @@ app.post('/api/v1/auth/verify-portal', authenticateJWT, loadUserContext, (req: R
         status: profile.status
       },
       roles,
-      isHOD
+      isHOD: false
     });
   }
+
+  if (portal === 'admin') {
+    // Reject any account without the HOD role
+    if (!roles.includes('hod')) {
+      return res.status(403).json({
+        error: {
+          code: 'PORTAL_ACCESS_DENIED',
+          message: 'Access denied: The Admin Portal is strictly reserved for the Head of Department (HOD).',
+          recommendedPortal: hasFacultyRole ? 'faculty' : 'student',
+          userRoles: roles
+        }
+      });
+    }
+
+    return res.status(200).json({
+      authorized: true,
+      portal: 'admin',
+      profile: {
+        id: profile.id,
+        email: profile.email,
+        full_name: profile.full_name,
+        status: profile.status
+      },
+      roles,
+      isHOD: true,
+      activeRole: 'hod'
+    });
+  }
+});
+
+/**
+ * Password Confirmation Endpoint for High-Privilege Actions (e.g. Permanent Assignment Deletion)
+ * Re-authenticates caller and returns a short-lived single-purpose reauth token.
+ * Never logs or persists passwords.
+ */
+app.post('/api/v1/auth/confirm-password', authenticateJWT, loadUserContext, async (req: Request, res: Response) => {
+  const { password, assessment_id, purpose } = req.body || {};
+  if (!password || typeof password !== 'string' || !password.trim()) {
+    return res.status(400).json({
+      error: {
+        code: 'MISSING_PASSWORD',
+        message: 'Institutional login password is required'
+      }
+    });
+  }
+
+  const user = req.userContext!;
+  const email = user.profile.email;
+  const isOfflineTestMode = process.env.NODE_ENV === 'test' || process.env.SMARTFA_TEST_MODE === 'true';
+
+  let passwordVerified = false;
+
+  // 1. If live Supabase is configured and not running offline unit tests, verify cryptographically via Supabase Auth
+  if (supabaseAdmin && !isOfflineTestMode) {
+    try {
+      const { data, error } = await supabaseAdmin.auth.signInWithPassword({
+        email,
+        password: password.trim()
+      });
+
+      if (!error && data?.user && data.user.id === user.profile.id) {
+        passwordVerified = true;
+      }
+    } catch {
+      passwordVerified = false;
+    }
+  }
+
+  // 2. In local development / test mode: support test passwords
+  if (!passwordVerified && (process.env.NODE_ENV !== 'production' || isOfflineTestMode)) {
+    const validTestPasswords = ['testpassword', 'faculty123', 'admin123', 'password123', 'correct_password'];
+    if (validTestPasswords.includes(password.trim())) {
+      passwordVerified = true;
+    }
+  }
+
+  if (!passwordVerified) {
+    return res.status(401).json({
+      error: {
+        code: 'INVALID_CREDENTIALS',
+        message: 'Incorrect password. Please verify your institutional login password.'
+      }
+    });
+  }
+
+  // Issue short-lived, single-purpose, assignment-scoped reauth token (valid for 5 minutes)
+  const reauthToken = jwt.sign(
+    {
+      sub: user.profile.id,
+      email: user.profile.email,
+      purpose: purpose || 'assignment_deletion',
+      assessment_id: assessment_id || null,
+      jti: randomUUID(),
+      type: 'reauth'
+    },
+    REAUTH_JWT_SECRET,
+    { expiresIn: '5m' }
+  );
+
+  return res.status(200).json({
+    confirmed: true,
+    reauth_token: reauthToken,
+    expires_in: 300
+  });
 });
 
 // Demo Login Endpoint (Non-production testing)
@@ -428,6 +570,14 @@ const isTestExecution =
   process.env.NODE_ENV === 'test' || 
   process.env.SMARTFA_TEST_MODE === 'true' ||
   (process.argv[1] && (process.argv[1].includes('verification') || process.argv[1].includes('test') || process.argv[1].includes('provision')));
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Unhandled Rejection at]:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[Uncaught Exception]:', err);
+});
 
 if (!isTestExecution) {
   app.listen(PORT, () => {

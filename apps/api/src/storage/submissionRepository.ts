@@ -204,6 +204,11 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
     lateStatus: 'on_time' | 'late';
   }): Promise<{ submission: Submission; version: SubmissionVersion; receipt: SubmissionReceipt }> {
     const nowIso = params.serverTime.toISOString();
+
+    if (this.inMemoryDb.resultPublications.some(rp => rp.assessment_id === params.assessmentId)) {
+      throw new Error('Submissions are closed: Results have already been published for this assessment');
+    }
+
     let submission = this.inMemoryDb.submissions.find(
       s => s.assessment_id === params.assessmentId && s.student_id === params.studentId
     );
@@ -776,59 +781,50 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
     const primaryFile = uploadedFilesMeta[0];
     const totalBytes = uploadedFilesMeta.reduce((sum, f) => sum + f.file_size_bytes, 0);
 
-    if (!submission) {
-      const { data: newSub, error: subErr } = await this.client
-        .from('submissions')
-        .insert({
-          id: submissionId,
-          assessment_id: params.assessmentId,
-          question_id: null,
-          student_id: params.studentId,
-          status: 'uploaded',
-          first_submitted_at: nowIso,
-          updated_at: nowIso,
-          late_status: params.lateStatus
-        })
-        .select()
-        .single();
+    const { data: rpcResult, error: rpcErr } = await this.client.rpc('create_submission_atomic', {
+      p_assessment_id: params.assessmentId,
+      p_student_id: params.studentId,
+      p_submission_id: submissionId,
+      p_version_id: versionId,
+      p_storage_path: primaryFile.storage_key,
+      p_original_name: primaryFile.original_filename,
+      p_mime_type: primaryFile.mime_type,
+      p_size_bytes: totalBytes,
+      p_sha256: primaryFile.sha256 || '',
+      p_files: uploadedFilesMeta,
+      p_submitted_at: nowIso,
+      p_late_status: params.lateStatus
+    });
 
-      if (subErr) throw new Error(`Failed to insert submission header: ${subErr.message}`);
-      submission = newSub;
+    if (rpcErr) {
+      throw new Error(`Failed to commit submission transaction: ${rpcErr.message}`);
     }
 
-    const { data: versionRec, error: verErr } = await this.client
-      .from('submission_versions')
-      .insert({
-        id: versionId,
-        submission_id: submissionId,
-        version: newVersionNumber,
-        storage_path: primaryFile.storage_key,
-        original_name: primaryFile.original_filename,
-        mime_type: primaryFile.mime_type,
-        size_bytes: totalBytes,
-        sha256: primaryFile.sha256 || '',
-        uploaded_at: nowIso,
-        files: uploadedFilesMeta,
-        late_status: params.lateStatus
-      })
-      .select()
-      .single();
+    const updatedSub: Submission = {
+      id: rpcResult.submission_id,
+      assessment_id: params.assessmentId,
+      question_id: null,
+      student_id: params.studentId,
+      status: 'uploaded',
+      first_submitted_at: nowIso,
+      updated_at: nowIso,
+      late_status: params.lateStatus
+    };
 
-    if (verErr) throw new Error(`Failed to insert submission version: ${verErr.message}`);
+    const versionRec: SubmissionVersion = {
+      id: rpcResult.version_id,
+      submission_id: rpcResult.submission_id,
+      version: rpcResult.version_number,
+      storage_path: primaryFile.storage_key,
+      original_name: primaryFile.original_filename,
+      mime_type: primaryFile.mime_type,
+      size_bytes: totalBytes,
+      sha256: primaryFile.sha256 || '',
+      uploaded_at: nowIso,
+      files: uploadedFilesMeta,
+      late_status: params.lateStatus
+    };
 
-    const { data: updatedSub, error: updateErr } = await this.client
-      .from('submissions')
-      .update({
-        active_version_id: versionId,
-        status: 'uploaded',
-        late_status: params.lateStatus,
-        updated_at: nowIso
-      })
-      .eq('id', submissionId)
-      .select()
-      .single();
-
-    if (updateErr) throw new Error(`Failed to update active submission version: ${updateErr.message}`);
     submission = updatedSub;
 
     const receipt: SubmissionReceipt = {
@@ -1382,6 +1378,10 @@ export const setSubmissionRepositoryForTesting = (repo: ISubmissionRepository | 
 
 export const getSubmissionRepository = (): ISubmissionRepository => {
   if (activeSubmissionRepoOverride) return activeSubmissionRepoOverride;
+
+  if (process.env.NODE_ENV === 'test' || process.env.SMARTFA_TEST_MODE === 'true') {
+    return new InMemorySubmissionRepository(db);
+  }
 
   if (isLiveSupabaseConfigured && supabaseAdmin) {
     return new SupabaseSubmissionRepository(supabaseAdmin);

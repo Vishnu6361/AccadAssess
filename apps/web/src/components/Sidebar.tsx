@@ -136,10 +136,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         <div className="px-4 py-3 border-b border-academic-border bg-academic-paleGreen/50">
-          <p className="text-[10px] font-bold tracking-wider uppercase text-academic-muted">Workspace Scope</p>
+          <p className="text-[10px] font-bold tracking-wider uppercase text-academic-muted">
+            {availableRoles.includes('hod') ? 'Admin Portal Workspace' : 'Workspace Scope'}
+          </p>
           <p className="text-xs font-bold text-academic-deepGreen mt-0.5">
             {formatWorkspaceTitle(activeRole)}
           </p>
+          {availableRoles.includes('hod') && activeRole !== 'hod' && onRoleChange && (
+            <div className="mt-1.5 p-1.5 bg-[#FFFDF8] border border-[#F2C4B3]/60 rounded text-[10px] text-[#8A3814] flex items-center justify-between">
+              <span>Teaching Workspace</span>
+              <button
+                onClick={() => {
+                  onRoleChange('hod');
+                  onClose();
+                }}
+                className="font-bold underline hover:text-[#5C1D06]"
+              >
+                Return to HOD
+              </button>
+            </div>
+          )}
           {availableRoles.length > 1 && onRoleChange && (
             <div className="mt-2 pt-2 border-t border-academic-border/50">
               <div className="flex items-center justify-between mb-1">
@@ -204,7 +220,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="text-[11px] text-academic-muted space-y-1">
             <div className="flex justify-between">
               <span>Portal</span>
-              <span className="font-semibold text-academic-deepGreen">AcadAssess v2.0</span>
+              <span className="font-semibold text-academic-deepGreen">
+                {availableRoles.includes('hod')
+                  ? 'Admin Portal'
+                  : availableRoles.includes('student')
+                  ? 'Student Portal'
+                  : 'Faculty Portal'}
+              </span>
             </div>
             <div className="flex justify-between">
               <span>Security</span>

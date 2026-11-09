@@ -5,18 +5,19 @@ import {
   GraduationCap, 
   Users, 
   ArrowRight, 
-  ShieldCheck 
+  ShieldCheck,
+  Building2
 } from 'lucide-react';
 
 interface PortalSelectionViewProps {
-  onSelectPortal: (portal: 'student' | 'faculty') => void;
+  onSelectPortal: (portal: 'student' | 'faculty' | 'admin') => void;
 }
 
 export const PortalSelectionView: React.FC<PortalSelectionViewProps> = ({ onSelectPortal }) => {
   return (
     <AcademicBackground>
       <div className="w-full flex-1 flex flex-col justify-center items-center px-4 sm:px-6 py-4 sm:py-6 my-auto max-w-full">
-        <div className="w-full max-w-[600px] space-y-3.5 sm:space-y-4">
+        <div className="w-full max-w-[880px] space-y-3.5 sm:space-y-4">
           
           {/* =========================================================================
               HEADER SECTION (Compact Institutional Branding)
@@ -38,8 +39,8 @@ export const PortalSelectionView: React.FC<PortalSelectionViewProps> = ({ onSele
               </p>
             </div>
 
-            {/* Two Prominent Portal Cards (Side-by-side on desktop/tablet, equal height) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-stretch">
+            {/* Three Prominent Portal Cards (3 columns on desktop/tablet, equal height) */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 items-stretch">
               
               {/* Card 1: Student Portal */}
               <div className="flex flex-col justify-between h-full p-4 rounded-lg border border-academic-border bg-academic-surfaceAlt hover:border-academic-primaryGreen/60 hover:shadow-sm transition-all group">
@@ -97,13 +98,41 @@ export const PortalSelectionView: React.FC<PortalSelectionViewProps> = ({ onSele
                 </div>
               </div>
 
+              {/* Card 3: Admin Portal (HOD) */}
+              <div className="flex flex-col justify-between h-full p-4 rounded-lg border border-academic-border bg-academic-surfaceAlt hover:border-academic-primaryGreen/60 hover:shadow-sm transition-all group">
+                <div className="flex items-start space-x-3">
+                  <div className="w-9 h-9 rounded-lg bg-academic-lightGreen text-academic-primaryGreen group-hover:bg-academic-primaryGreen group-hover:text-white transition-colors flex items-center justify-center flex-shrink-0">
+                    <Building2 className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-xs sm:text-sm font-bold text-academic-deepGreen">
+                      Admin Portal
+                    </h2>
+                    <p className="text-xs text-academic-muted mt-0.5 leading-snug">
+                      Academic structure, user directory, and institutional oversight.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="pt-3 mt-3 border-t border-academic-borderSubtle">
+                  <button
+                    type="button"
+                    onClick={() => onSelectPortal('admin')}
+                    className="btn-primary w-full text-xs font-bold min-h-[42px] flex items-center justify-center space-x-1.5 shadow-sm"
+                  >
+                    <span>Admin Portal Login</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
             </div>
 
             {/* Security Guarantee Note */}
             <div className="pt-2 border-t border-academic-borderSubtle text-[11px] text-academic-muted leading-normal flex items-center justify-center space-x-1.5 text-center">
               <ShieldCheck className="w-3.5 h-3.5 text-academic-primaryGreen flex-shrink-0" />
               <span>
-                Supabase Auth verified &bull; Cryptographic API role isolation &bull; Client role self-assignment disabled
+                Supabase Auth verified &bull; Database-backed role isolation &bull; Strict portal access governance
               </span>
             </div>
           </div>

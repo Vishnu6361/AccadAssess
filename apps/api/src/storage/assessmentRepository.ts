@@ -13,12 +13,34 @@ import { supabaseAdmin, isLiveSupabaseConfigured } from '../auth/jwt.js';
 import { UserContext } from '../authorization/rbac.js';
 import { db, InMemoryDatabase } from './db.js';
 
+export interface AssessmentDeletionCounts {
+  submissions: number;
+  submission_versions: number;
+  evaluations: number;
+  evaluation_criterion_scores: number;
+  questions: number;
+  rubric_versions: number;
+  rubric_criteria: number;
+  result_publications: number;
+  storage_files: number;
+}
+
+export interface AssessmentDeletionSummary {
+  can_delete: boolean;
+  assessment_id: string;
+  title: string;
+  status: string;
+  counts: AssessmentDeletionCounts;
+  storage_keys: string[];
+}
+
 export interface IAssessmentRepository {
   getAssessmentById(id: string): Promise<Assessment | null>;
   getFullAssessment(id: string): Promise<any | null>;
   listAssessments(user: UserContext): Promise<any[]>;
   createAssessment(data: CreateAssessmentRequest, createdBy: string): Promise<Assessment>;
   updateAssessment(id: string, updates: Partial<Assessment> & { document_base64?: string }): Promise<Assessment>;
+  saveDraftAssessmentAtomic(assessmentId: string | null, data: any, callerId: string): Promise<any>;
   hasRelatedStudentRecords(assessmentId: string): Promise<{
     hasRecords: boolean;
     submissionsCount: number;
@@ -26,9 +48,14 @@ export interface IAssessmentRepository {
     isPublished: boolean;
   }>;
   deleteAssessment(id: string): Promise<void>;
+  getAssessmentDeletionSummary(assessmentId: string): Promise<AssessmentDeletionSummary>;
+  markAssessmentDeletionPending(assessmentId: string, callerId: string): Promise<void>;
+  listAssessmentStorageKeys(assessmentId: string): Promise<string[]>;
+  deleteAssessmentPermanent(assessmentId: string, callerId: string): Promise<AssessmentDeletionCounts>;
   publishAssessment(id: string, publishedBy: string): Promise<Assessment>;
   createQuestion(assessmentId: string, data: any): Promise<Question>;
   updateQuestion(questionId: string, data: any): Promise<Question>;
+  deleteQuestion?(questionId: string): Promise<void>;
   saveRubric(questionId: string, rubricData: any, createdBy: string): Promise<any>;
   getDocumentBlob(storageKey: string): Promise<{ buffer: Buffer; mimeType: string; filename: string } | null>;
   getSignedDocumentUrl?(storageKey: string, expiresInSeconds?: number): Promise<string | null>;
@@ -70,6 +97,22 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
         return { ...q, rubric: { ...rubricVersion, criteria } };
       });
 
+    // Assignment-level rubric
+    const assRv = this.inMemoryDb.rubricVersions.find(rv => rv.assessment_id === assessment.id);
+    let fullRubric = null;
+    if (assRv) {
+      const criteria = this.inMemoryDb.rubricCriteria
+        .filter(rc => rc.rubric_version_id === assRv.id)
+        .sort((a, b) => a.display_order - b.display_order)
+        .map(rc => {
+          const levels = this.inMemoryDb.rubricLevels
+            .filter(rl => rl.criterion_id === rc.id)
+            .sort((a, b) => a.display_order - b.display_order);
+          return { ...rc, levels };
+        });
+      fullRubric = { ...assRv, criteria };
+    }
+
     const cs = this.inMemoryDb.classSubjects.find(c => c.id === assessment.class_subject_id);
     const cls = cs ? this.inMemoryDb.classes.find(c => c.id === cs.class_id) : null;
     const sub = cs ? this.inMemoryDb.subjects.find(s => s.id === cs.subject_id) : null;
@@ -78,7 +121,8 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
       ...assessment,
       class_details: cls ? formatClassName(cls) : 'Unknown Class',
       subject_details: sub ? `${sub.code} - ${sub.name}` : 'Unknown Subject',
-      questions
+      questions,
+      rubric: fullRubric
     };
   }
 
@@ -236,6 +280,152 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
     return this.inMemoryDb.assessments[idx];
   }
 
+  async saveDraftAssessmentAtomic(assessmentId: string | null, data: any, callerId: string): Promise<any> {
+    let ass: Assessment;
+    const nowIso = new Date().toISOString();
+
+    if (assessmentId) {
+      const idx = this.inMemoryDb.assessments.findIndex(a => a.id === assessmentId);
+      if (idx === -1) throw new Error('Assessment not found');
+      if (this.inMemoryDb.assessments[idx].status !== 'draft') {
+        throw new Error('Only draft assessments may be edited');
+      }
+      this.inMemoryDb.assessments[idx] = {
+        ...this.inMemoryDb.assessments[idx],
+        title: data.title,
+        instructions: data.instructions,
+        deadline_at: data.deadline_at,
+        allow_late: Boolean(data.allow_late),
+        extension_deadline_at: data.extension_deadline_at || null,
+        late_penalty_mode: data.late_penalty_mode || 'none',
+        late_penalty_marks: data.late_penalty_marks || 0,
+        max_marks: 50,
+        updated_at: nowIso
+      };
+      ass = this.inMemoryDb.assessments[idx];
+    } else {
+      const newId = randomUUID();
+      ass = {
+        id: newId,
+        class_subject_id: data.class_subject_id,
+        title: data.title,
+        instructions: data.instructions,
+        deadline_at: data.deadline_at,
+        status: 'draft',
+        created_by: callerId,
+        published_at: null,
+        published_by: null,
+        version: 1,
+        questions: [],
+        document_storage_key: data.document_storage_key || null,
+        document_filename: data.document_filename || null,
+        document_size_bytes: data.document_size_bytes || null,
+        document_mime_type: data.document_mime_type || null,
+        max_files: data.max_files || 1,
+        allow_late: Boolean(data.allow_late),
+        extension_deadline_at: data.extension_deadline_at || null,
+        late_penalty_mode: data.late_penalty_mode || 'none',
+        late_penalty_marks: data.late_penalty_marks || 0,
+        max_marks: 50,
+        created_at: nowIso,
+        updated_at: nowIso
+      };
+      this.inMemoryDb.assessments.push(ass);
+    }
+
+    if (data.document_base64 && data.document_filename) {
+      const buf = Buffer.from(data.document_base64, 'base64');
+      const storageKey = `assessments/${ass.id}/documents/${data.document_filename}`;
+      this.inMemoryDb.storageBlobs.set(storageKey, buf);
+      ass.document_storage_key = storageKey;
+      ass.document_filename = data.document_filename;
+      ass.document_size_bytes = buf.length;
+      ass.document_mime_type = data.document_mime_type || 'application/pdf';
+    }
+
+    if (data.questions !== undefined) {
+      const remainingQIds: string[] = [];
+      for (const qInput of data.questions) {
+        const qId = qInput.id || randomUUID();
+        remainingQIds.push(qId);
+        const existingQIdx = this.inMemoryDb.questions.findIndex(q => q.id === qId);
+        if (existingQIdx !== -1) {
+          this.inMemoryDb.questions[existingQIdx] = {
+            ...this.inMemoryDb.questions[existingQIdx],
+            prompt: qInput.prompt,
+            display_order: qInput.display_order,
+            max_marks: qInput.max_marks ?? null
+          };
+        } else {
+          this.inMemoryDb.questions.push({
+            id: qId,
+            assessment_id: ass.id,
+            prompt: qInput.prompt,
+            display_order: qInput.display_order,
+            max_marks: qInput.max_marks ?? null
+          });
+        }
+      }
+      this.inMemoryDb.questions = this.inMemoryDb.questions.filter(
+        q => q.assessment_id !== ass.id || remainingQIds.includes(q.id)
+      );
+    }
+
+    if (data.rubric) {
+      let rv = this.inMemoryDb.rubricVersions.find(r => r.assessment_id === ass.id);
+      if (rv && rv.frozen_at) {
+        throw new Error('Cannot modify rubric: Rubric is frozen');
+      }
+      if (!rv) {
+        rv = {
+          id: randomUUID(),
+          assessment_id: ass.id,
+          version: 1,
+          title: data.rubric.title,
+          created_by: callerId,
+          criteria: [],
+          created_at: nowIso
+        };
+        this.inMemoryDb.rubricVersions.push(rv);
+      } else {
+        rv.title = data.rubric.title;
+      }
+
+      const activeRv = rv!;
+      const remainingCIds: string[] = [];
+      for (const cInput of (data.rubric.criteria || [])) {
+        const cId = cInput.id || randomUUID();
+        remainingCIds.push(cId);
+        const existingCIdx = this.inMemoryDb.rubricCriteria.findIndex(c => c.id === cId);
+        if (existingCIdx !== -1) {
+          this.inMemoryDb.rubricCriteria[existingCIdx] = {
+            ...this.inMemoryDb.rubricCriteria[existingCIdx],
+            title: cInput.title || cInput.criterion_title,
+            description: cInput.description || '',
+            display_order: cInput.display_order || remainingCIds.length,
+            max_marks: Number(cInput.max_marks)
+          };
+        } else {
+          this.inMemoryDb.rubricCriteria.push({
+            id: cId,
+            rubric_version_id: activeRv.id,
+            title: cInput.title || cInput.criterion_title,
+            description: cInput.description || '',
+            display_order: cInput.display_order || remainingCIds.length,
+            max_marks: Number(cInput.max_marks),
+            levels: [],
+            created_at: nowIso
+          });
+        }
+      }
+      this.inMemoryDb.rubricCriteria = this.inMemoryDb.rubricCriteria.filter(
+        c => c.rubric_version_id !== activeRv.id || remainingCIds.includes(c.id)
+      );
+    }
+
+    return this.getFullAssessment(ass.id);
+  }
+
   async hasRelatedStudentRecords(assessmentId: string): Promise<{
     hasRecords: boolean;
     submissionsCount: number;
@@ -271,12 +461,220 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
     this.inMemoryDb.assessments.splice(idx, 1);
   }
 
+  async getAssessmentDeletionSummary(assessmentId: string): Promise<AssessmentDeletionSummary> {
+    const ass = this.inMemoryDb.assessments.find(a => a.id === assessmentId);
+    if (!ass) {
+      throw new Error(`Assessment ${assessmentId} not found`);
+    }
+
+    const subs = this.inMemoryDb.submissions.filter(s => s.assessment_id === assessmentId);
+    const subIds = new Set(subs.map(s => s.id));
+    const subVersions = (this.inMemoryDb.submissionVersions || []).filter(sv => subIds.has(sv.submission_id));
+    const evals = (this.inMemoryDb.evaluations || []).filter(e => subIds.has(e.submission_id));
+    const evalIds = new Set(evals.map(e => e.id));
+    const evalScores = (this.inMemoryDb.evaluationCriterionScores || []).filter(ecs => evalIds.has(ecs.evaluation_id));
+    const questions = this.inMemoryDb.questions.filter(q => q.assessment_id === assessmentId);
+    const qIds = new Set(questions.map(q => q.id));
+    const rubricVersions = (this.inMemoryDb.rubricVersions || []).filter(
+      rv => rv.assessment_id === assessmentId || (rv.question_id && qIds.has(rv.question_id))
+    );
+    const rvIds = new Set(rubricVersions.map(rv => rv.id));
+    const rubricCriteria = (this.inMemoryDb.rubricCriteria || []).filter(rc => rvIds.has(rc.rubric_version_id));
+    const pubs = (this.inMemoryDb.resultPublications || []).filter(rp => rp.assessment_id === assessmentId);
+
+    const storageKeys = await this.listAssessmentStorageKeys(assessmentId);
+
+    return {
+      can_delete: true,
+      assessment_id: ass.id,
+      title: ass.title,
+      status: ass.status,
+      counts: {
+        submissions: subs.length,
+        submission_versions: subVersions.length,
+        evaluations: evals.length,
+        evaluation_criterion_scores: evalScores.length,
+        questions: questions.length,
+        rubric_versions: rubricVersions.length,
+        rubric_criteria: rubricCriteria.length,
+        result_publications: pubs.length,
+        storage_files: storageKeys.length
+      },
+      storage_keys: storageKeys
+    };
+  }
+
+  async markAssessmentDeletionPending(assessmentId: string, _callerId: string): Promise<void> {
+    const ass = this.inMemoryDb.assessments.find(a => a.id === assessmentId);
+    if (!ass) throw new Error(`Assessment ${assessmentId} not found`);
+    ass.status = 'deletion_pending' as any;
+    ass.updated_at = new Date().toISOString();
+  }
+
+  async listAssessmentStorageKeys(assessmentId: string): Promise<string[]> {
+    const keys = new Set<string>();
+    const ass = this.inMemoryDb.assessments.find(a => a.id === assessmentId);
+    if (ass?.document_storage_key) {
+      keys.add(ass.document_storage_key);
+    }
+
+    const subs = this.inMemoryDb.submissions.filter(s => s.assessment_id === assessmentId);
+    const subIds = new Set(subs.map(s => s.id));
+    const subVersions = (this.inMemoryDb.submissionVersions || []).filter(sv => subIds.has(sv.submission_id));
+
+    for (const sv of subVersions) {
+      if (sv.storage_path) keys.add(sv.storage_path);
+      if (Array.isArray((sv as any).files)) {
+        for (const f of (sv as any).files) {
+          if (f?.storage_key) keys.add(f.storage_key);
+          if (f?.storage_path) keys.add(f.storage_path);
+        }
+      }
+    }
+
+    return Array.from(keys).filter(k => Boolean(k && k.trim()));
+  }
+
+  async deleteAssessmentPermanent(assessmentId: string, _callerId: string): Promise<AssessmentDeletionCounts> {
+    const assIndex = this.inMemoryDb.assessments.findIndex(a => a.id === assessmentId);
+    if (assIndex === -1) {
+      return {
+        submissions: 0,
+        submission_versions: 0,
+        evaluations: 0,
+        evaluation_criterion_scores: 0,
+        questions: 0,
+        rubric_versions: 0,
+        rubric_criteria: 0,
+        result_publications: 0,
+        storage_files: 0
+      };
+    }
+
+    const summary = await this.getAssessmentDeletionSummary(assessmentId);
+
+    // 1. Result publications
+    this.inMemoryDb.resultPublications = (this.inMemoryDb.resultPublications || []).filter(
+      rp => rp.assessment_id !== assessmentId
+    );
+
+    // 2. Submissions & evaluations
+    const subs = this.inMemoryDb.submissions.filter(s => s.assessment_id === assessmentId);
+    const subIds = new Set(subs.map(s => s.id));
+    const evals = (this.inMemoryDb.evaluations || []).filter(e => subIds.has(e.submission_id));
+    const evalIds = new Set(evals.map(e => e.id));
+
+    this.inMemoryDb.evaluationCriterionScores = (this.inMemoryDb.evaluationCriterionScores || []).filter(
+      ecs => !evalIds.has(ecs.evaluation_id)
+    );
+    this.inMemoryDb.evaluations = (this.inMemoryDb.evaluations || []).filter(
+      e => !subIds.has(e.submission_id)
+    );
+    this.inMemoryDb.submissionVersions = (this.inMemoryDb.submissionVersions || []).filter(
+      sv => !subIds.has(sv.submission_id)
+    );
+    this.inMemoryDb.submissions = this.inMemoryDb.submissions.filter(
+      s => s.assessment_id !== assessmentId
+    );
+
+    // 3. Questions & Rubrics
+    const questions = this.inMemoryDb.questions.filter(q => q.assessment_id === assessmentId);
+    const qIds = new Set(questions.map(q => q.id));
+    const rubricVersions = (this.inMemoryDb.rubricVersions || []).filter(
+      rv => rv.assessment_id === assessmentId || (rv.question_id && qIds.has(rv.question_id))
+    );
+    const rvIds = new Set(rubricVersions.map(rv => rv.id));
+    const rubricCriteria = (this.inMemoryDb.rubricCriteria || []).filter(rc => rvIds.has(rc.rubric_version_id));
+    const rcIds = new Set(rubricCriteria.map(rc => rc.id));
+
+    this.inMemoryDb.rubricLevels = (this.inMemoryDb.rubricLevels || []).filter(
+      rl => !rcIds.has(rl.criterion_id)
+    );
+    this.inMemoryDb.rubricCriteria = (this.inMemoryDb.rubricCriteria || []).filter(
+      rc => !rvIds.has(rc.rubric_version_id)
+    );
+    this.inMemoryDb.rubricVersions = (this.inMemoryDb.rubricVersions || []).filter(
+      rv => !rvIds.has(rv.id)
+    );
+    this.inMemoryDb.questions = this.inMemoryDb.questions.filter(
+      q => q.assessment_id !== assessmentId
+    );
+
+    // 4. Clean storage blobs in memory
+    for (const key of summary.storage_keys) {
+      this.inMemoryDb.storageBlobs.delete(key);
+    }
+
+    // 5. Delete assessment record
+    this.inMemoryDb.assessments.splice(assIndex, 1);
+
+    return summary.counts;
+  }
+
   async publishAssessment(id: string, publishedBy: string): Promise<Assessment> {
-    return this.updateAssessment(id, {
-      status: 'published',
-      published_at: new Date().toISOString(),
-      published_by: publishedBy
-    });
+    const idx = this.inMemoryDb.assessments.findIndex(a => a.id === id);
+    if (idx === -1) throw new Error('Assessment not found');
+    const ass = this.inMemoryDb.assessments[idx];
+    if (ass.status !== 'draft') {
+      throw new Error(`Cannot publish assessment: status is ${ass.status}`);
+    }
+
+    const rv = this.inMemoryDb.rubricVersions.find(r => r.assessment_id === id);
+    const questions = this.inMemoryDb.questions.filter(q => q.assessment_id === id);
+
+    if (rv) {
+      // Assignment-level rubric workflow (must equal exactly 50 marks)
+      const criteria = this.inMemoryDb.rubricCriteria.filter(c => c.rubric_version_id === rv.id);
+      if (criteria.length === 0) {
+        throw new Error('Cannot publish assessment: Rubric contains zero criteria');
+      }
+
+      const totalMarks = criteria.reduce((sum, c) => sum + Number(c.max_marks), 0);
+      if (Math.abs(totalMarks - 50) > 0.001) {
+        throw new Error(`Cannot publish assessment: Rubric criteria sum (${totalMarks}) must equal exactly 50.00 marks`);
+      }
+
+      const nowIso = new Date().toISOString();
+      rv.frozen_at = nowIso;
+      ass.status = 'published';
+      ass.published_at = nowIso;
+      ass.published_by = publishedBy;
+      ass.max_marks = 50;
+      ass.updated_at = nowIso;
+      return ass;
+    }
+
+    // Fallback: Legacy Question-level rubrics workflow
+    if (questions.length === 0) {
+      throw new Error('Cannot publish assessment: An assignment-level rubric or questions with rubrics must be configured before publication');
+    }
+
+    for (const q of questions) {
+      const qRv = this.inMemoryDb.rubricVersions.find(r => r.question_id === q.id);
+      if (!qRv) {
+        throw new Error(`Cannot publish assessment: Question ${q.display_order} is missing a defined rubric`);
+      }
+      const criteria = this.inMemoryDb.rubricCriteria.filter(c => c.rubric_version_id === qRv.id);
+      const totalMarks = criteria.reduce((sum, c) => sum + Number(c.max_marks), 0);
+      if (Math.abs(totalMarks - Number(q.max_marks)) > 0.001) {
+        throw new Error(`Cannot publish assessment: Question ${q.display_order} rubric criteria sum (${totalMarks}) does not equal question marks (${q.max_marks})`);
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+    for (const q of questions) {
+      const qRv = this.inMemoryDb.rubricVersions.find(r => r.question_id === q.id);
+      if (qRv) qRv.frozen_at = nowIso;
+    }
+    ass.status = 'published';
+    ass.published_at = nowIso;
+    ass.published_by = publishedBy;
+    ass.updated_at = nowIso;
+    return ass;
+  }
+
+  async deleteQuestion(questionId: string): Promise<void> {
+    this.inMemoryDb.questions = this.inMemoryDb.questions.filter(q => q.id !== questionId);
   }
 
   async createQuestion(assessmentId: string, data: any): Promise<Question> {
@@ -284,7 +682,7 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
       id: randomUUID(),
       assessment_id: assessmentId,
       prompt: data.prompt || data.title || '',
-      max_marks: data.max_marks,
+      max_marks: data.max_marks ?? null,
       display_order: data.display_order || data.question_number || 1,
       created_at: new Date().toISOString()
     };
@@ -489,11 +887,42 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
       if (sub) subjectDetails = `${sub.code} - ${sub.name}`;
     }
 
+    // Fetch assignment-level rubric if present
+    const { data: assRubricVersion } = await this.client
+      .from('rubric_versions')
+      .select('*')
+      .eq('assessment_id', id)
+      .maybeSingle();
+
+    let fullAssignmentRubric = null;
+    if (assRubricVersion) {
+      const { data: criteria } = await this.client
+        .from('rubric_criteria')
+        .select('*')
+        .eq('rubric_version_id', assRubricVersion.id)
+        .order('display_order', { ascending: true });
+
+      const fullCriteria = await Promise.all((criteria || []).map(async rc => {
+        const { data: levels } = await this.client
+          .from('rubric_levels')
+          .select('*')
+          .eq('criterion_id', rc.id)
+          .order('display_order', { ascending: true });
+        return { ...rc, levels: levels || [] };
+      }));
+
+      fullAssignmentRubric = {
+        ...assRubricVersion,
+        criteria: fullCriteria
+      };
+    }
+
     return {
       ...assessment,
       class_details: classDetails,
       subject_details: subjectDetails,
-      questions: fullQuestions
+      questions: fullQuestions,
+      rubric: fullAssignmentRubric
     };
   }
 
@@ -771,8 +1200,6 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
     evaluationsCount: number;
     isPublished: boolean;
   }> {
-    this.assertStagingProject();
-
     // 1. Submissions count
     const { count: subsCount } = await this.client
       .from('submissions')
@@ -857,12 +1284,434 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
     }
   }
 
-  async publishAssessment(id: string, publishedBy: string): Promise<Assessment> {
-    return this.updateAssessment(id, {
-      status: 'published',
-      published_at: new Date().toISOString(),
-      published_by: publishedBy
+  async getAssessmentDeletionSummary(assessmentId: string): Promise<AssessmentDeletionSummary> {
+    const assessment = await this.getAssessmentById(assessmentId);
+    if (!assessment) {
+      throw new Error(`Assessment ${assessmentId} not found`);
+    }
+
+    const { count: subsCount } = await this.client
+      .from('submissions')
+      .select('id', { count: 'exact', head: true })
+      .eq('assessment_id', assessmentId);
+
+    const { data: subs } = await this.client
+      .from('submissions')
+      .select('id')
+      .eq('assessment_id', assessmentId);
+
+    const subIds = (subs || []).map(s => s.id);
+    let subVersionsCount = 0;
+    let evalsCount = 0;
+    let evalScoresCount = 0;
+
+    if (subIds.length > 0) {
+      const { count: svCount } = await this.client
+        .from('submission_versions')
+        .select('id', { count: 'exact', head: true })
+        .in('submission_id', subIds);
+      subVersionsCount = svCount || 0;
+
+      const { count: eCount } = await this.client
+        .from('evaluations')
+        .select('id', { count: 'exact', head: true })
+        .in('submission_id', subIds);
+      evalsCount = eCount || 0;
+
+      const { data: evals } = await this.client
+        .from('evaluations')
+        .select('id')
+        .in('submission_id', subIds);
+      const evalIds = (evals || []).map(e => e.id);
+      if (evalIds.length > 0) {
+        const { count: esCount } = await this.client
+          .from('evaluation_criterion_scores')
+          .select('id', { count: 'exact', head: true })
+          .in('evaluation_id', evalIds);
+        evalScoresCount = esCount || 0;
+      }
+    }
+
+    const { count: qCount } = await this.client
+      .from('questions')
+      .select('id', { count: 'exact', head: true })
+      .eq('assessment_id', assessmentId);
+
+    const { data: questions } = await this.client
+      .from('questions')
+      .select('id')
+      .eq('assessment_id', assessmentId);
+    const qIds = (questions || []).map(q => q.id);
+
+    // Rubric versions
+    const { data: rvsAss } = await this.client
+      .from('rubric_versions')
+      .select('id')
+      .eq('assessment_id', assessmentId);
+    let rvIds = (rvsAss || []).map(r => r.id);
+    if (qIds.length > 0) {
+      const { data: rvsQ } = await this.client
+        .from('rubric_versions')
+        .select('id')
+        .in('question_id', qIds);
+      rvIds = [...rvIds, ...(rvsQ || []).map(r => r.id)];
+    }
+
+    let rubricCriteriaCount = 0;
+    if (rvIds.length > 0) {
+      const { count: rcCount } = await this.client
+        .from('rubric_criteria')
+        .select('id', { count: 'exact', head: true })
+        .in('rubric_version_id', rvIds);
+      rubricCriteriaCount = rcCount || 0;
+    }
+
+    const { count: pubsCount } = await this.client
+      .from('result_publications')
+      .select('id', { count: 'exact', head: true })
+      .eq('assessment_id', assessmentId);
+
+    const storageKeys = await this.listAssessmentStorageKeys(assessmentId);
+
+    return {
+      can_delete: true,
+      assessment_id: assessment.id,
+      title: assessment.title,
+      status: assessment.status,
+      counts: {
+        submissions: subsCount || 0,
+        submission_versions: subVersionsCount,
+        evaluations: evalsCount,
+        evaluation_criterion_scores: evalScoresCount,
+        questions: qCount || 0,
+        rubric_versions: rvIds.length,
+        rubric_criteria: rubricCriteriaCount,
+        result_publications: pubsCount || 0,
+        storage_files: storageKeys.length
+      },
+      storage_keys: storageKeys
+    };
+  }
+
+  async markAssessmentDeletionPending(assessmentId: string, callerId: string): Promise<void> {
+    this.assertStagingProject();
+    const { error: rpcErr } = await this.client.rpc('mark_assessment_deletion_pending', {
+      p_assessment_id: assessmentId,
+      p_caller_id: callerId
     });
+
+    if (rpcErr) {
+      const { error } = await this.client
+        .from('assessments')
+        .update({ status: 'deletion_pending', updated_at: new Date().toISOString() })
+        .eq('id', assessmentId);
+      if (error) {
+        throw new Error(`Failed to mark assessment deletion pending: ${error.message}`);
+      }
+    }
+  }
+
+  async listAssessmentStorageKeys(assessmentId: string): Promise<string[]> {
+    const keys = new Set<string>();
+    const assessment = await this.getAssessmentById(assessmentId);
+    if (assessment?.document_storage_key) {
+      keys.add(assessment.document_storage_key);
+    }
+
+    const { data: subs } = await this.client
+      .from('submissions')
+      .select('id')
+      .eq('assessment_id', assessmentId);
+
+    const subIds = (subs || []).map(s => s.id);
+    if (subIds.length > 0) {
+      const { data: versions } = await this.client
+        .from('submission_versions')
+        .select('storage_path, files')
+        .in('submission_id', subIds);
+
+      for (const v of versions || []) {
+        if (v.storage_path) keys.add(v.storage_path);
+        if (Array.isArray(v.files)) {
+          for (const f of v.files) {
+            if (f?.storage_key) keys.add(f.storage_key);
+            if (f?.storage_path) keys.add(f.storage_path);
+          }
+        }
+      }
+    }
+
+    return Array.from(keys).filter(k => Boolean(k && k.trim()));
+  }
+
+  async deleteAssessmentPermanent(assessmentId: string, callerId: string): Promise<AssessmentDeletionCounts> {
+    this.assertStagingProject();
+    const summary = await this.getAssessmentDeletionSummary(assessmentId);
+
+    // Try RPC first
+    const { data: rpcData, error: rpcErr } = await this.client.rpc('delete_assessment_atomic', {
+      p_assessment_id: assessmentId,
+      p_caller_id: callerId
+    });
+
+    if (!rpcErr && rpcData?.success) {
+      return {
+        submissions: rpcData.deleted_counts?.submissions ?? summary.counts.submissions,
+        submission_versions: summary.counts.submission_versions,
+        evaluations: rpcData.deleted_counts?.evaluations ?? summary.counts.evaluations,
+        evaluation_criterion_scores: summary.counts.evaluation_criterion_scores,
+        questions: rpcData.deleted_counts?.questions ?? summary.counts.questions,
+        rubric_versions: rpcData.deleted_counts?.rubric_versions ?? summary.counts.rubric_versions,
+        rubric_criteria: summary.counts.rubric_criteria,
+        result_publications: rpcData.deleted_counts?.publications ?? summary.counts.result_publications,
+        storage_files: summary.counts.storage_files
+      };
+    }
+
+    // Fallback: Delete in foreign key order
+    // 1. Result publications
+    await this.client.from('result_publications').delete().eq('assessment_id', assessmentId);
+
+    // 2. Evaluations & submissions
+    const { data: subs } = await this.client.from('submissions').select('id').eq('assessment_id', assessmentId);
+    const subIds = (subs || []).map(s => s.id);
+    if (subIds.length > 0) {
+      const { data: evals } = await this.client.from('evaluations').select('id').in('submission_id', subIds);
+      const evalIds = (evals || []).map(e => e.id);
+      if (evalIds.length > 0) {
+        await this.client.from('evaluation_criterion_scores').delete().in('evaluation_id', evalIds);
+        await this.client.from('evaluations').delete().in('id', evalIds);
+      }
+      // Null active version id
+      await this.client.from('submissions').update({ active_version_id: null }).in('id', subIds);
+      await this.client.from('submission_versions').delete().in('submission_id', subIds);
+      await this.client.from('submissions').delete().in('id', subIds);
+    }
+
+    // 3. Rubrics & Questions
+    const { data: questions } = await this.client.from('questions').select('id').eq('assessment_id', assessmentId);
+    const qIds = (questions || []).map(q => q.id);
+
+    const { data: rvsAss } = await this.client.from('rubric_versions').select('id').eq('assessment_id', assessmentId);
+    let rvIds = (rvsAss || []).map(r => r.id);
+    if (qIds.length > 0) {
+      const { data: rvsQ } = await this.client.from('rubric_versions').select('id').in('question_id', qIds);
+      rvIds = [...rvIds, ...(rvsQ || []).map(r => r.id)];
+    }
+
+    if (rvIds.length > 0) {
+      const { data: rcs } = await this.client.from('rubric_criteria').select('id').in('rubric_version_id', rvIds);
+      const rcIds = (rcs || []).map(c => c.id);
+      if (rcIds.length > 0) {
+        await this.client.from('rubric_levels').delete().in('criterion_id', rcIds);
+        await this.client.from('rubric_criteria').delete().in('id', rcIds);
+      }
+      await this.client.from('rubric_versions').delete().in('id', rvIds);
+    }
+
+    if (qIds.length > 0) {
+      await this.client.from('questions').delete().in('id', qIds);
+    }
+
+    // 4. Assessment row
+    const { error: delErr } = await this.client.from('assessments').delete().eq('id', assessmentId);
+    if (delErr) {
+      throw new Error(`Failed to delete assessment: ${delErr.message}`);
+    }
+
+    return summary.counts;
+  }
+
+  async publishAssessment(id: string, publishedBy: string): Promise<Assessment> {
+    this.assertStagingProject();
+    const { error } = await this.client.rpc('publish_assessment', {
+      p_assessment_id: id,
+      p_published_by: publishedBy
+    });
+
+    if (error) {
+      throw new Error(`Failed to publish assessment: ${error.message}`);
+    }
+
+    const full = await this.getFullAssessment(id);
+    return full as Assessment;
+  }
+
+  async saveDraftAssessmentAtomic(assessmentId: string | null, data: any, callerId: string): Promise<any> {
+    this.assertStagingProject();
+    let storageKey = data.document_storage_key || null;
+    let sizeBytes = data.document_size_bytes || null;
+    let mimeType = data.document_mime_type || null;
+
+    if (data.document_base64 && data.document_filename) {
+      const buf = Buffer.from(data.document_base64, 'base64');
+      const tempId = assessmentId || randomUUID();
+      storageKey = `assessments/${tempId}/documents/${data.document_filename}`;
+      sizeBytes = buf.length;
+      mimeType = data.document_mime_type || 'application/pdf';
+
+      const { error: uploadError } = await this.client.storage
+        .from(this.bucketName)
+        .upload(storageKey, buf, {
+          contentType: mimeType,
+          upsert: true
+        });
+
+      if (uploadError) {
+        throw new Error(`Failed to upload assignment PDF: ${uploadError.message}`);
+      }
+    }
+
+    const { data: result, error } = await this.client.rpc('save_draft_assessment_atomic', {
+      p_assessment_id: assessmentId || null,
+      p_class_subject_id: data.class_subject_id,
+      p_title: data.title,
+      p_instructions: data.instructions,
+      p_deadline_at: data.deadline_at,
+      p_allow_late: Boolean(data.allow_late),
+      p_extension_deadline_at: data.extension_deadline_at || null,
+      p_late_penalty_mode: data.late_penalty_mode || 'none',
+      p_late_penalty_marks: data.late_penalty_marks || 0,
+      p_document_storage_key: storageKey,
+      p_document_filename: data.document_filename || null,
+      p_document_size_bytes: sizeBytes,
+      p_document_mime_type: mimeType,
+      p_caller_id: callerId,
+      p_questions: (data.questions || []).map((q: any, idx: number) => ({
+        id: q.id || null,
+        prompt: q.prompt,
+        display_order: q.display_order || (idx + 1),
+        max_marks: q.max_marks ?? 50
+      })),
+      p_rubric: data.rubric ? {
+        id: data.rubric.id || null,
+        title: data.rubric.title || 'Assignment Evaluation Rubric',
+        criteria: (data.rubric.criteria || []).map((c: any, idx: number) => ({
+          id: c.id || null,
+          title: (c.title || c.criterion_title || '').trim(),
+          criterion_title: (c.criterion_title || c.title || '').trim(),
+          description: c.description || '',
+          display_order: c.display_order || (idx + 1),
+          max_marks: Number(c.max_marks || c.max_score || 10)
+        }))
+      } : null
+    });
+
+    if (error) {
+      if (error.code === 'PGRST202' || error.message?.includes('save_draft_assessment_atomic')) {
+        let effectiveAssessmentId = assessmentId;
+        if (!effectiveAssessmentId) {
+          const created = await this.createAssessment({
+            class_subject_id: data.class_subject_id,
+            title: data.title,
+            instructions: data.instructions,
+            deadline_at: data.deadline_at,
+            document_storage_key: storageKey,
+            document_filename: data.document_filename || null,
+            document_size_bytes: sizeBytes,
+            document_mime_type: mimeType,
+            max_files: data.max_files || 1,
+            allow_late: Boolean(data.allow_late),
+            extension_deadline_at: data.extension_deadline_at || null,
+            late_penalty_mode: data.late_penalty_mode || 'none',
+            late_penalty_marks: data.late_penalty_marks || 0,
+            max_marks: 50,
+            questions: []
+          }, callerId);
+          effectiveAssessmentId = created.id;
+        } else {
+          await this.updateAssessment(effectiveAssessmentId, {
+            title: data.title,
+            instructions: data.instructions,
+            deadline_at: data.deadline_at,
+            allow_late: Boolean(data.allow_late),
+            extension_deadline_at: data.extension_deadline_at || null,
+            late_penalty_mode: data.late_penalty_mode || 'none',
+            late_penalty_marks: data.late_penalty_marks || 0,
+            max_marks: 50,
+            questions: []
+          });
+        }
+
+        // Reconcile questions
+        if (data.questions !== undefined) {
+          const remainingQIds: string[] = [];
+          for (let qIdx = 0; qIdx < data.questions.length; qIdx++) {
+            const q = data.questions[qIdx];
+            if (q.id) {
+              remainingQIds.push(q.id);
+              await this.updateQuestion(q.id, {
+                prompt: q.prompt,
+                display_order: q.display_order || (qIdx + 1),
+                max_marks: 50
+              });
+            } else {
+              const inserted = await this.createQuestion(effectiveAssessmentId, {
+                prompt: q.prompt,
+                display_order: q.display_order || (qIdx + 1),
+                max_marks: 50
+              });
+              remainingQIds.push(inserted.id);
+            }
+          }
+          if (remainingQIds.length > 0) {
+            await this.client.from('questions')
+              .delete()
+              .eq('assessment_id', effectiveAssessmentId)
+              .not('id', 'in', `(${remainingQIds.join(',')})`);
+          } else {
+            await this.client.from('questions')
+              .delete()
+              .eq('assessment_id', effectiveAssessmentId);
+          }
+        }
+
+        // Reconcile assignment-level rubric
+        if (data.rubric) {
+          let { data: rv } = await this.client
+            .from('rubric_versions')
+            .select('*')
+            .eq('assessment_id', effectiveAssessmentId)
+            .maybeSingle();
+
+          if (!rv) {
+            const { data: newRv } = await this.client
+              .from('rubric_versions')
+              .insert({
+                id: randomUUID(),
+                assessment_id: effectiveAssessmentId,
+                version: 1,
+                title: data.rubric.title || 'Assignment Evaluation Rubric',
+                created_by: callerId
+              })
+              .select()
+              .single();
+            rv = newRv;
+          }
+
+          if (rv && data.rubric.criteria) {
+            await this.client.from('rubric_criteria').delete().eq('rubric_version_id', rv.id);
+            const criteriaToInsert = data.rubric.criteria.map((c: any, cIdx: number) => ({
+              id: c.id || randomUUID(),
+              rubric_version_id: rv.id,
+              title: (c.title || c.criterion_title || '').trim(),
+              description: c.description || '',
+              max_marks: Number(c.max_marks || c.max_score || 10),
+              display_order: c.display_order || (cIdx + 1)
+            }));
+            if (criteriaToInsert.length > 0) {
+              await this.client.from('rubric_criteria').insert(criteriaToInsert);
+            }
+          }
+        }
+
+        return this.getFullAssessment(effectiveAssessmentId);
+      }
+
+      throw new Error(`Failed to save draft assessment: ${error.message}`);
+    }
+
+    return this.getFullAssessment(result.assessment_id);
   }
 
   async createQuestion(assessmentId: string, data: any): Promise<Question> {
@@ -871,7 +1720,7 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
       id: randomUUID(),
       assessment_id: assessmentId,
       prompt: data.prompt || data.title || '',
-      max_marks: data.max_marks,
+      max_marks: data.max_marks ?? 50,
       display_order: data.display_order || data.question_number || 1
     };
 
@@ -1051,6 +1900,10 @@ export const setAssessmentRepositoryForTesting = (repo: IAssessmentRepository | 
 
 export const getAssessmentRepository = (): IAssessmentRepository => {
   if (activeAssessmentRepoOverride) return activeAssessmentRepoOverride;
+
+  if (process.env.NODE_ENV === 'test' || process.env.SMARTFA_TEST_MODE === 'true') {
+    return new InMemoryAssessmentRepository(db);
+  }
 
   if (isLiveSupabaseConfigured && supabaseAdmin) {
     return new SupabaseAssessmentRepository(supabaseAdmin);

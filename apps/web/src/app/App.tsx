@@ -142,11 +142,11 @@ export const AppContent: React.FC = () => {
     if (isPasswordRecovery || isResetPasswordRoute) {
       const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
       const queryPortal = urlParams?.get('portal');
-      const recoveryPortal: 'student' | 'faculty' = queryPortal === 'student' ? 'student' : 'faculty';
+      const recoveryPortal: 'student' | 'faculty' | 'admin' = (queryPortal === 'student' || queryPortal === 'admin') ? queryPortal : 'faculty';
       return (
         <ResetPasswordView
           portal={recoveryPortal}
-          onSuccessRedirect={() => navigate('/faculty/login')}
+          onSuccessRedirect={() => navigate(`/${recoveryPortal}/login`)}
           onNavigatePortal={(p) => navigate(`/${p}/login`)}
           onBackToSelection={() => navigate('/')}
         />
@@ -167,6 +167,16 @@ export const AppContent: React.FC = () => {
       return (
         <LoginView
           portal="faculty"
+          onNavigatePortal={(p) => navigate(`/${p}/login`)}
+          onBackToSelection={() => navigate('/')}
+        />
+      );
+    }
+
+    if (cleanPath === '/admin/login') {
+      return (
+        <LoginView
+          portal="admin"
           onNavigatePortal={(p) => navigate(`/${p}/login`)}
           onBackToSelection={() => navigate('/')}
         />
@@ -235,11 +245,87 @@ export const AppContent: React.FC = () => {
   }
 
   // 4. Portal-level Route Guard: Reject authenticated users visiting the wrong portal route
-  const staffRoles = ['subject_teacher', 'class_teacher', 'proctor', 'hod'];
-  const isStaff = userContext?.roles.some(r => staffRoles.includes(r));
-  const isStudent = userContext?.roles.includes('student');
+  const userRoles = userContext?.roles || [];
+  const isHOD = userRoles.includes('hod');
+  const facultyRoles = ['subject_teacher', 'class_teacher', 'proctor'];
+  const hasFacultyRole = userRoles.some(r => facultyRoles.includes(r));
+  const isStudent = userRoles.includes('student');
 
-  if (pathname === '/faculty/login' && !isStaff) {
+  // Authoritative portal assignment:
+  // - Accounts possessing 'hod' MUST use 'admin' portal exclusively.
+  // - Accounts possessing faculty roles without 'hod' MUST use 'faculty' portal.
+  // - Pure student accounts (with NO faculty and NO hod roles) MUST use 'student' portal.
+  const authorizedPortal: 'admin' | 'faculty' | 'student' = isHOD
+    ? 'admin'
+    : hasFacultyRole
+    ? 'faculty'
+    : 'student';
+
+  const isAdminPath = cleanPath === '/admin' || cleanPath.startsWith('/admin/');
+  const isFacultyPath = cleanPath === '/faculty' || cleanPath.startsWith('/faculty/');
+  const isStudentPath = cleanPath === '/student' || cleanPath.startsWith('/student/');
+
+  // Route Guard A: Admin Portal paths (/admin, /admin/*)
+  // Only accounts with 'hod' are authorized.
+  if (isAdminPath && !isHOD) {
+    const targetPortal = authorizedPortal;
+    const targetLabel = targetPortal === 'faculty' ? 'Faculty Workspace' : 'Student Workspace';
+    const targetPath = `/${targetPortal}/login`;
+    return (
+      <div className="min-h-screen bg-academic-bg flex flex-col justify-center items-center px-4 py-12">
+        <div className="w-full max-w-lg bg-academic-surface border border-academic-border rounded-2xl shadow-sm p-6 sm:p-8 space-y-6">
+          <div className="flex items-center space-x-3 text-[#A63214]">
+            <div className="p-2.5 rounded-full bg-[#FFF5F2] border border-[#F2C4B3]">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-academic-deepGreen">
+                Admin Portal Access Denied
+              </h2>
+              <p className="text-xs text-academic-muted">
+                Authenticated Identity: {user.email}
+              </p>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-md bg-[#FFFDF8] border border-academic-border text-xs text-academic-deepGreen leading-relaxed space-y-2">
+            <p className="font-semibold text-[#A63214]">
+              Access restricted: Head of Department (HOD) role required.
+            </p>
+            <p className="text-academic-muted">
+              {targetPortal === 'faculty'
+                ? 'Your account is authorized for the Faculty Portal. Administrative structure, user directory, and institutional reporting are reserved for the Head of Department.'
+                : 'Your account is authorized for the Student Portal. Access to institutional administrative controls is strictly prohibited.'}
+            </p>
+          </div>
+
+          <div className="pt-2 flex justify-between items-center border-t border-academic-border">
+            <button
+              onClick={() => navigate(targetPath)}
+              className="btn-primary text-xs"
+            >
+              Go to {targetLabel}
+            </button>
+            <button
+              onClick={logout}
+              className="py-2 px-4 rounded-md bg-academic-surface border border-academic-border hover:bg-[#FFF5F2] text-[#A63214] font-medium text-xs flex items-center space-x-1.5 transition-colors focus:outline-none focus:ring-2 focus:ring-[#A63214]"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Sign Out</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Route Guard B: Faculty Portal paths (/faculty, /faculty/*)
+  // Accounts possessing 'hod' are REJECTED (must use Admin Portal).
+  // Accounts possessing 'student' are REJECTED (must use Student Portal).
+  if (isFacultyPath && (isHOD || isStudent || !hasFacultyRole)) {
+    const targetPortal = isHOD ? 'admin' : 'student';
+    const targetLabel = isHOD ? 'Admin Workspace' : 'Student Workspace';
+    const targetPath = `/${targetPortal}/login`;
     return (
       <div className="min-h-screen bg-academic-bg flex flex-col justify-center items-center px-4 py-12">
         <div className="w-full max-w-lg bg-academic-surface border border-academic-border rounded-2xl shadow-sm p-6 sm:p-8 space-y-6">
@@ -259,19 +345,23 @@ export const AppContent: React.FC = () => {
 
           <div className="p-4 rounded-md bg-[#FFFDF8] border border-academic-border text-xs text-academic-deepGreen leading-relaxed space-y-2">
             <p className="font-semibold text-[#A63214]">
-              Access restricted: You are authenticated with a student account.
+              {isHOD
+                ? 'HOD accounts must authenticate and operate exclusively through the Admin Portal.'
+                : 'Access restricted: You are authenticated with a student account.'}
             </p>
             <p className="text-academic-muted">
-              Students cannot access faculty assessment creation, rubric evaluation, or administrative tools. Please access your designated academic portal.
+              {isHOD
+                ? 'Department Heads must enter via the Admin Portal. If you have teaching duties, you can seamlessly switch workspaces inside the Admin Portal without separate faculty login.'
+                : 'Students cannot access faculty assessment creation, rubric evaluation, or administrative tools. Please access your designated academic portal.'}
             </p>
           </div>
 
           <div className="pt-2 flex justify-between items-center border-t border-academic-border">
             <button
-              onClick={() => navigate('/student/login')}
+              onClick={() => navigate(targetPath)}
               className="btn-primary text-xs"
             >
-              Go to Student Workspace
+              Go to {targetLabel}
             </button>
             <button
               onClick={logout}
@@ -286,7 +376,12 @@ export const AppContent: React.FC = () => {
     );
   }
 
-  if (pathname === '/student/login' && !isStudent) {
+  // Route Guard C: Student Portal paths (/student, /student/*)
+  // Accounts possessing 'hod' or any faculty role are REJECTED (even if they also have a student role).
+  if (isStudentPath && (isHOD || hasFacultyRole || !isStudent)) {
+    const targetPortal = authorizedPortal;
+    const targetLabel = targetPortal === 'admin' ? 'Admin Workspace' : 'Faculty Workspace';
+    const targetPath = `/${targetPortal}/login`;
     return (
       <div className="min-h-screen bg-academic-bg flex flex-col justify-center items-center px-4 py-12">
         <div className="w-full max-w-lg bg-academic-surface border border-academic-border rounded-2xl shadow-sm p-6 sm:p-8 space-y-6">
@@ -306,19 +401,23 @@ export const AppContent: React.FC = () => {
 
           <div className="p-4 rounded-md bg-[#FFFDF8] border border-academic-border text-xs text-academic-deepGreen leading-relaxed space-y-2">
             <p className="font-semibold text-[#A63214]">
-              Access restricted: You are authenticated with faculty/staff credentials.
+              {isHOD
+                ? 'Access restricted: Department Heads cannot access the Student Portal.'
+                : 'Access restricted: Faculty members cannot access the Student Portal.'}
             </p>
             <p className="text-academic-muted">
-              Faculty members and administrators must manage academic evaluations through the Faculty Portal.
+              {isHOD
+                ? 'Accounts possessing the Head of Department role must manage department assessments through the Admin Portal.'
+                : 'Faculty members and academic staff must manage assessments through the Faculty Portal.'}
             </p>
           </div>
 
           <div className="pt-2 flex justify-between items-center border-t border-academic-border">
             <button
-              onClick={() => navigate('/faculty/login')}
+              onClick={() => navigate(targetPath)}
               className="btn-primary text-xs"
             >
-              Go to Faculty Workspace
+              Go to {targetLabel}
             </button>
             <button
               onClick={logout}

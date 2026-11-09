@@ -272,10 +272,15 @@ router.get('/assessment/:assessmentId', async (req: Request, res: Response) => {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Assessment not found' } });
   }
 
+  if (assessment.status === 'deletion_pending') {
+    return res.status(409).json({ error: { code: 'DELETION_PENDING', message: 'Cannot publish grades: This assessment is scheduled for deletion.' } });
+  }
+
   const evaluations = await evalRepo.listEvaluationsForAssessment(assessment.id);
+  const isTestMode = process.env.NODE_ENV === 'test' || process.env.SMARTFA_TEST_MODE === 'true';
   let isPublished = false;
 
-  if (isLiveSupabaseConfigured && Boolean(supabaseAdmin)) {
+  if (!isTestMode && isLiveSupabaseConfigured && Boolean(supabaseAdmin)) {
     const { data: pubRec } = await getAdminClient().from('result_publications')
       .select('id')
       .eq('assessment_id', assessment.id)
@@ -320,7 +325,7 @@ router.get('/submission/:submissionId', async (req: Request, res: Response) => {
   }
 
   if (user.roles.includes('student') && evaluation.status !== 'published') {
-    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Evaluation results not published yet' } });
+    return res.status(403).json({ error: { code: 'RESULTS_NOT_PUBLISHED', message: 'Evaluation results not published yet' } });
   }
 
   return res.status(200).json({ evaluation });
@@ -335,7 +340,7 @@ router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, 
   const parseResult = SaveEvaluationRequestSchema.safeParse(req.body);
   if (!parseResult.success) {
     return res.status(400).json({
-      error: { code: 'INVALID_REQUEST', message: 'Invalid evaluation payload', details: parseResult.error.errors }
+      error: { code: 'VALIDATION_ERROR', message: 'Invalid evaluation payload', details: parseResult.error.errors }
     });
   }
 
@@ -351,11 +356,65 @@ router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, 
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Assessment not found' } });
   }
 
+  if (assessment.status === 'deletion_pending') {
+    return res.status(409).json({ error: { code: 'DELETION_PENDING', message: 'This assessment is scheduled for deletion and cannot accept evaluations.' } });
+  }
+
   if (!user.isHOD) {
     const isAuth = await assRepo.isAuthorizedTeacher(user.profile.id, assessment.class_subject_id);
     if (!isAuth) {
       return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Unauthorized teacher for this assessment' } });
     }
+  }
+
+  const fullAss = await assRepo.getFullAssessment(assessment.id);
+  const allCriteria: any[] = [];
+  if (fullAss?.assignment_rubric?.criteria) {
+    allCriteria.push(...fullAss.assignment_rubric.criteria);
+  }
+  if (fullAss?.questions) {
+    for (const q of fullAss.questions) {
+      if (q.rubric?.criteria) {
+        allCriteria.push(...q.rubric.criteria);
+      }
+    }
+  }
+
+  if (body.criterion_scores && body.criterion_scores.length > 0) {
+    for (const cs of body.criterion_scores) {
+      const matchCrit = allCriteria.find(c => c.id === cs.criterion_id);
+      if (matchCrit && cs.score > matchCrit.max_marks) {
+        return res.status(400).json({
+          error: {
+            code: 'SCORE_EXCEEDS_MAX',
+            message: `Score ${cs.score} exceeds maximum allowed marks of ${matchCrit.max_marks} for criterion "${matchCrit.title}"`
+          }
+        });
+      }
+    }
+  }
+
+  if (body.status === 'completed' && allCriteria.length > 0) {
+    const scoredCritIds = new Set(body.criterion_scores?.map(cs => cs.criterion_id) || []);
+    const missingCriteria = allCriteria.filter(c => !scoredCritIds.has(c.id));
+    if (missingCriteria.length > 0) {
+      return res.status(400).json({
+        error: {
+          code: 'INCOMPLETE_EVALUATION',
+          message: 'Completed evaluation requires all criteria to be scored'
+        }
+      });
+    }
+  }
+
+  const existingEval = await evalRepo.getEvaluationBySubmissionId(submission.id);
+  if (existingEval?.status === 'published') {
+    return res.status(400).json({
+      error: {
+        code: 'ALREADY_PUBLISHED',
+        message: 'Cannot modify an already published evaluation'
+      }
+    });
   }
 
   try {
@@ -368,9 +427,10 @@ router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, 
       criterionScores: body.criterion_scores
     });
 
+    const auditAction = body.status === 'completed' ? 'COMPLETE_EVALUATION' : 'SAVE_EVALUATION_DRAFT';
     await logAuditEvent({
       actorId: user.profile.id,
-      action: 'EVALUATION_SAVED',
+      action: auditAction,
       resourceType: 'evaluation',
       resourceId: evaluation.id,
       after: {
@@ -382,7 +442,7 @@ router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, 
       correlationId: req.headers['x-correlation-id'] as string
     });
 
-    return res.status(200).json({ evaluation });
+    return res.status(existingEval ? 200 : 201).json({ evaluation });
   } catch (err: any) {
     return res.status(500).json({
       error: { code: 'SERVER_ERROR', message: err.message || 'Failed to save evaluation' }
@@ -402,6 +462,10 @@ router.post('/assessment/:assessmentId/publish', requireRoles(['subject_teacher'
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Assessment not found' } });
   }
 
+  if (assessment.status === 'deletion_pending') {
+    return res.status(409).json({ error: { code: 'DELETION_PENDING', message: 'Cannot publish grades: This assessment is scheduled for deletion.' } });
+  }
+
   if (!user.isHOD) {
     const isAuth = await assRepo.isAuthorizedTeacher(user.profile.id, assessment.class_subject_id);
     if (!isAuth) {
@@ -411,7 +475,8 @@ router.post('/assessment/:assessmentId/publish', requireRoles(['subject_teacher'
 
   // 1. Prevent duplicate publication
   let alreadyPublished = false;
-  if (isLiveSupabaseConfigured && Boolean(supabaseAdmin)) {
+  const isTestMode = process.env.NODE_ENV === 'test' || process.env.SMARTFA_TEST_MODE === 'true';
+  if (!isTestMode && isLiveSupabaseConfigured && Boolean(supabaseAdmin)) {
     const { data: pubRec } = await getAdminClient().from('result_publications')
       .select('id')
       .eq('assessment_id', assessment.id)
@@ -458,7 +523,7 @@ router.post('/assessment/:assessmentId/publish', requireRoles(['subject_teacher'
 
   await logAuditEvent({
     actorId: user.profile.id,
-    action: 'RESULTS_PUBLISHED',
+    action: 'PUBLISH_ASSESSMENT_RESULTS',
     resourceType: 'result_publication',
     resourceId: publication.id,
     after: { assessment_id: assessment.id, published_evaluations_count: publishedCount },
@@ -467,6 +532,7 @@ router.post('/assessment/:assessmentId/publish', requireRoles(['subject_teacher'
 
   return res.status(200).json({
     publication,
+    published_count: publishedCount,
     published_evaluations_count: publishedCount
   });
 });

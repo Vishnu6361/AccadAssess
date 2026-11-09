@@ -8,7 +8,8 @@ import {
   formatClassName
 } from '@smartfa/contracts';
 import { logAuditEvent } from '../audit/auditService.js';
-import { authenticateJWT, supabaseAdmin } from '../auth/jwt.js';
+import jwt from 'jsonwebtoken';
+import { authenticateJWT, supabaseAdmin, DEV_JWT_SECRET, REAUTH_JWT_SECRET, consumeReauthTokenAtomic, isReauthTokenConsumed, markReauthTokenConsumed } from '../auth/jwt.js';
 import { loadUserContext, requireRoles } from '../authorization/rbac.js';
 import { getAssessmentRepository } from '../storage/assessmentRepository.js';
 import { getAcademicRepository } from '../storage/academicRepository.js';
@@ -203,7 +204,9 @@ router.get('/:id', async (req: Request, res: Response) => {
     });
   }
 
-  if (user.roles.includes('student')) {
+  if (user.isHOD) {
+    // HOD has full access across all department assessments
+  } else if (user.roles.includes('student')) {
     if (assessment.status !== 'published') {
       return res.status(403).json({
         error: { code: 'FORBIDDEN', message: 'Students can only view published assessments' }
@@ -216,18 +219,21 @@ router.get('/:id', async (req: Request, res: Response) => {
         error: { code: 'FORBIDDEN', message: 'You are not enrolled in the class for this assessment' }
       });
     }
-  }
-
-  if (user.roles.includes('class_teacher') && !user.isHOD && !user.roles.includes('subject_teacher')) {
+  } else if (user.roles.includes('subject_teacher')) {
+    const isAuth = await repo.isAuthorizedTeacher(user.profile.id, assessment.class_subject_id);
+    if (!isAuth) {
+      return res.status(403).json({
+        error: { code: 'FORBIDDEN', message: 'Unauthorized teacher for this assessment' }
+      });
+    }
+  } else if (user.roles.includes('class_teacher')) {
     const isClassTeacher = await repo.isClassTeacherForAssessment(user.profile.id, assessment.class_subject_id);
     if (!isClassTeacher) {
       return res.status(403).json({
         error: { code: 'FORBIDDEN', message: 'You are not the class teacher for this assessment' }
       });
     }
-  }
-
-  if (user.roles.includes('proctor') && !user.isHOD && !user.roles.includes('subject_teacher') && !user.roles.includes('class_teacher')) {
+  } else if (user.roles.includes('proctor')) {
     const academicRepo = getAcademicRepository();
     const mentees = await academicRepo.listProctorAssignmentsByProctor(user.profile.id);
     const menteeIds = mentees.filter(m => !m.valid_to).map(m => m.student_id);
@@ -406,11 +412,15 @@ router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, 
 
   const parseResult = CreateAssessmentRequestSchema.safeParse(req.body);
   if (!parseResult.success) {
+    const errorDetails = parseResult.error.errors;
+    const formattedErrors = errorDetails
+      .map(e => `${e.path.join('.') || 'payload'}: ${e.message}`)
+      .join('; ');
     return res.status(400).json({
       error: {
         code: 'VALIDATION_ERROR',
-        message: 'Invalid assessment creation payload',
-        details: parseResult.error.errors
+        message: `Invalid assessment creation payload: ${formattedErrors}`,
+        details: errorDetails
       }
     });
   }
@@ -420,13 +430,21 @@ router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, 
     const isAuth = await repo.isAuthorizedTeacher(user.profile.id, body.class_subject_id);
     if (!isAuth) {
       return res.status(403).json({
-        error: { code: 'FORBIDDEN', message: 'You are not assigned as the teacher for this class subject' }
+        error: { code: 'FORBIDDEN_UNASSIGNED_TEACHER', message: 'You are not assigned as the teacher for this class subject' }
       });
     }
   }
 
+  if (new Date(body.deadline_at).getTime() <= Date.now()) {
+    return res.status(400).json({
+      error: { code: 'INVALID_DEADLINE', message: 'Assessment submission deadline must be in the future' }
+    });
+  }
+
   try {
-    const assessment = await repo.createAssessment(body, user.profile.id);
+    const assessment = repo.saveDraftAssessmentAtomic
+      ? await repo.saveDraftAssessmentAtomic(null, body, user.profile.id)
+      : await repo.createAssessment(body, user.profile.id);
 
     await logAuditEvent({
       actorId: user.profile.id,
@@ -446,35 +464,43 @@ router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, 
 });
 
 router.get('/:id/deletion-check', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
-  const user = req.userContext!;
-  const repo = getAssessmentRepository();
-  const assessment = await repo.getAssessmentById(req.params.id);
+  try {
+    const user = req.userContext!;
+    const repo = getAssessmentRepository();
+    const assessment = await repo.getAssessmentById(req.params.id);
 
-  if (!assessment) {
-    return res.status(404).json({
-      error: { code: 'NOT_FOUND', message: 'Assessment not found' }
-    });
-  }
-
-  if (!user.isHOD) {
-    const isAuth = await repo.isAuthorizedTeacher(user.profile.id, assessment.class_subject_id);
-    if (!isAuth) {
-      return res.status(403).json({
-        error: { code: 'FORBIDDEN', message: 'Unauthorized teacher for this assessment' }
+    if (!assessment) {
+      return res.status(404).json({
+        error: { code: 'NOT_FOUND', message: 'Assessment not found' }
       });
     }
-  }
 
-  const records = await repo.hasRelatedStudentRecords(assessment.id);
-  return res.status(200).json({
-    can_delete: !records.hasRecords,
-    submissions_count: records.submissionsCount,
-    evaluations_count: records.evaluationsCount,
-    is_published: records.isPublished,
-    reason: records.hasRecords
-      ? `This assessment has ${records.submissionsCount} student submission(s) and evaluation records. To protect academic history, deletion is prevented.`
-      : null
-  });
+    if (!user.isHOD) {
+      const isAuth = await repo.isAuthorizedTeacher(user.profile.id, assessment.class_subject_id);
+      if (!isAuth) {
+        return res.status(403).json({
+          error: { code: 'FORBIDDEN', message: 'Unauthorized teacher for this assessment' }
+        });
+      }
+    }
+
+    const summary = await repo.getAssessmentDeletionSummary(assessment.id);
+    const records = await repo.hasRelatedStudentRecords(assessment.id);
+
+    return res.status(200).json({
+      can_delete: true,
+      summary,
+      counts: summary.counts,
+      submissions_count: summary.counts.submissions,
+      evaluations_count: summary.counts.evaluations,
+      is_published: summary.counts.result_publications > 0 || records.isPublished,
+      reason: null
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Failed to check assessment deletion status' }
+    });
+  }
 });
 
 router.put('/:id', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
@@ -488,9 +514,9 @@ router.put('/:id', requireRoles(['subject_teacher', 'hod']), async (req: Request
     });
   }
 
-  if (assessment.status === 'closed') {
+  if (assessment.status === 'published' || assessment.status === 'closed') {
     return res.status(400).json({
-      error: { code: 'ASSESSMENT_CLOSED', message: 'Closed assessments cannot be modified' }
+      error: { code: 'LIFECYCLE_LOCKED', message: `Cannot modify assessment with status ${assessment.status}` }
     });
   }
 
@@ -505,8 +531,16 @@ router.put('/:id', requireRoles(['subject_teacher', 'hod']), async (req: Request
 
   const parseResult = UpdateAssessmentRequestSchema.safeParse(req.body);
   if (!parseResult.success) {
+    const errorDetails = parseResult.error.errors;
+    const formattedErrors = errorDetails
+      .map(e => `${e.path.join('.') || 'payload'}: ${e.message}`)
+      .join('; ');
     return res.status(400).json({
-      error: { code: 'VALIDATION_ERROR', message: 'Invalid payload', details: parseResult.error.errors }
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: `Invalid assessment update payload: ${formattedErrors}`,
+        details: errorDetails
+      }
     });
   }
 
@@ -547,7 +581,9 @@ router.put('/:id', requireRoles(['subject_teacher', 'hod']), async (req: Request
   // Check if student submissions or evaluations already exist
   const records = await repo.hasRelatedStudentRecords(assessment.id);
 
-  const updated = await repo.updateAssessment(assessment.id, body);
+  const updated = repo.saveDraftAssessmentAtomic
+    ? await repo.saveDraftAssessmentAtomic(assessment.id, { ...body, class_subject_id: assessment.class_subject_id }, user.profile.id)
+    : await repo.updateAssessment(assessment.id, body as any);
 
   await logAuditEvent({
     actorId: user.profile.id,
@@ -578,6 +614,7 @@ router.delete('/:id', requireRoles(['subject_teacher', 'hod']), async (req: Requ
     });
   }
 
+  // 1. Authorization: check active assignment on backend
   if (!user.isHOD) {
     const isAuth = await repo.isAuthorizedTeacher(user.profile.id, assessment.class_subject_id);
     if (!isAuth) {
@@ -587,37 +624,147 @@ router.delete('/:id', requireRoles(['subject_teacher', 'hod']), async (req: Requ
     }
   }
 
-  // Check whether student submissions, evaluation records, or published grades exist
-  const records = await repo.hasRelatedStudentRecords(assessment.id);
-  if (records.hasRecords) {
-    return res.status(409).json({
+  // 2. Password Confirmation (Reauth Token Verification)
+  const reauthToken = (req.headers['x-reauth-token'] || req.headers['authorization-reauth']) as string;
+  if (!reauthToken) {
+    return res.status(401).json({
       error: {
-        code: 'CANNOT_DELETE_WITH_SUBMISSIONS',
-        message: `Cannot delete assessment "${assessment.title}" because it already has ${records.submissionsCount} student submission(s) or evaluation records. To protect academic records and historical integrity, deletion is prevented.`,
-        details: {
-          submissions_count: records.submissionsCount,
-          evaluations_count: records.evaluationsCount,
-          is_published: records.isPublished
-        }
+        code: 'REAUTH_REQUIRED',
+        message: 'Password confirmation required. Please enter your institutional login password to proceed with permanent deletion.'
       }
     });
   }
 
-  await repo.deleteAssessment(assessment.id);
+  try {
+    const decoded: any = jwt.verify(reauthToken, REAUTH_JWT_SECRET);
+    if (!decoded || decoded.sub !== user.profile.id || decoded.purpose !== 'assignment_deletion') {
+      return res.status(403).json({
+        error: {
+          code: 'REAUTH_INVALID',
+          message: 'Invalid or unauthorized password confirmation token. Please re-enter your password.'
+        }
+      });
+    }
 
-  await logAuditEvent({
-    actorId: user.profile.id,
-    action: 'ASSESSMENT_DELETED',
-    resourceType: 'assessment',
-    resourceId: assessment.id,
-    before: assessment as any,
-    correlationId: req.headers['x-correlation-id'] as string
-  });
+    // 1. Single-use replay protection: token cannot be reused across any operation or assignment
+    if (decoded.jti && isReauthTokenConsumed(decoded.jti)) {
+      return res.status(403).json({
+        error: {
+          code: 'REAUTH_ALREADY_USED',
+          message: 'This password confirmation token has already been used and cannot be reused.'
+        }
+      });
+    }
 
-  return res.status(200).json({
-    success: true,
-    message: `Assessment "${assessment.title}" was successfully deleted.`
-  });
+    // 2. Target assignment binding check: token cannot be used for a different assignment
+    if (decoded.assessment_id && decoded.assessment_id !== assessment.id) {
+      return res.status(403).json({
+        error: {
+          code: 'REAUTH_TARGET_MISMATCH',
+          message: 'This password confirmation token is not valid for this assignment.'
+        }
+      });
+    }
+
+    if (!decoded.jti) {
+      return res.status(403).json({
+        error: {
+          code: 'REAUTH_INVALID',
+          message: 'Password confirmation token missing unique identifier (jti).'
+        }
+      });
+    }
+
+    const expiresAt = decoded.exp ? new Date(decoded.exp * 1000) : new Date(Date.now() + 5 * 60 * 1000);
+
+    // 3. Atomically consume token - prevents concurrent races across multiple instances
+    const consumption = await consumeReauthTokenAtomic({
+      jti: decoded.jti,
+      purpose: decoded.purpose,
+      targetId: assessment.id,
+      consumedBy: user.profile.id,
+      expiresAt
+    });
+
+    if (!consumption.success) {
+      return res.status(403).json({
+        error: {
+          code: consumption.code || 'REAUTH_ALREADY_USED',
+          message: consumption.message || 'This password confirmation token has already been used and cannot be reused.'
+        }
+      });
+    }
+  } catch (reauthErr: any) {
+    return res.status(403).json({
+      error: {
+        code: 'REAUTH_EXPIRED',
+        message: 'Password confirmation has expired or is invalid. Please re-enter your institutional password.',
+        details: reauthErr.message
+      }
+    });
+  }
+
+  try {
+    // Stage 1: Transition status to deletion_pending to lock any concurrent submissions or evaluations
+    await repo.markAssessmentDeletionPending(assessment.id, user.profile.id);
+
+    // Stage 2: Collect all storage objects
+    const storageKeys = await repo.listAssessmentStorageKeys(assessment.id);
+
+    // Stage 3: Delete storage files from storage
+    // If storage deletion throws/fails, abort before database cascade to prevent orphaned storage objects
+    if (storageKeys.length > 0) {
+      const isLive = repo.getMode() === 'supabase_postgresql';
+      if (isLive && supabaseAdmin) {
+        const bucket = process.env.STORAGE_BUCKET_ASSIGNMENTS || 'submissions-private';
+        const { error: storageError } = await supabaseAdmin.storage.from(bucket).remove(storageKeys);
+        if (storageError) {
+          return res.status(502).json({
+            error: {
+              code: 'STORAGE_DELETION_FAILED',
+              message: `Failed to remove storage files associated with assessment: ${storageError.message}. Deletion was aborted to prevent orphaned records. You may retry.`,
+              details: storageError
+            }
+          });
+        }
+      }
+    }
+
+    // Stage 4: Atomic cascade database deletion
+    const deletedCounts = await repo.deleteAssessmentPermanent(assessment.id, user.profile.id);
+
+    // Stage 5: Log audit event (only metadata and counts - NEVER passwords or academic content)
+    await logAuditEvent({
+      actorId: user.profile.id,
+      action: 'ASSESSMENT_PERMANENTLY_DELETED',
+      resourceType: 'assessment',
+      resourceId: assessment.id,
+      before: {
+        id: assessment.id,
+        title: assessment.title,
+        class_subject_id: assessment.class_subject_id,
+        status: assessment.status
+      },
+      after: {
+        deleted_counts: deletedCounts,
+        deleted_storage_files_count: storageKeys.length
+      },
+      correlationId: (req.headers['x-correlation-id'] as string) || (req.headers['x-request-id'] as string)
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Assessment "${assessment.title}" and all associated academic records were permanently deleted.`,
+      deleted_counts: deletedCounts
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: {
+        code: 'DELETION_FAILED',
+        message: err.message || 'An error occurred during permanent assessment deletion.'
+      }
+    });
+  }
 });
 
 router.post('/:id/questions', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
@@ -628,6 +775,12 @@ router.post('/:id/questions', requireRoles(['subject_teacher', 'hod']), async (r
   if (!assessment) {
     return res.status(404).json({
       error: { code: 'NOT_FOUND', message: 'Assessment not found' }
+    });
+  }
+
+  if (assessment.status === 'published' || assessment.status === 'closed') {
+    return res.status(400).json({
+      error: { code: 'LIFECYCLE_LOCKED', message: `Cannot add questions: assessment is ${assessment.status}` }
     });
   }
 
@@ -648,17 +801,48 @@ router.post('/:id/questions', requireRoles(['subject_teacher', 'hod']), async (r
 
 router.put('/:id/questions/:questionId', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
   const repo = getAssessmentRepository();
+  const assessment = await repo.getAssessmentById(req.params.id);
+  if (assessment && (assessment.status === 'published' || assessment.status === 'closed')) {
+    return res.status(400).json({
+      error: { code: 'LIFECYCLE_LOCKED', message: `Cannot modify questions: assessment is ${assessment.status}` }
+    });
+  }
   const body = UpdateQuestionRequestSchema.parse(req.body);
   const updated = await repo.updateQuestion(req.params.questionId, body);
   return res.status(200).json({ question: updated });
 });
 
+router.delete('/:id/questions/:questionId', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
+  const repo = getAssessmentRepository();
+  const assessment = await repo.getAssessmentById(req.params.id);
+  if (!assessment) {
+    return res.status(404).json({
+      error: { code: 'NOT_FOUND', message: 'Assessment not found' }
+    });
+  }
+  if (assessment.status === 'published' || assessment.status === 'closed') {
+    return res.status(400).json({
+      error: { code: 'LIFECYCLE_LOCKED', message: `Cannot delete question: assessment is ${assessment.status}` }
+    });
+  }
+  if (repo.deleteQuestion) {
+    await repo.deleteQuestion(req.params.questionId);
+  }
+  return res.status(200).json({ success: true, message: 'Question deleted' });
+});
+
 router.post('/:id/questions/:questionId/rubric', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
   const user = req.userContext!;
   const repo = getAssessmentRepository();
+  const assessment = await repo.getAssessmentById(req.params.id);
+  if (assessment && (assessment.status === 'published' || assessment.status === 'closed')) {
+    return res.status(400).json({
+      error: { code: 'LIFECYCLE_LOCKED', message: `Cannot modify rubric: assessment is ${assessment.status}` }
+    });
+  }
   const body = SaveRubricRequestSchema.parse(req.body);
   const rubric = await repo.saveRubric(req.params.questionId, body, user.profile.id);
-  return res.status(200).json({ rubric });
+  return res.status(201).json({ rubric });
 });
 
 router.post('/:id/publish', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
@@ -681,11 +865,29 @@ router.post('/:id/publish', requireRoles(['subject_teacher', 'hod']), async (req
     }
   }
 
-  const published = await repo.publishAssessment(assessment.id, user.profile.id);
+  let published: any;
+  try {
+    published = await repo.publishAssessment(assessment.id, user.profile.id);
+  } catch (err: any) {
+    const msg = err.message || '';
+    if (msg.includes('rubric') && (msg.includes('missing') || msg.includes('configured') || msg.includes('zero criteria'))) {
+      return res.status(422).json({
+        error: { code: 'MISSING_RUBRIC', message: msg }
+      });
+    }
+    if (msg.includes('total') || msg.includes('does not equal') || msg.includes('mismatch')) {
+      return res.status(422).json({
+        error: { code: 'RUBRIC_TOTAL_MISMATCH', message: msg }
+      });
+    }
+    return res.status(400).json({
+      error: { code: 'PUBLISH_FAILED', message: msg }
+    });
+  }
 
   await logAuditEvent({
     actorId: user.profile.id,
-    action: 'ASSESSMENT_PUBLISHED',
+    action: 'PUBLISH_ASSESSMENT',
     resourceType: 'assessment',
     resourceId: assessment.id,
     before: assessment as any,
