@@ -4,8 +4,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { z } from 'zod';
 import jwt from 'jsonwebtoken';
-import { DEV_JWT_SECRET, REAUTH_JWT_SECRET, authenticateJWT, supabaseAdmin } from './auth/jwt.js';
-import { loadUserContext } from './authorization/rbac.js';
+import { DEV_JWT_SECRET, REAUTH_JWT_SECRET, authenticateJWT, supabaseAdmin, invalidateVerifiedToken } from './auth/jwt.js';
+import { loadUserContext, invalidateUserContextCache } from './authorization/rbac.js';
 import { getUserRepository } from './storage/userRepository.js';
 import { db } from './storage/db.js';
 
@@ -58,6 +58,7 @@ export function normalizeOrigin(input: string): string {
 // Built-in trusted production origins for AcadAssess
 const TRUSTED_PRODUCTION_ORIGINS = [
   'https://acad-assess.vercel.app',
+  'https://accad-assess.vercel.app',
   'https://acadassess.vercel.app'
 ];
 
@@ -372,6 +373,25 @@ app.post('/api/v1/auth/verify-portal', authenticateJWT, loadUserContext, (req: R
       activeRole: 'hod'
     });
   }
+});
+
+/**
+ * Institutional Logout Endpoint
+ * Immediately invalidates in-memory verified JWT cache and cached user context.
+ */
+app.post('/api/v1/auth/logout', authenticateJWT, (req: Request, res: Response) => {
+  const token = req.headers.authorization?.startsWith('Bearer ')
+    ? req.headers.authorization.split(' ')[1]
+    : undefined;
+
+  if (token) {
+    invalidateVerifiedToken(token);
+  }
+  if (req.user?.id) {
+    invalidateUserContextCache(req.user.id);
+  }
+
+  res.status(200).json({ success: true, message: 'Institutional session invalidated' });
 });
 
 /**

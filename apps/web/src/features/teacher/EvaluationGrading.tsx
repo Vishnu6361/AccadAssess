@@ -32,7 +32,8 @@ import {
   SubmittedFileDTO 
 } from '../../services/apiClient';
 import { StatusBadge } from '../../components/StatusBadge';
-import { PdfViewer } from '../../components/PdfViewer';
+
+const PdfViewer = React.lazy(() => import('../../components/PdfViewer').then(m => ({ default: m.PdfViewer })));
 
 interface EvaluationGradingProps {
   activeRole?: string;
@@ -886,11 +887,13 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
                     </div>
                   ) : previewBlobUrl ? (
                     <div className="h-full flex-1">
-                      <PdfViewer
-                        directUrl={previewBlobUrl}
-                        filename={previewingFile?.original_filename || 'student-submission.pdf'}
-                        assessmentId={activeStudentRow.submission?.id || ""}
-                      />
+                      <React.Suspense fallback={<div className="flex items-center justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-academic-primaryGreen" /><span className="ml-2 text-sm text-academic-muted">Loading PDF Viewer...</span></div>}>
+                        <PdfViewer
+                          directUrl={previewBlobUrl}
+                          filename={previewingFile?.original_filename || 'student-submission.pdf'}
+                          assessmentId={activeStudentRow.submission?.id || ""}
+                        />
+                      </React.Suspense>
                     </div>
                   ) : previewNotice ? (
                     <div className="h-full flex flex-col items-center justify-center text-center p-8 space-y-3">

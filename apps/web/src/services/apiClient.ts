@@ -46,9 +46,103 @@ export type {
 
 const API_BASE_URL = (typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_API_BASE_URL : undefined) || process.env.VITE_API_BASE_URL || 'http://localhost:4000/api/v1';
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+
+/**
+ * Fetch wrapper with strict timeout support using AbortController.
+ * Prevents requests from hanging indefinitely (e.g. Render free-tier cold starts).
+ */
+export async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  if (init?.signal) {
+    init.signal.addEventListener('abort', () => controller.abort());
+  }
+
+  try {
+    const rawFetch = (typeof window !== 'undefined' && window.fetch) ? window.fetch.bind(window) : globalThis.fetch;
+    const res = await rawFetch(input, {
+      ...init,
+      signal: controller.signal
+    });
+    return res;
+  } catch (err: any) {
+    if (err.name === 'AbortError' || controller.signal.aborted) {
+      const timeoutErr: any = new Error(
+        `Request timed out after ${Math.round(timeoutMs / 1000)}s. The backend server may be waking up from sleep. Please retry.`
+      );
+      timeoutErr.code = 'TIMEOUT';
+      timeoutErr.status = 504;
+      timeoutErr.isTimeout = true;
+      throw timeoutErr;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 let cachedAuthHeaderValue: string | null = null;
 let cachedAuthHeaderExpiresAt = 0;
 let activeWorkspaceRole: string | null = null;
+
+let cachedUserContext: { ctx: UserAuthContext; expiresAt: number; token: string } | null = null;
+const USER_CONTEXT_STORAGE_KEY = 'smartfa_cached_user_context';
+
+export const getCachedUserContext = (): UserAuthContext | null => {
+  if (cachedUserContext && Date.now() < cachedUserContext.expiresAt) {
+    return cachedUserContext.ctx;
+  }
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    try {
+      const raw = window.sessionStorage.getItem(USER_CONTEXT_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.expiresAt && Date.now() < parsed.expiresAt && parsed.ctx) {
+          cachedUserContext = parsed;
+          return parsed.ctx;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+};
+
+export const setCachedUserContext = (ctx: UserAuthContext, token: string, ttlMs = 60000) => {
+  const entry = {
+    ctx,
+    expiresAt: Date.now() + ttlMs,
+    token
+  };
+  cachedUserContext = entry;
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    try {
+      window.sessionStorage.setItem(USER_CONTEXT_STORAGE_KEY, JSON.stringify(entry));
+    } catch {
+      // ignore
+    }
+  }
+};
+
+export const clearUserContextCache = () => {
+  cachedUserContext = null;
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    try {
+      window.sessionStorage.removeItem(USER_CONTEXT_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+  }
+};
 
 export const setActiveWorkspaceRole = (role: string | null) => {
   activeWorkspaceRole = role;
@@ -65,6 +159,7 @@ export const getActiveWorkspaceRole = (): string | null => {
 export const clearAuthHeaderCache = () => {
   cachedAuthHeaderValue = null;
   cachedAuthHeaderExpiresAt = 0;
+  clearUserContextCache();
 };
 
 export const getAuthHeaders = async (): Promise<Record<string, string>> => {
@@ -88,7 +183,7 @@ export const getAuthHeaders = async (): Promise<Record<string, string>> => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.access_token) {
         cachedAuthHeaderValue = `Bearer ${session.access_token}`;
-        cachedAuthHeaderExpiresAt = Date.now() + 10000;
+        cachedAuthHeaderExpiresAt = Date.now() + 30000;
         headers['Authorization'] = cachedAuthHeaderValue;
         return headers;
       }
@@ -98,7 +193,7 @@ export const getAuthHeaders = async (): Promise<Record<string, string>> => {
     const devToken = localStorage.getItem('smartfa_dev_token');
     if (devToken) {
       cachedAuthHeaderValue = `Bearer ${devToken}`;
-      cachedAuthHeaderExpiresAt = Date.now() + 10000;
+      cachedAuthHeaderExpiresAt = Date.now() + 30000;
       headers['Authorization'] = cachedAuthHeaderValue;
       return headers;
     }
@@ -124,18 +219,27 @@ export interface UserAuthContext {
 }
 
 export const authApi = {
-  getMe: async (): Promise<UserAuthContext> => {
+  getMe: async (force = false): Promise<UserAuthContext> => {
     const authHeaders = await getAuthHeaders();
-    if (!authHeaders['Authorization']) {
+    const token = authHeaders['Authorization'];
+    if (!token) {
       const err: any = new Error('No authentication session found.');
       err.code = 'UNAUTHORIZED';
       err.status = 401;
       throw err;
     }
-    const res = await fetch(`${API_BASE_URL}/auth/me`, {
+
+    if (!force) {
+      const cached = getCachedUserContext();
+      if (cached && cachedUserContext?.token === token) {
+        return cached;
+      }
+    }
+
+    const res = await fetchWithTimeout(`${API_BASE_URL}/auth/me`, {
       method: 'GET',
       headers: authHeaders
-    });
+    }, 8000);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       clearAuthHeaderCache();
@@ -146,12 +250,14 @@ export const authApi = {
       error.status = res.status;
       throw error;
     }
-    return data as UserAuthContext;
+    const userCtx = data as UserAuthContext;
+    setCachedUserContext(userCtx, token);
+    return userCtx;
   },
 
   verifyPortal: async (portal: 'student' | 'faculty' | 'admin'): Promise<{ authorized: boolean; portal: string; profile: any; roles: string[]; isHOD?: boolean; activeRole?: string }> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/auth/verify-portal`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/auth/verify-portal`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({ portal })
@@ -173,7 +279,7 @@ export const authApi = {
 
   confirmPassword: async (password: string, assessmentId?: string): Promise<{ confirmed: boolean; reauth_token: string; expires_in: number }> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/auth/confirm-password`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/auth/confirm-password`, {
       method: 'POST',
       headers: { ...authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ password, assessment_id: assessmentId, purpose: 'assignment_deletion' })
@@ -190,7 +296,7 @@ export const authApi = {
   },
 
   demoLogin: async (email: string): Promise<{ token: string; user: any; profile: any; roles: string[]; isHOD: boolean }> => {
-    const res = await fetch(`${API_BASE_URL}/auth/demo-login`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/auth/demo-login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email })
@@ -201,6 +307,23 @@ export const authApi = {
     }
     localStorage.setItem('smartfa_dev_token', data.token);
     return data;
+  },
+
+  logout: async (): Promise<void> => {
+    try {
+      const authHeaders = await getAuthHeaders();
+      if (authHeaders['Authorization']) {
+        await fetchWithTimeout(`${API_BASE_URL}/auth/logout`, {
+          method: 'POST',
+          headers: authHeaders
+        }, 3000);
+      }
+    } catch {
+      // Ignore network errors during logout
+    } finally {
+      clearAuthHeaderCache();
+      clearUserContextCache();
+    }
   }
 };
 
@@ -446,7 +569,7 @@ const executeApiRequest = async <T>(
 
     let res: Response;
     try {
-      res = await fetch(`${API_BASE_URL}${path}`, {
+      res = await fetchWithTimeout(`${API_BASE_URL}${path}`, {
         ...options,
         headers
       });
@@ -520,7 +643,7 @@ export const hodApi = {
 
   createProgramme: async (payload: CreateProgrammeRequest): Promise<Programme> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/programmes`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/programmes`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -534,7 +657,7 @@ export const hodApi = {
 
   updateProgramme: async (id: string, payload: UpdateProgrammeRequest): Promise<Programme> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/programmes/${id}`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/programmes/${id}`, {
       method: 'PATCH',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -574,7 +697,7 @@ export const hodApi = {
 
   createSpecialization: async (payload: CreateSpecializationRequest): Promise<Specialization> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/specializations`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/specializations`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -588,7 +711,7 @@ export const hodApi = {
 
   updateSpecialization: async (id: string, payload: UpdateSpecializationRequest): Promise<Specialization> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/specializations/${id}`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/specializations/${id}`, {
       method: 'PATCH',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -612,7 +735,7 @@ export const hodApi = {
 
   addSubjectToSpecialization: async (specializationId: string, payload: { subject_id: string; semester?: number }): Promise<any> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/specializations/${specializationId}/subjects`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/specializations/${specializationId}/subjects`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -636,7 +759,7 @@ export const hodApi = {
       specialization_id: params.specializationId || '',
       semester: String(params.semester)
     });
-    const res = await fetch(`${API_BASE_URL}/admin/hod/faculty/${params.facultyId}/available-subjects?${query.toString()}`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/faculty/${params.facultyId}/available-subjects?${query.toString()}`, {
       method: 'GET',
       headers: authHeaders
     });
@@ -649,7 +772,7 @@ export const hodApi = {
 
   assignFacultySubjects: async (facultyId: string, payload: AssignFacultySubjectsRequest): Promise<any> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/faculty/${facultyId}/assign-subjects`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/faculty/${facultyId}/assign-subjects`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -663,7 +786,7 @@ export const hodApi = {
 
   removeFacultyAllocation: async (facultyId: string, allocationId: string): Promise<any> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/faculty/${facultyId}/allocations/${allocationId}`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/faculty/${facultyId}/allocations/${allocationId}`, {
       method: 'DELETE',
       headers: authHeaders
     });
@@ -700,7 +823,7 @@ export const hodApi = {
 
   createClass: async (payload: CreateClassRequest): Promise<any> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/classes`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/classes`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -760,7 +883,7 @@ export const hodApi = {
 
   createSubject: async (payload: CreateSubjectRequest): Promise<Subject> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/subjects`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/subjects`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -774,7 +897,7 @@ export const hodApi = {
 
   updateSubject: async (id: string, payload: UpdateSubjectRequest): Promise<Subject> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/subjects/${id}`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/subjects/${id}`, {
       method: 'PATCH',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -792,7 +915,7 @@ export const hodApi = {
   deleteSubject: async (id: string, unassignAllocations?: boolean): Promise<{ success: boolean; message: string }> => {
     const authHeaders = await getAuthHeaders();
     const query = unassignAllocations ? '?unassign_allocations=true' : '';
-    const res = await fetch(`${API_BASE_URL}/admin/hod/subjects/${id}${query}`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/subjects/${id}${query}`, {
       method: 'DELETE',
       headers: authHeaders
     });
@@ -808,7 +931,7 @@ export const hodApi = {
 
   unassignSubjectAllocations: async (subjectId: string): Promise<{ success: boolean; count: number; message: string }> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/subjects/${subjectId}/allocations`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/subjects/${subjectId}/allocations`, {
       method: 'DELETE',
       headers: authHeaders
     });
@@ -834,7 +957,7 @@ export const hodApi = {
 
   assignClassSubject: async (payload: AssignClassSubjectRequest): Promise<ClassSubject> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/class-subjects`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/class-subjects`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -861,7 +984,7 @@ export const hodApi = {
 
   enrollStudent: async (payload: EnrollStudentRequest): Promise<Enrollment> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/enrollments`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/enrollments`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -875,7 +998,7 @@ export const hodApi = {
 
   enrollSpecializationStudents: async (payload: EnrollSpecializationStudentsRequest): Promise<{ success: boolean; count: number; enrollments: any[] }> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/enrollments/specialization`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/enrollments/specialization`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -893,7 +1016,7 @@ export const hodApi = {
 
   transferEnrollment: async (payload: TransferEnrollmentRequest): Promise<{ success: boolean; enrollment: any }> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/enrollments/transfer`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/enrollments/transfer`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -907,7 +1030,7 @@ export const hodApi = {
 
   deleteEnrollment: async (id: string): Promise<boolean> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/enrollments/${id}`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/enrollments/${id}`, {
       method: 'DELETE',
       headers: authHeaders
     });
@@ -930,7 +1053,7 @@ export const hodApi = {
 
   assignProctor: async (payload: AssignProctorRequest): Promise<ProctorAssignment> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/proctor-assignments`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/proctor-assignments`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -944,7 +1067,7 @@ export const hodApi = {
 
   assignProctorBulk: async (payload: AssignProctorBulkRequest): Promise<{ count: number; assignments: any[] }> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/proctor-assignments/bulk`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/proctor-assignments/bulk`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -961,7 +1084,7 @@ export const hodApi = {
 
   reassignProctor: async (payload: ReassignProctorRequest): Promise<{ assignment: any }> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/proctor-assignments/reassign`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/proctor-assignments/reassign`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -984,7 +1107,7 @@ export const hodApi = {
 
   inviteUser: async (payload: InviteUserRequest): Promise<any> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/users/invite`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/users/invite`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify(payload)
@@ -1000,7 +1123,7 @@ export const hodApi = {
 
   updateUserStatus: async (userId: string, status: 'active' | 'inactive'): Promise<any> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/users/${userId}/status`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/users/${userId}/status`, {
       method: 'PATCH',
       headers: authHeaders,
       body: JSON.stringify({ status })
@@ -1014,7 +1137,7 @@ export const hodApi = {
 
   updateFacultyProfile: async (userId: string, payload: UpdateFacultyProfileRequest): Promise<{ success: boolean; message: string; user: any }> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/users/${userId}/profile`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/users/${userId}/profile`, {
       method: 'PATCH',
       headers: {
         ...authHeaders,
@@ -1042,7 +1165,7 @@ export const hodApi = {
 
   deleteStudent: async (studentId: string): Promise<{ success: boolean; deleted_student_id: string; message: string }> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/users/${studentId}`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/users/${studentId}`, {
       method: 'DELETE',
       headers: authHeaders
     });
@@ -1095,7 +1218,7 @@ export const hodApi = {
 
   assignUserRole: async (userId: string, role: string, scopeId?: string | null): Promise<any> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/users/${userId}/roles`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/users/${userId}/roles`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({ role, scope_id: scopeId || null, active: true })
@@ -1109,7 +1232,7 @@ export const hodApi = {
 
   removeUserRole: async (userId: string, role: string): Promise<any> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/users/${userId}/roles/${role}`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/users/${userId}/roles/${role}`, {
       method: 'DELETE',
       headers: authHeaders
     });
@@ -1122,7 +1245,7 @@ export const hodApi = {
 
   unassignClassSubject: async (classSubjectId: string): Promise<any> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/class-subjects/${classSubjectId}`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/class-subjects/${classSubjectId}`, {
       method: 'DELETE',
       headers: authHeaders
     });
@@ -1135,7 +1258,7 @@ export const hodApi = {
 
   updateClassTeacher: async (classId: string, teacherId: string | null): Promise<any> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/classes/${classId}/class-teacher`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/classes/${classId}/class-teacher`, {
       method: 'PATCH',
       headers: authHeaders,
       body: JSON.stringify({ class_teacher_id: teacherId })
@@ -1149,7 +1272,7 @@ export const hodApi = {
 
   removeProctorAssignment: async (assignmentId: string): Promise<any> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/admin/hod/proctor-assignments/${assignmentId}`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/admin/hod/proctor-assignments/${assignmentId}`, {
       method: 'DELETE',
       headers: authHeaders
     });
@@ -1350,7 +1473,7 @@ export const assessmentApi = {
   getClassSubjectsForTeacher: async (): Promise<any[]> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/assessments/teacher/class-subjects`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/teacher/class-subjects`, {
         headers: authHeaders
       });
       if (res.ok) {
@@ -1364,7 +1487,7 @@ export const assessmentApi = {
   getAssessments: async (): Promise<GetAssessmentsResult> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/assessments`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments`, {
         headers: authHeaders
       });
       if (res.ok) {
@@ -1378,7 +1501,7 @@ export const assessmentApi = {
   getAssessment: async (id: string): Promise<AssessmentDTO | null> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/assessments/${id}`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/${id}`, {
         headers: authHeaders
       });
       if (res.ok) {
@@ -1409,7 +1532,7 @@ export const assessmentApi = {
   fetchDocumentBlob: async (assessmentId: string): Promise<Blob> => {
     const authHeaders = await getAuthHeaders();
     delete authHeaders['Content-Type'];
-    const res = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/document`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/${assessmentId}/document`, {
       method: 'GET',
       headers: {
         ...authHeaders,
@@ -1433,7 +1556,7 @@ export const assessmentApi = {
   } | null> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/document-url`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/${assessmentId}/document-url`, {
         method: 'GET',
         headers: authHeaders
       });
@@ -1475,7 +1598,7 @@ export const assessmentApi = {
   }): Promise<AssessmentDTO> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/assessments`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments`, {
         method: 'POST',
         headers: {
           ...authHeaders,
@@ -1506,7 +1629,7 @@ export const assessmentApi = {
   }): Promise<any> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/questions`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/${assessmentId}/questions`, {
         method: 'POST',
         headers: {
           ...authHeaders,
@@ -1533,7 +1656,7 @@ export const assessmentApi = {
   }): Promise<any> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/questions/${questionId}/rubric`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/${assessmentId}/questions/${questionId}/rubric`, {
         method: 'POST',
         headers: {
           ...authHeaders,
@@ -1557,7 +1680,7 @@ export const assessmentApi = {
   publishAssessment: async (assessmentId: string): Promise<any> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/publish`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/${assessmentId}/publish`, {
         method: 'POST',
         headers: authHeaders
       });
@@ -1591,7 +1714,7 @@ export const assessmentApi = {
   }): Promise<{ assessment: AssessmentDTO; warning?: string | null }> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/assessments/${assessmentId}`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/${assessmentId}`, {
         method: 'PUT',
         headers: {
           ...authHeaders,
@@ -1653,7 +1776,7 @@ export const assessmentApi = {
   }> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/deletion-check`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/${assessmentId}/deletion-check`, {
         headers: authHeaders
       });
       if (res.ok) {
@@ -1676,7 +1799,7 @@ export const assessmentApi = {
       if (reauthToken) {
         headers['X-Reauth-Token'] = reauthToken;
       }
-      const res = await fetch(`${API_BASE_URL}/assessments/${assessmentId}`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/${assessmentId}`, {
         method: 'DELETE',
         headers
       });
@@ -1767,7 +1890,7 @@ export const submissionApi = {
   }): Promise<any> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/submissions`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/submissions`, {
         method: 'POST',
         headers: {
           ...authHeaders,
@@ -1791,7 +1914,7 @@ export const submissionApi = {
   getSubmissionsForAssessment: async (assessmentId: string): Promise<SubmissionDTO[]> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/submissions/assessment/${assessmentId}`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/submissions/assessment/${assessmentId}`, {
         headers: authHeaders
       });
       if (res.ok) {
@@ -1809,7 +1932,7 @@ export const submissionApi = {
   }> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/submissions/assessment/${assessmentId}`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/submissions/assessment/${assessmentId}`, {
         headers: authHeaders
       });
       if (res.ok) {
@@ -1836,7 +1959,7 @@ export const submissionApi = {
 
   getMySubmissions: async (): Promise<StudentSubmissionDTO[]> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/submissions/student/my-submissions`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/submissions/student/my-submissions`, {
       headers: authHeaders
     });
     if (!res.ok) {
@@ -1849,7 +1972,7 @@ export const submissionApi = {
 
   fetchSubmissionFileBlob: async (submissionId: string, versionId: string, fileId: string): Promise<Blob> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/submissions/${submissionId}/versions/${versionId}/files/${fileId}/blob`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/submissions/${submissionId}/versions/${versionId}/files/${fileId}/blob`, {
       headers: authHeaders
     });
     if (!res.ok) {
@@ -1880,7 +2003,7 @@ export const submissionApi = {
   } | null> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/submissions/${submissionId}/versions/${versionId}/files/${fileId}/url`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/submissions/${submissionId}/versions/${versionId}/files/${fileId}/url`, {
         headers: authHeaders
       });
       if (!res.ok) return null;
@@ -1894,7 +2017,7 @@ export const submissionApi = {
   getSubmissionById: async (submissionId: string): Promise<any> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/submissions/${submissionId}`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/submissions/${submissionId}`, {
         headers: authHeaders
       });
       if (res.ok) {
@@ -1909,7 +2032,7 @@ export const submissionApi = {
     try {
       const authHeaders = await getAuthHeaders();
       const query = assessmentId ? `?assessment_id=${assessmentId}` : '';
-      const res = await fetch(`${API_BASE_URL}/submissions/reports/late-submissions${query}`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/submissions/reports/late-submissions${query}`, {
         headers: authHeaders
       });
       if (res.ok) {
@@ -1923,7 +2046,7 @@ export const submissionApi = {
   getMenteeSubmissionsReport: async (): Promise<{ subjects: ProctorSubjectHierarchyItem[]; mentees: MenteeHierarchyItem[]; reports: any[] }> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/submissions/reports/late-submissions`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/submissions/reports/late-submissions`, {
         headers: authHeaders
       });
       if (res.ok) {
@@ -1987,7 +2110,7 @@ export const classTeacherApi = {
     try {
       const authHeaders = await getAuthHeaders();
       const query = classId ? `?class_id=${encodeURIComponent(classId)}` : '';
-      const res = await fetch(`${API_BASE_URL}/assessments/class-teacher/cohort${query}`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/class-teacher/cohort${query}`, {
         headers: authHeaders
       });
       if (res.ok) {
@@ -2129,7 +2252,7 @@ export interface EvaluationDTO {
 export const evaluationApi = {
   getTeacherAssignmentsOverview: async (): Promise<TeacherAssignmentOverviewDTO[]> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/evaluations/teacher/assignments-overview`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/evaluations/teacher/assignments-overview`, {
       headers: authHeaders
     });
     if (!res.ok) {
@@ -2142,7 +2265,7 @@ export const evaluationApi = {
 
   getAssessmentLedger: async (assessmentId: string): Promise<AssessmentLedgerResponseDTO> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/evaluations/assessment/${assessmentId}/ledger`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/evaluations/assessment/${assessmentId}/ledger`, {
       headers: authHeaders
     });
     if (!res.ok) {
@@ -2159,7 +2282,7 @@ export const evaluationApi = {
   }> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/evaluations/assessment/${assessmentId}`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/evaluations/assessment/${assessmentId}`, {
         headers: authHeaders
       });
       if (res.ok) {
@@ -2172,7 +2295,7 @@ export const evaluationApi = {
   getEvaluationForSubmission: async (submissionId: string): Promise<EvaluationDTO | null> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/evaluations/submission/${submissionId}`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/evaluations/submission/${submissionId}`, {
         headers: authHeaders
       });
       if (res.ok) {
@@ -2196,7 +2319,7 @@ export const evaluationApi = {
     }[];
   }): Promise<EvaluationDTO> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/evaluations`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/evaluations`, {
       method: 'POST',
       headers: {
         ...authHeaders,
@@ -2217,7 +2340,7 @@ export const evaluationApi = {
     published_count: number;
   }> => {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch(`${API_BASE_URL}/evaluations/assessment/${assessmentId}/publish`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/evaluations/assessment/${assessmentId}/publish`, {
       method: 'POST',
       headers: {
         ...authHeaders,
@@ -2235,7 +2358,7 @@ export const evaluationApi = {
   getMyResults: async (): Promise<EvaluationDTO[]> => {
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_BASE_URL}/evaluations/student/my-results`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/evaluations/student/my-results`, {
         headers: authHeaders
       });
       if (res.ok) {

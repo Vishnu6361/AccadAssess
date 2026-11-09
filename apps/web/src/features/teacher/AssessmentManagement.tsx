@@ -29,7 +29,8 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { StatusBadge } from '../../components/StatusBadge';
-import { PdfViewer } from '../../components/PdfViewer';
+
+const PdfViewer = React.lazy(() => import('../../components/PdfViewer').then(m => ({ default: m.PdfViewer })));
 import { assessmentApi, AssessmentDTO, submissionApi, SubmissionDTO, authApi } from '../../services/apiClient';
 import { formatClassName } from '@smartfa/contracts';
 import { ProctorMenteeReport } from '../proctor/ProctorMenteeReport';
@@ -2006,10 +2007,12 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
 
                   {/* Embedded PDF Viewer */}
                   <div className="pt-2">
-                    <PdfViewer
-                      assessmentId={selectedAssessment.id}
-                      filename={selectedAssessment.document_filename}
-                    />
+                    <React.Suspense fallback={<div className="flex items-center justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-academic-primaryGreen" /><span className="ml-2 text-sm text-academic-muted">Loading PDF Viewer...</span></div>}>
+                      <PdfViewer
+                        assessmentId={selectedAssessment.id}
+                        filename={selectedAssessment.document_filename}
+                      />
+                    </React.Suspense>
                   </div>
                 </div>
               ) : null}

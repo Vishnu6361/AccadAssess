@@ -50,8 +50,67 @@ export const DEV_JWT_SECRET = REAUTH_JWT_SECRET;
 // In-memory registry for local test suites / offline dev mode (jti -> expiresAt timestamp in ms)
 const inMemoryConsumedTokens = new Map<string, number>();
 
+/**
+ * In-memory verified JWT cache to eliminate redundant remote Supabase Auth network roundtrips.
+ *
+ * SECURITY SPECIFICATION & CROSS-INSTANCE BOUNDARIES:
+ * 1. Scope: Only caches cryptographic identity verification (token -> { id, email }).
+ *    Contains ZERO authorization roles, account status flags, or permissions.
+ * 2. Database Authorizations: Roles and account status are checked against PostgreSQL on EVERY
+ *    request in loadUserContext (rbac.ts) with in-flight deduplication, guaranteeing zero delay
+ *    for account suspension and role revocation across all instances.
+ * 3. Cross-Instance Limitation: Because verifiedTokenCache is in-memory per Node process, calling
+ *    invalidateVerifiedToken (e.g. on logout) evicts the token on the receiving instance immediately.
+ *    On other running instances in a multi-instance cluster, identity verification could remain
+ *    valid until the token's natural expiration or maximum TTL (strictly <= 60 seconds).
+ *    However, because Layer 2 (loadUserContext) checks PostgreSQL on every request, any revoked
+ *    permissions or deactivated accounts are blocked immediately on all instances regardless.
+ */
+interface CachedVerifiedToken {
+  user: AuthenticatedUser;
+  expiresAt: number;
+}
+const verifiedTokenCache = new Map<string, CachedVerifiedToken>();
+const TOKEN_CACHE_MAX_TTL_MS = 60 * 1000; // 60 seconds
+const TOKEN_CACHE_MAX_ENTRIES = 1000;
+
+export const clearVerifiedTokenCache = (): void => {
+  verifiedTokenCache.clear();
+};
+
+export const invalidateVerifiedToken = (token?: string, userId?: string): void => {
+  if (token) {
+    verifiedTokenCache.delete(token);
+  }
+  if (userId) {
+    for (const [t, entry] of verifiedTokenCache.entries()) {
+      if (entry.user.id === userId) {
+        verifiedTokenCache.delete(t);
+      }
+    }
+  }
+  if (!token && !userId) {
+    verifiedTokenCache.clear();
+  }
+};
+
+function cleanExpiredVerifiedTokens(): void {
+  const now = Date.now();
+  for (const [key, value] of verifiedTokenCache.entries()) {
+    if (value.expiresAt <= now) {
+      verifiedTokenCache.delete(key);
+    }
+  }
+}
+
+const tokenCleanupTimer = setInterval(cleanExpiredVerifiedTokens, 2 * 60 * 1000);
+if (tokenCleanupTimer.unref) {
+  tokenCleanupTimer.unref();
+}
+
 export const clearConsumedTokensForTest = (): void => {
   inMemoryConsumedTokens.clear();
+  verifiedTokenCache.clear();
 };
 
 export interface ConsumeReauthTokenParams {
@@ -235,6 +294,13 @@ export const authenticateJWT = async (req: Request, res: Response, next: NextFun
   // 2. If live Supabase is configured and not running offline unit tests, verify cryptographically via Supabase Auth
   const isOfflineTestMode = process.env.NODE_ENV === 'test' || process.env.SMARTFA_TEST_MODE === 'true';
   if (supabaseAdmin && !isOfflineTestMode) {
+    // Check in-memory verified token cache to eliminate redundant remote network calls
+    const cachedVerified = verifiedTokenCache.get(token);
+    if (cachedVerified && Date.now() < cachedVerified.expiresAt) {
+      req.user = cachedVerified.user;
+      return next();
+    }
+
     try {
       // Defensively check unverified token claims for cross-environment project mismatches
       const decoded: any = jwt.decode(token);
@@ -259,6 +325,7 @@ export const authenticateJWT = async (req: Request, res: Response, next: NextFun
 
       const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
       if (error || !user) {
+        verifiedTokenCache.delete(token);
         return res.status(401).json({
           error: {
             code: 'INVALID_TOKEN',
@@ -272,6 +339,25 @@ export const authenticateJWT = async (req: Request, res: Response, next: NextFun
         id: user.id,
         email: user.email || ''
       };
+
+      // Cache verified identity up to JWT expiration or max 60s
+      let cacheExpiresAt = Date.now() + TOKEN_CACHE_MAX_TTL_MS;
+      if (decoded && typeof decoded.exp === 'number') {
+        const expMs = decoded.exp * 1000;
+        if (expMs < cacheExpiresAt) {
+          cacheExpiresAt = expMs;
+        }
+      }
+      if (cacheExpiresAt > Date.now()) {
+        if (verifiedTokenCache.size >= TOKEN_CACHE_MAX_ENTRIES) {
+          cleanExpiredVerifiedTokens();
+        }
+        verifiedTokenCache.set(token, {
+          user: req.user,
+          expiresAt: cacheExpiresAt
+        });
+      }
+
       return next();
     } catch (err: any) {
       return res.status(401).json({

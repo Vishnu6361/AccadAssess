@@ -22,7 +22,8 @@ import {
 } from 'lucide-react';
 import { submissionApi, StudentSubmissionDTO, SubmittedFileDTO } from '../../services/apiClient';
 import { StatusBadge } from '../../components/StatusBadge';
-import { PdfViewer } from '../../components/PdfViewer';
+
+const PdfViewer = React.lazy(() => import('../../components/PdfViewer').then(m => ({ default: m.PdfViewer })));
 
 interface StudentSubmissionsProps {
   onNavigateToAssessments?: () => void;
@@ -699,11 +700,13 @@ export const StudentSubmissions: React.FC<StudentSubmissionsProps> = ({ onNaviga
                 </div>
               ) : previewFile.blobUrl ? (
                 <div className="h-full rounded border border-academic-border bg-white overflow-hidden">
-                  <PdfViewer
-                    directUrl={previewFile.blobUrl}
-                    filename={previewFile.file.original_filename}
-                    assessmentId={previewFile.submissionId}
-                  />
+                  <React.Suspense fallback={<div className="flex items-center justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-academic-primaryGreen" /><span className="ml-2 text-sm text-academic-muted">Loading PDF Viewer...</span></div>}>
+                    <PdfViewer
+                      directUrl={previewFile.blobUrl}
+                      filename={previewFile.file.original_filename}
+                      assessmentId={previewFile.submissionId}
+                    />
+                  </React.Suspense>
                 </div>
               ) : null}
             </div>

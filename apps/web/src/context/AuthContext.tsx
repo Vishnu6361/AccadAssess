@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from '../services/supabase';
-import { authApi, UserAuthContext, clearAuthHeaderCache, setActiveWorkspaceRole } from '../services/apiClient';
+import { authApi, UserAuthContext, clearAuthHeaderCache, setActiveWorkspaceRole, getCachedUserContext, clearUserContextCache, setCachedUserContext } from '../services/apiClient';
 import { userDirectoryStore } from '../features/hod/userDirectoryStore';
 import { proctorReportStore } from '../features/proctor/proctorReportStore';
 
@@ -43,6 +43,25 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const loadContextPromiseRef = React.useRef<Promise<void> | null>(null);
   const lastLoadedUserIdRef = React.useRef<string | null>(null);
+
+  const hasStoredSessionToken = (): boolean => {
+    if (typeof window === 'undefined' || !window.localStorage) return false;
+    if (window.localStorage.getItem('smartfa_dev_token')) return true;
+    try {
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const key = window.localStorage.key(i);
+        if (key && (key.startsWith('sb-') && key.endsWith('-auth-token'))) {
+          const val = window.localStorage.getItem(key);
+          if (val && val !== 'null' && val !== '""' && val !== '{}') {
+            return true;
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return false;
+  };
 
   const determineDefaultRole = (roles: string[]): string | null => {
     if (!roles || roles.length === 0) return null;
@@ -187,6 +206,26 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           isRecoveryRoute = true;
           setIsPasswordRecovery(true);
         }
+
+        // Fast-path 1: If user is on an unauthenticated login/landing route and has no session token in storage
+        const isPublicAuthRoute = pathname === '/admin/login' || pathname === '/faculty/login' || pathname === '/student/login' || pathname === '/' || pathname === '';
+        if (isPublicAuthRoute && !hasStoredSessionToken() && !hash.includes('access_token=') && !searchParams.has('code')) {
+          if (isMounted) {
+            setIsLoading(false);
+          }
+          return;
+        }
+
+        // Fast-path 2: If cached user context exists from recent tab session, hydrate immediately
+        const cachedContext = getCachedUserContext();
+        if (cachedContext && hasStoredSessionToken() && !isRecoveryRoute) {
+          if (isMounted) {
+            setUserContext(cachedContext);
+            setAccountStatus(cachedContext.profile.status === 'active' ? 'ok' : 'inactive');
+            setActiveRole(determineDefaultRole(cachedContext.roles));
+            setIsLoading(false);
+          }
+        }
       }
 
       // 1. Check for active local development session token
@@ -305,14 +344,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               setRecoveryError(null);
             } else {
               try {
-                await loadBackendContext(existingSession.user, existingSession);
+                await loadBackendContext(existingSession.user, existingSession, true);
               } catch (restoreErr: any) {
                 console.warn('[SmartFA Auth] Session restore context verification failed:', restoreErr?.message);
                 if (isMounted) {
-                  setUser(null);
-                  setSession(null);
-                  setUserContext(null);
-                  setActiveRole(null);
+                  const isNetworkOrTimeout = restoreErr?.code === 'TIMEOUT' || restoreErr?.isTimeout || restoreErr?.message?.includes('timed out') || restoreErr?.message?.includes('Failed to fetch');
+                  if (!isNetworkOrTimeout) {
+                    setUser(null);
+                    setSession(null);
+                    setUserContext(null);
+                    setActiveRole(null);
+                    setAccountStatus(null);
+                  } else {
+                    setError('The academic server is waking up. Click Retry Connection.');
+                  }
                 }
               }
             }
@@ -338,7 +383,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     };
 
-    restoreSession();
+    // Enforce strict 3.5s timeout on session restoration to prevent UI freezing
+    const restorePromise = restoreSession();
+    const safetyTimeout = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+        resolve();
+      }, 3500);
+    });
+
+    Promise.race([restorePromise, safetyTimeout]).catch((err) => {
+      console.warn('[SmartFA Auth] Session restore race warning:', err);
+    });
 
     if (!supabase) {
       return;
@@ -398,6 +456,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const login = async (email: string, password: string, portal?: 'student' | 'faculty' | 'admin'): Promise<void> => {
     setError(null);
     setIsLoading(true);
+
+    // Invalidate any previous session's cached tokens or role hints before authenticating
+    clearAuthHeaderCache();
+    clearUserContextCache();
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      window.sessionStorage.removeItem('smartfa_active_workspace');
+      window.sessionStorage.removeItem('smartfa_cached_user_context');
+    }
 
     try {
       // 1. Authenticate with Supabase Auth when configured
@@ -498,8 +564,19 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     localStorage.removeItem('smartfa_dev_token');
     if (typeof window !== 'undefined' && window.sessionStorage) {
       window.sessionStorage.removeItem('smartfa_active_workspace');
+      window.sessionStorage.removeItem('smartfa_cached_user_context');
     }
     setActiveWorkspaceRole(null);
+    clearAuthHeaderCache();
+    clearUserContextCache();
+
+    try {
+      // Invalidate backend verified token cache and user context cache
+      await authApi.logout();
+    } catch {
+      // Ignore network errors during logout
+    }
+
     try {
       if (supabase) {
         await supabase.auth.signOut();
@@ -509,6 +586,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     } finally {
       lastLoadedUserIdRef.current = null;
       clearAuthHeaderCache();
+      clearUserContextCache();
       userDirectoryStore.clear();
       proctorReportStore.clear();
       setUser(null);
@@ -530,6 +608,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setActiveWorkspaceRole(newRole);
     if (typeof window !== 'undefined' && window.sessionStorage) {
       window.sessionStorage.setItem('smartfa_active_workspace', newRole);
+    }
+    // Update cached user context with active role display hint
+    if (userContext && session?.access_token) {
+      const updated = { ...userContext, activeRole: newRole };
+      setUserContext(updated);
+      setCachedUserContext(updated, `Bearer ${session.access_token}`);
     }
     userDirectoryStore.clear();
     proctorReportStore.clear();

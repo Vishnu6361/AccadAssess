@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { AppRole, Profile } from '@smartfa/contracts';
 import { getUserRepository } from '../storage/userRepository.js';
+import { invalidateVerifiedToken } from '../auth/jwt.js';
 
 export interface UserContext {
   profile: Profile;
@@ -17,26 +18,25 @@ declare global {
   }
 }
 
-interface CachedUserContext {
-  context: UserContext;
-  expiresAt: number;
-}
-
-const userContextCache = new Map<string, CachedUserContext>();
-const USER_CONTEXT_CACHE_TTL_MS = 15000; // 15 seconds TTL
+// In-flight query deduplication registry.
+// Only shares query promises while PostgreSQL lookups are actively in-flight to prevent duplicate lookups on simultaneous bursts.
+// Entries are evicted IMMEDIATELY upon resolution so no authorization state is ever cached across subsequent requests.
+const inFlightUserContextQueries = new Map<string, Promise<{ profile: Profile; roles: AppRole[]; isHOD: boolean } | null>>();
 
 export const invalidateUserContextCache = (userId?: string) => {
   if (userId) {
-    userContextCache.delete(userId);
+    inFlightUserContextQueries.delete(userId);
   } else {
-    userContextCache.clear();
+    inFlightUserContextQueries.clear();
   }
+  // Immediately invalidate any cached verified JWTs for this user
+  invalidateVerifiedToken(undefined, userId);
 };
 
 /**
- * Loads user profile and authoritative roles strictly from database records.
+ * Loads user profile and authoritative roles strictly from PostgreSQL database records on every request.
  * NEVER trusts client-supplied roles in headers, cookies, or request bodies.
- * Uses a short-lived 15s in-memory cache to prevent redundant sequential lookups.
+ * Uses in-flight deduplication to prevent duplicate database lookups during simultaneous parallel request bursts.
  */
 export const loadUserContext = async (req: Request, res: Response, next: NextFunction) => {
   if (!req.user || !req.user.id) {
@@ -50,35 +50,33 @@ export const loadUserContext = async (req: Request, res: Response, next: NextFun
 
   const rawActiveRole = (req.headers['x-active-role'] || req.headers['X-Active-Role']) as string | undefined;
 
-  // Check short-lived cache to avoid redundant remote database queries on parallel/rapid requests
-  const cached = userContextCache.get(req.user.id);
-  if (cached && Date.now() < cached.expiresAt) {
-    let activeRole: AppRole | undefined = undefined;
-    if (rawActiveRole) {
-      if (!cached.context.roles.includes(rawActiveRole as AppRole)) {
-        return res.status(403).json({
-          error: {
-            code: 'FORBIDDEN_ROLE_SWITCH',
-            message: `User is not authorized for active workspace role '${rawActiveRole}'. Authorized roles: [${cached.context.roles.join(', ')}]`
-          }
-        });
-      }
-      activeRole = rawActiveRole as AppRole;
-    }
-
-    req.userContext = {
-      ...cached.context,
-      activeRole
-    };
-    return next();
-  }
-
   try {
     const userRepo = getUserRepository();
 
-    // 1. Fetch profile from repository
-    const profile = await userRepo.getProfileById(req.user.id);
-    if (!profile) {
+    // 1. Fetch profile and authoritative active roles from PostgreSQL with in-flight burst deduplication
+    let queryPromise = inFlightUserContextQueries.get(req.user.id);
+    if (!queryPromise) {
+      queryPromise = (async () => {
+        const [profile, activeRoles] = await Promise.all([
+          userRepo.getProfileById(req.user!.id),
+          userRepo.getActiveRolesByUserId(req.user!.id)
+        ]);
+        if (!profile) return null;
+        return {
+          profile,
+          roles: activeRoles,
+          isHOD: activeRoles.includes('hod')
+        };
+      })();
+      inFlightUserContextQueries.set(req.user.id, queryPromise);
+      queryPromise.finally(() => {
+        inFlightUserContextQueries.delete(req.user!.id);
+      });
+    }
+
+    const authData = await queryPromise;
+
+    if (!authData || !authData.profile) {
       return res.status(403).json({
         error: {
           code: 'PROFILE_NOT_FOUND',
@@ -87,8 +85,8 @@ export const loadUserContext = async (req: Request, res: Response, next: NextFun
       });
     }
 
-    // 2. Enforce active account status invariant
-    if (profile.status !== 'active') {
+    // 2. Enforce active account status invariant directly from PostgreSQL
+    if (authData.profile.status !== 'active') {
       return res.status(403).json({
         error: {
           code: 'ACCOUNT_INACTIVE',
@@ -97,35 +95,26 @@ export const loadUserContext = async (req: Request, res: Response, next: NextFun
       });
     }
 
-    // 3. Fetch active roles from database (users cannot self-write roles)
-    const activeRoles = await userRepo.getActiveRolesByUserId(profile.id);
-
+    // 3. Enforce active roles invariant directly from PostgreSQL
     let activeRole: AppRole | undefined = undefined;
     if (rawActiveRole) {
-      if (!activeRoles.includes(rawActiveRole as AppRole)) {
+      if (!authData.roles.includes(rawActiveRole as AppRole)) {
         return res.status(403).json({
           error: {
             code: 'FORBIDDEN_ROLE_SWITCH',
-            message: `User is not authorized for active workspace role '${rawActiveRole}'. Authorized roles: [${activeRoles.join(', ')}]`
+            message: `User is not authorized for active workspace role '${rawActiveRole}'. Authorized roles: [${authData.roles.join(', ')}]`
           }
         });
       }
       activeRole = rawActiveRole as AppRole;
     }
 
-    const context: UserContext = {
-      profile,
-      roles: activeRoles,
-      isHOD: activeRoles.includes('hod'),
+    req.userContext = {
+      profile: authData.profile,
+      roles: authData.roles,
+      isHOD: authData.isHOD,
       activeRole
     };
-
-    userContextCache.set(req.user.id, {
-      context,
-      expiresAt: Date.now() + USER_CONTEXT_CACHE_TTL_MS
-    });
-
-    req.userContext = context;
 
     next();
   } catch (err: any) {

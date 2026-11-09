@@ -59,6 +59,8 @@ export const AppContent: React.FC = () => {
     accountStatus,
     accountStatusMessage,
     isPasswordRecovery,
+    error,
+    refreshContext,
     logout,
     switchRole
   } = useAuth();
@@ -118,8 +120,14 @@ export const AppContent: React.FC = () => {
     }
   }, [activeRole, activeItem]);
 
-  // 1. Loading State: Prevent premature privileged page rendering
-  if (isLoading) {
+  const cleanPath = (pathname ? pathname.replace(/\/+$/, '') : '') || '/';
+  const isResetPasswordRoute = cleanPath === '/reset-password';
+  const isPublicAuthRoute = cleanPath === '/admin/login' || cleanPath === '/faculty/login' || cleanPath === '/student/login' || cleanPath === '/' || isResetPasswordRoute;
+
+  // 1. Loading State:
+  // Render full-screen restoration spinner ONLY for protected workspace routes while session verification is resolving.
+  // Public auth routes (/admin/login, /faculty/login, /student/login, /) render immediately without blocking users.
+  if (isLoading && (!isPublicAuthRoute || (user && session))) {
     return (
       <div className="min-h-screen bg-academic-bg flex flex-col justify-center items-center p-6 text-center space-y-4">
         <AcadAssessLogo variant="emblem" size="md" />
@@ -133,9 +141,6 @@ export const AppContent: React.FC = () => {
       </div>
     );
   }
-
-  const cleanPath = (pathname ? pathname.replace(/\/+$/, '') : '') || '/';
-  const isResetPasswordRoute = cleanPath === '/reset-password';
 
   // 2. Unauthenticated State or Password Recovery State: Route to Selected Portal or Landing Page
   if (!user || !session || isPasswordRecovery || isResetPasswordRoute) {
@@ -191,7 +196,37 @@ export const AppContent: React.FC = () => {
     );
   }
 
-  // 3. Inactive Profile, Profile Missing, or Zero Roles State
+  // 3. Server Connecting / Waking Up State: Session exists in storage but backend context is pending
+  if (user && session && !userContext) {
+    return (
+      <div className="min-h-screen bg-academic-bg flex flex-col justify-center items-center p-6 text-center space-y-4">
+        <AcadAssessLogo variant="emblem" size="md" />
+        <Loader2 className="w-6 h-6 text-academic-primaryGreen animate-spin" />
+        <p className="text-sm font-semibold text-academic-deepGreen">
+          Connecting to Academic Server...
+        </p>
+        <p className="text-xs text-academic-muted max-w-sm">
+          {error || 'Restoring institutional authorization context. The server may be waking up from cold sleep.'}
+        </p>
+        <div className="flex gap-3 pt-2">
+          <button
+            onClick={() => refreshContext()}
+            className="btn-primary text-xs px-4 py-2"
+          >
+            Retry Connection
+          </button>
+          <button
+            onClick={() => logout()}
+            className="btn-secondary text-xs px-4 py-2"
+          >
+            Sign Out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 4. Inactive Profile, Profile Missing, or Zero Roles State
   if (accountStatus === 'inactive' || accountStatus === 'no_profile' || accountStatus === 'no_roles' || !activeRole) {
     return (
       <div className="min-h-screen bg-academic-bg flex flex-col justify-center items-center px-4 py-12">
