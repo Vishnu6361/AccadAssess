@@ -1504,13 +1504,25 @@ export const assessmentApi = {
       const authHeaders = await getAuthHeaders();
       const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/${id}`, {
         headers: authHeaders
-      });
+      }, 30000);
       if (res.ok) {
         const data = await res.json();
         return data.assessment;
       }
-    } catch { }
-    return mockAssessments.find(a => a.id === id) || null;
+      if (res.status === 404) {
+        return null;
+      }
+      const errData = await res.json().catch(() => null);
+      const error: any = new Error(errData?.error?.message || `Failed to fetch assessment (HTTP ${res.status})`);
+      error.status = res.status;
+      error.code = errData?.error?.code;
+      throw error;
+    } catch (err: any) {
+      if (err.status === 404) return null;
+      const fallback = mockAssessments.find(a => a.id === id);
+      if (fallback) return fallback;
+      throw err;
+    }
   },
 
   downloadDocumentUrl: (assessmentId: string): string => {
@@ -1539,10 +1551,21 @@ export const assessmentApi = {
         ...authHeaders,
         Accept: 'application/pdf'
       }
-    });
+    }, 35000);
     if (!res.ok) {
       const err = await res.json().catch(() => null);
-      throw new Error(err?.error?.message || `Failed to fetch document (HTTP ${res.status})`);
+      let userMsg = err?.error?.message;
+      if (res.status === 404) {
+        userMsg = userMsg || 'Assignment PDF file not found in institutional storage.';
+      } else if (res.status === 403 || res.status === 401) {
+        userMsg = userMsg || 'Access denied. You are not authorized to view this document.';
+      } else {
+        userMsg = userMsg || `Failed to fetch document (HTTP ${res.status})`;
+      }
+      const error: any = new Error(userMsg);
+      error.status = res.status;
+      error.code = err?.error?.code;
+      throw error;
     }
     return res.blob();
   },
@@ -1560,11 +1583,18 @@ export const assessmentApi = {
       const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/${assessmentId}/document-url`, {
         method: 'GET',
         headers: authHeaders
-      });
-      if (!res.ok) return null;
+      }, 30000);
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        const error: any = new Error(err?.error?.message || `Failed to fetch document metadata (HTTP ${res.status})`);
+        error.status = res.status;
+        error.code = err?.error?.code;
+        throw error;
+      }
       const data = await res.json();
       return data.document || null;
-    } catch {
+    } catch (err: any) {
+      console.warn('getDocumentUrl failed:', err.message);
       return null;
     }
   },

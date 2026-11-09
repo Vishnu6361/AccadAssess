@@ -119,16 +119,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Sidebar Container */}
       <aside 
-        className={`fixed lg:static top-0 left-0 bottom-0 z-40 w-64 bg-academic-surface border-r border-academic-border flex flex-col transition-transform duration-200 ease-in-out ${
+        className={`fixed lg:static top-0 left-0 bottom-0 z-40 w-64 lg:h-full lg:flex-shrink-0 bg-academic-surface border-r border-academic-border flex flex-col transition-transform duration-200 ease-in-out ${
           isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         }`}
         aria-label="Sidebar navigation"
       >
-        <div className="h-16 px-4 border-b border-academic-border flex items-center justify-between">
+        <div className="h-16 px-4 border-b border-academic-border flex items-center justify-between lg:hidden">
           <AcadAssessLogo variant="compact" size="sm" showSubtitle={false} />
           <button 
             onClick={onClose}
-            className="lg:hidden p-2 rounded-md hover:bg-academic-paleGreen text-academic-muted min-h-[44px] min-w-[44px] flex items-center justify-center"
+            className="p-2 rounded-md hover:bg-academic-paleGreen text-academic-muted min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Close menu"
           >
             <X className="w-5 h-5" />
@@ -191,7 +191,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
-        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto min-h-0">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeItem === item.id;

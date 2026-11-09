@@ -849,91 +849,83 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
     const assessment = await this.getAssessmentById(id);
     if (!assessment) return null;
 
-    const { data: questions } = await this.client
-      .from('questions')
-      .select('*')
-      .eq('assessment_id', id)
-      .order('display_order', { ascending: true });
-
-    const fullQuestions = await Promise.all((questions || []).map(async q => {
-      const { data: rv } = await this.client
+    // Parallel Round 1: Fetch questions, class_subject linkage, and assignment-level rubric version concurrently
+    const [questionsRes, csRes, assRubricVersionRes] = await Promise.all([
+      this.client
+        .from('questions')
+        .select('*')
+        .eq('assessment_id', id)
+        .order('display_order', { ascending: true }),
+      this.client
+        .from('class_subjects')
+        .select('id, class_id, subject_id')
+        .eq('id', assessment.class_subject_id)
+        .maybeSingle(),
+      this.client
         .from('rubric_versions')
         .select('*')
-        .eq('question_id', q.id)
-        .maybeSingle();
+        .eq('assessment_id', id)
+        .maybeSingle()
+    ]);
 
-      if (!rv) return { ...q, rubric: null };
+    const questions = questionsRes.data || [];
+    const cs = csRes.data;
+    const assRubricVersion = assRubricVersionRes.data;
 
-      const { data: criteria } = await this.client
-        .from('rubric_criteria')
-        .select('*')
-        .eq('rubric_version_id', rv.id)
-        .order('display_order', { ascending: true });
+    // Parallel Round 2: Fetch class and subject names, and rubric criteria concurrently
+    const [clsRes, subRes, criteriaRes] = await Promise.all([
+      cs
+        ? this.client
+            .from('classes')
+            .select('programme, semester, section')
+            .eq('id', cs.class_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      cs
+        ? this.client
+            .from('subjects')
+            .select('code, name')
+            .eq('id', cs.subject_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      assRubricVersion
+        ? this.client
+            .from('rubric_criteria')
+            .select('*')
+            .eq('rubric_version_id', assRubricVersion.id)
+            .order('display_order', { ascending: true })
+        : Promise.resolve({ data: null })
+    ]);
 
-      const fullCriteria = await Promise.all((criteria || []).map(async rc => {
-        const { data: levels } = await this.client
-          .from('rubric_levels')
-          .select('*')
-          .eq('criterion_id', rc.id)
-          .order('display_order', { ascending: true });
-        return { ...rc, levels: levels || [] };
-      }));
+    const classDetails = clsRes.data ? formatClassName(clsRes.data) : 'Unknown Class';
+    const subjectDetails = subRes.data ? `${subRes.data.code} - ${subRes.data.name}` : 'Unknown Subject';
 
-      return { ...q, rubric: { ...rv, criteria: fullCriteria } };
-    }));
-
-    const { data: cs } = await this.client
-      .from('class_subjects')
-      .select('id, class_id, subject_id')
-      .eq('id', assessment.class_subject_id)
-      .maybeSingle();
-
-    let classDetails = 'Unknown Class';
-    let subjectDetails = 'Unknown Subject';
-
-    if (cs) {
-      const { data: cls } = await this.client
-        .from('classes')
-        .select('programme, semester, section')
-        .eq('id', cs.class_id)
-        .maybeSingle();
-      if (cls) classDetails = formatClassName(cls);
-
-      const { data: sub } = await this.client
-        .from('subjects')
-        .select('code, name')
-        .eq('id', cs.subject_id)
-        .maybeSingle();
-      if (sub) subjectDetails = `${sub.code} - ${sub.name}`;
-    }
-
-    // Fetch assignment-level rubric if present
-    const { data: assRubricVersion } = await this.client
-      .from('rubric_versions')
-      .select('*')
-      .eq('assessment_id', id)
-      .maybeSingle();
-
+    // Parallel Round 3: Fetch levels for all criteria in a single query
     let fullAssignmentRubric = null;
-    if (assRubricVersion) {
-      const { data: criteria } = await this.client
-        .from('rubric_criteria')
+    if (assRubricVersion && criteriaRes.data && criteriaRes.data.length > 0) {
+      const criteria = criteriaRes.data;
+      const criterionIds = criteria.map(c => c.id);
+
+      const { data: levels } = await this.client
+        .from('rubric_levels')
         .select('*')
-        .eq('rubric_version_id', assRubricVersion.id)
+        .in('criterion_id', criterionIds)
         .order('display_order', { ascending: true });
 
-      const fullCriteria = await Promise.all((criteria || []).map(async rc => {
-        const { data: levels } = await this.client
-          .from('rubric_levels')
-          .select('*')
-          .eq('criterion_id', rc.id)
-          .order('display_order', { ascending: true });
-        return { ...rc, levels: levels || [] };
+      const allLevels = levels || [];
+      const fullCriteria = criteria.map(rc => ({
+        ...rc,
+        levels: allLevels.filter(l => l.criterion_id === rc.id)
       }));
 
       fullAssignmentRubric = {
         ...assRubricVersion,
         criteria: fullCriteria
+      };
+    } else if (assRubricVersion) {
+      fullAssignmentRubric = {
+        ...assRubricVersion,
+        criteria: []
       };
     }
 
@@ -941,7 +933,7 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
       ...assessment,
       class_details: classDetails,
       subject_details: subjectDetails,
-      questions: fullQuestions,
+      questions: questions.map(q => ({ ...q, rubric: null })),
       rubric: fullAssignmentRubric
     };
   }

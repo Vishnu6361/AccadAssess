@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   Pencil,
   BookOpen,
@@ -23,6 +23,7 @@ import {
   Paperclip, 
   FileSpreadsheet, 
   AlertTriangle,
+  RotateCw,
   Eye,
   EyeOff,
   ChevronUp,
@@ -171,6 +172,8 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
   // Selected Assessment - Draft Questions & Rubric Live State
   const [draftQuestions, setDraftQuestions] = useState<ManualQuestionItem[]>([]);
   const [draftRubricCriteria, setDraftRubricCriteria] = useState<RubricCriterionItem[]>([]);
+  const [isLoadingDetails, setIsLoadingDetails] = useState<boolean>(false);
+  const [detailsError, setDetailsError] = useState<string | null>(null);
   const [inlineNewQPrompt, setInlineNewQPrompt] = useState('');
   const [editingDraftQId, setEditingDraftQId] = useState<string | null>(null);
   const [editingDraftQPrompt, setEditingDraftQPrompt] = useState<string>('');
@@ -349,20 +352,53 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     }
   };
 
+  const loadAssessmentDetails = useCallback(async (assId: string) => {
+    setIsLoadingDetails(true);
+    setDetailsError(null);
+    try {
+      const full = await assessmentApi.getAssessment(assId);
+      if (full) {
+        setAssessments(prev => prev.map(a => a.id === full.id ? { ...a, ...full } : a));
+        setDraftQuestions(full.questions || []);
+        setDraftRubricCriteria(full.rubric?.criteria || []);
+      }
+    } catch (err: any) {
+      console.error('Failed to load full assessment details:', err);
+      setDetailsError(err.message || 'Failed to load assignment questions and rubric.');
+    } finally {
+      setIsLoadingDetails(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (selectedAssessmentId) {
-      loadSubmissions(selectedAssessmentId);
-      assessmentApi.getAssessment(selectedAssessmentId).then((full) => {
-        if (full) {
-          setAssessments(prev => prev.map(a => a.id === full.id ? { ...a, ...full } : a));
-          setDraftQuestions(full.questions || []);
-          setDraftRubricCriteria(full.rubric?.criteria || []);
+      // 1. Seed immediately from current in-memory assessment object if available
+      const existing = assessments.find(a => a.id === selectedAssessmentId);
+      if (existing) {
+        if (Array.isArray(existing.questions) && existing.questions.length > 0) {
+          setDraftQuestions(existing.questions);
+        } else {
+          setDraftQuestions([]);
         }
-      }).catch(err => {
-        console.error('Failed to load full assessment details:', err);
-      });
+        if (existing.rubric?.criteria && Array.isArray(existing.rubric.criteria) && existing.rubric.criteria.length > 0) {
+          setDraftRubricCriteria(existing.rubric.criteria);
+        } else {
+          setDraftRubricCriteria([]);
+        }
+      } else {
+        setDraftQuestions([]);
+        setDraftRubricCriteria([]);
+      }
+
+      // 2. Fetch authoritative details and submissions
+      loadSubmissions(selectedAssessmentId);
+      loadAssessmentDetails(selectedAssessmentId);
+    } else {
+      setDraftQuestions([]);
+      setDraftRubricCriteria([]);
+      setDetailsError(null);
     }
-  }, [selectedAssessmentId]);
+  }, [selectedAssessmentId, loadAssessmentDetails]);
 
   // Load Late Submissions Report
   const loadLateReports = async (assId?: string) => {
@@ -1426,7 +1462,15 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                       <div 
                         key={ass.id} 
                         className="card-surface flex flex-col justify-between hover:border-academic-primaryGreen/50 transition-all cursor-pointer group"
-                        onClick={() => setSelectedAssessmentId(ass.id)}
+                        onClick={() => {
+                          setSelectedAssessmentId(ass.id);
+                          if (Array.isArray(ass.questions) && ass.questions.length > 0) {
+                            setDraftQuestions(ass.questions);
+                          }
+                          if (ass.rubric?.criteria && Array.isArray(ass.rubric.criteria) && ass.rubric.criteria.length > 0) {
+                            setDraftRubricCriteria(ass.rubric.criteria);
+                          }
+                        }}
                       >
                         <div>
                           <div className="flex items-start justify-between gap-3 mb-2">
@@ -1866,7 +1910,27 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
               </div>
 
               {/* Criteria Table */}
-              {draftRubricCriteria.length === 0 ? (
+              {isLoadingDetails && draftRubricCriteria.length === 0 ? (
+                <div className="card-surface flex items-center justify-center py-8 text-xs text-academic-muted space-x-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-academic-primaryGreen" />
+                  <span>Loading rubric criteria...</span>
+                </div>
+              ) : detailsError && draftRubricCriteria.length === 0 ? (
+                <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between text-xs text-red-800">
+                  <div className="flex items-center space-x-2">
+                    <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                    <span>{detailsError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => selectedAssessmentId && loadAssessmentDetails(selectedAssessmentId)}
+                    className="btn-secondary text-[11px] px-2.5 py-1 h-auto inline-flex items-center"
+                  >
+                    <RotateCw className="w-3 h-3 mr-1 inline" />
+                    Retry
+                  </button>
+                </div>
+              ) : draftRubricCriteria.length === 0 ? (
                 <div className="card-surface text-center py-8">
                   <p className="text-xs font-semibold text-academic-deepGreen">No rubric criteria configured yet</p>
                   <p className="text-[11px] text-academic-muted mt-0.5">
@@ -2079,7 +2143,27 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                 </div>
 
                 {/* Question List */}
-                {draftQuestions.length === 0 ? (
+                {isLoadingDetails && draftQuestions.length === 0 ? (
+                  <div className="flex items-center justify-center py-6 text-xs text-academic-muted space-x-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-academic-primaryGreen" />
+                    <span>Loading questions...</span>
+                  </div>
+                ) : detailsError && draftQuestions.length === 0 ? (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between text-xs text-red-800">
+                    <div className="flex items-center space-x-2">
+                      <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                      <span>{detailsError}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => selectedAssessmentId && loadAssessmentDetails(selectedAssessmentId)}
+                      className="btn-secondary text-[11px] px-2.5 py-1 h-auto inline-flex items-center"
+                    >
+                      <RotateCw className="w-3 h-3 mr-1 inline" />
+                      Retry
+                    </button>
+                  </div>
+                ) : draftQuestions.length === 0 ? (
                   <div className="text-center py-6 text-academic-muted text-xs">
                     No manual questions added. {selectedAssessment.document_storage_key ? 'Students refer to the uploaded Assignment PDF document.' : 'Add manual questions below or upload an assignment PDF document.'}
                   </div>

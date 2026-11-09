@@ -52,7 +52,7 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleSidebar
 }) => {
   return (
-    <header className="h-16 bg-academic-surface border-b border-academic-border px-4 sm:px-6 flex items-center justify-between sticky top-0 z-20">
+    <header className="h-16 flex-shrink-0 bg-academic-surface border-b border-academic-border px-4 sm:px-6 flex items-center justify-between sticky top-0 z-20">
       <div className="flex items-center space-x-3">
         <button
           onClick={onToggleSidebar}

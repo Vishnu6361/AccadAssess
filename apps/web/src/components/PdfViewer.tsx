@@ -39,6 +39,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   const [loading, setLoading] = useState<boolean>(true);
   const [rendering, setRendering] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorCategory, setErrorCategory] = useState<'timeout' | 'auth' | 'not_found' | 'render' | 'generic'>('generic');
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const [numPages, setNumPages] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -51,26 +52,53 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const renderTaskRef = useRef<any>(null);
 
-  // Load PDF Document via authenticated blob fetch
+  // Load PDF Document via authenticated blob fetch or direct signed URL
   const loadDocument = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
+      setErrorCategory('generic');
       setCurrentPage(1);
       setPageInputValue('1');
 
-      let arrayBuffer: ArrayBuffer;
+      let arrayBuffer: ArrayBuffer | null = null;
+
       if (directUrl) {
         const res = await fetch(directUrl);
+        if (!res.ok) {
+          throw new Error(`Failed to load document stream (HTTP ${res.status})`);
+        }
         arrayBuffer = await res.arrayBuffer();
       } else if (customFetchBlob) {
         const blob = await customFetchBlob();
         arrayBuffer = await blob.arrayBuffer();
       } else if (assessmentId) {
-        const blob = await assessmentApi.fetchDocumentBlob(assessmentId);
-        arrayBuffer = await blob.arrayBuffer();
+        // Fast-path: Request signed direct storage URL from Supabase CDN
+        let loadedFromSignedUrl = false;
+        try {
+          const docInfo = await assessmentApi.getDocumentUrl(assessmentId);
+          if (docInfo?.signed_url) {
+            const signedRes = await fetch(docInfo.signed_url);
+            if (signedRes.ok) {
+              arrayBuffer = await signedRes.arrayBuffer();
+              loadedFromSignedUrl = true;
+            }
+          }
+        } catch (signedErr) {
+          console.warn('Direct signed URL retrieval failed, falling back to authenticated proxy:', signedErr);
+        }
+
+        // Fallback: Fetch document blob via backend streaming proxy
+        if (!loadedFromSignedUrl) {
+          const blob = await assessmentApi.fetchDocumentBlob(assessmentId);
+          arrayBuffer = await blob.arrayBuffer();
+        }
       } else {
         throw new Error('No PDF source provided');
+      }
+
+      if (!arrayBuffer) {
+        throw new Error('Failed to retrieve binary document buffer');
       }
 
       const loadingTask = pdfjsLib.getDocument({
@@ -85,7 +113,24 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       setLoading(false);
     } catch (err: any) {
       console.error('Failed to load PDF document:', err);
-      const msg = err?.message || 'Failed to load assignment PDF. Please ensure you are authorized.';
+      let category: 'timeout' | 'auth' | 'not_found' | 'render' | 'generic' = 'generic';
+      let msg = err?.message || 'Failed to load assignment PDF.';
+
+      if (err?.code === 'TIMEOUT' || err?.isTimeout || err?.status === 504 || msg.includes('timed out')) {
+        category = 'timeout';
+        msg = 'Request timed out while the backend server was waking up from sleep. The server is spinning up. Please click "Retry" below.';
+      } else if (err?.status === 404 || msg.includes('not found') || err?.code === 'DOCUMENT_NOT_FOUND') {
+        category = 'not_found';
+        msg = 'Assignment document was not found in institutional storage.';
+      } else if (err?.status === 403 || err?.status === 401 || msg.includes('FORBIDDEN') || msg.includes('Unauthorized') || msg.includes('Access denied')) {
+        category = 'auth';
+        msg = 'You are not authorized to view this assignment document. Ensure you are signed in with the correct role.';
+      } else if (msg.includes('pdfjs') || msg.includes('worker') || msg.includes('PDF')) {
+        category = 'render';
+        msg = 'Failed to render PDF document content. Please try downloading the file directly.';
+      }
+
+      setErrorCategory(category);
       setError(msg);
       setLoading(false);
     }
@@ -395,12 +440,35 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         {/* Error State */}
         {!loading && error && (
           <div className="max-w-md w-full bg-white p-5 rounded-lg border border-red-200 shadow-sm text-center space-y-3">
-            <div className="w-10 h-10 rounded-full bg-red-50 text-red-600 flex items-center justify-center mx-auto">
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center mx-auto ${
+              errorCategory === 'timeout'
+                ? 'bg-amber-50 text-amber-600'
+                : errorCategory === 'auth'
+                ? 'bg-red-50 text-red-600'
+                : 'bg-red-50 text-red-600'
+            }`}>
               <AlertCircle className="w-5 h-5" />
             </div>
             <div>
-              <h5 className="text-sm font-bold text-red-900">Unable to Display PDF</h5>
-              <p className="text-xs text-red-700 mt-1 leading-relaxed">
+              <div className="flex items-center justify-center space-x-1.5">
+                <h5 className="text-sm font-bold text-academic-deepGreen">Unable to Display PDF</h5>
+                {errorCategory === 'timeout' && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
+                    Server Spin-Up
+                  </span>
+                )}
+                {errorCategory === 'auth' && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800">
+                    Authorization
+                  </span>
+                )}
+                {errorCategory === 'not_found' && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-800">
+                    Missing File
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-academic-muted mt-1 leading-relaxed">
                 {error}
               </p>
             </div>
@@ -408,7 +476,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
               <button
                 type="button"
                 onClick={loadDocument}
-                className="btn-secondary text-xs px-3 py-1.5 h-auto inline-flex items-center"
+                className="btn-primary text-xs px-3.5 py-1.5 h-auto inline-flex items-center"
               >
                 <RotateCw className="w-3.5 h-3.5 mr-1.5" />
                 <span>Retry</span>
@@ -416,9 +484,10 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
               <button
                 type="button"
                 onClick={handleDownload}
-                className="btn-primary text-xs px-3 py-1.5 h-auto inline-flex items-center"
+                disabled={isDownloading}
+                className="btn-secondary text-xs px-3 py-1.5 h-auto inline-flex items-center"
               >
-                <Download className="w-3.5 h-3.5 mr-1.5" />
+                {isDownloading ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Download className="w-3.5 h-3.5 mr-1.5" />}
                 <span>Download File</span>
               </button>
             </div>

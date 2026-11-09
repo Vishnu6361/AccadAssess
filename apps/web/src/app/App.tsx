@@ -469,7 +469,7 @@ export const AppContent: React.FC = () => {
 
   // 5. Authenticated & Verified State: Render Workspaces
   return (
-    <div className="min-h-screen bg-academic-bg text-[#27452C] flex flex-col font-sans">
+    <div className="h-screen h-[100dvh] bg-academic-bg text-[#27452C] flex flex-col font-sans overflow-hidden">
       <Header
         activeRole={activeRole}
         availableRoles={availableRoles}
@@ -481,7 +481,7 @@ export const AppContent: React.FC = () => {
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
       />
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 min-h-0 overflow-hidden relative">
         <Sidebar
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
@@ -493,7 +493,7 @@ export const AppContent: React.FC = () => {
           onOpenWorkspaceModal={() => setIsWorkspaceModalOpen(true)}
         />
 
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+        <main className="flex-1 min-w-0 min-h-0 overflow-y-auto p-4 sm:p-6 lg:p-8">
           <div className="max-w-6xl mx-auto space-y-6">
             <Breadcrumbs 
               items={[

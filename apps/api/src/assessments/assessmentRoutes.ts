@@ -288,6 +288,11 @@ router.get('/:id/document', async (req: Request, res: Response) => {
       });
     }
   } else if (user.roles.includes('student')) {
+    if (assessment.status !== 'published') {
+      return res.status(403).json({
+        error: { code: 'FORBIDDEN', message: 'Students can only access published assessment documents' }
+      });
+    }
     const isEnrolled = await repo.isEnrolledStudent(user.profile.id, assessment.class_subject_id);
     if (!isEnrolled) {
       return res.status(403).json({
@@ -365,6 +370,11 @@ router.get('/:id/document-url', async (req: Request, res: Response) => {
       });
     }
   } else if (user.roles.includes('student')) {
+    if (assessment.status !== 'published') {
+      return res.status(403).json({
+        error: { code: 'FORBIDDEN', message: 'Students can only access published assessment documents' }
+      });
+    }
     const isEnrolled = await repo.isEnrolledStudent(user.profile.id, assessment.class_subject_id);
     if (!isEnrolled) {
       return res.status(403).json({
