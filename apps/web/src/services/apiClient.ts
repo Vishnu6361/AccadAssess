@@ -44,7 +44,39 @@ export type {
   ProctorAssessmentStudentItem
 };
 
-const API_BASE_URL = (typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_API_BASE_URL : undefined) || process.env.VITE_API_BASE_URL || 'http://localhost:4000/api/v1';
+export const PRODUCTION_API_URL = 'https://acadassess-api.onrender.com/api/v1';
+
+function resolveApiBaseUrl(): string {
+  const envUrl = (typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_API_BASE_URL : undefined) ||
+    (typeof process !== 'undefined' && process.env ? process.env.VITE_API_BASE_URL : undefined);
+
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim() !== '') {
+    // If running in a browser on a non-localhost domain, prevent accidental localhost fallback
+    if (typeof window !== 'undefined' && window.location) {
+      const hostname = window.location.hostname;
+      const isLocalHost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+      if (!isLocalHost && (envUrl.includes('localhost') || envUrl.includes('127.0.0.1'))) {
+        console.warn(`[apiClient] Overriding localhost API URL (${envUrl}) in production browser (${hostname}) with ${PRODUCTION_API_URL}`);
+        return PRODUCTION_API_URL;
+      }
+    }
+    return envUrl.trim().replace(/\/+$/, '');
+  }
+
+  // If no env variable is provided:
+  if (typeof window !== 'undefined' && window.location) {
+    const hostname = window.location.hostname;
+    const isLocalHost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+    if (!isLocalHost) {
+      return PRODUCTION_API_URL;
+    }
+  }
+
+  return 'http://localhost:4000/api/v1';
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
+export const getApiBaseUrl = (): string => API_BASE_URL;
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 
@@ -1471,6 +1503,7 @@ export interface GetAssessmentsResult {
 }
 
 export const assessmentApi = {
+  getBaseUrl: (): string => API_BASE_URL,
   getClassSubjectsForTeacher: async (): Promise<any[]> => {
     try {
       const authHeaders = await getAuthHeaders();
@@ -1652,7 +1685,7 @@ export const assessmentApi = {
       return data.assessment;
     } catch (err: any) {
       if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
-        throw new Error('API server is offline (http://localhost:4000). Cannot persist assessment to server.');
+        throw new Error(`API server is unreachable (${API_BASE_URL}). Cannot persist assessment to server.`);
       }
       throw err;
     }
@@ -1680,7 +1713,7 @@ export const assessmentApi = {
       return data.question;
     } catch (err: any) {
       if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
-        throw new Error('API server is offline (http://localhost:4000). Cannot add question.');
+        throw new Error(`API server is unreachable (${API_BASE_URL}). Cannot add question.`);
       }
       throw err;
     }
@@ -1707,7 +1740,7 @@ export const assessmentApi = {
       return data.rubric;
     } catch (err: any) {
       if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
-        throw new Error('API server is offline (http://localhost:4000). Cannot persist rubric.');
+        throw new Error(`API server is unreachable (${API_BASE_URL}). Cannot persist rubric.`);
       }
       throw err;
     }
@@ -1727,7 +1760,7 @@ export const assessmentApi = {
       return data.assessment;
     } catch (err: any) {
       if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
-        throw new Error('API server is offline (http://localhost:4000). Cannot publish assessment.');
+        throw new Error(`API server is unreachable (${API_BASE_URL}). Cannot publish assessment.`);
       }
       throw err;
     }
@@ -1768,7 +1801,7 @@ export const assessmentApi = {
       return data;
     } catch (err: any) {
       if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
-        throw new Error('API server is offline (http://localhost:4000). Cannot update assessment.');
+        throw new Error(`API server is unreachable (${API_BASE_URL}). Cannot update assessment.`);
       }
       throw err;
     }
@@ -1822,7 +1855,7 @@ export const assessmentApi = {
       throw new Error(data.error?.message || `Check failed (${res.status})`);
     } catch (err: any) {
       if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
-        throw new Error('API server is offline (http://localhost:4000). Cannot check deletion status.');
+        throw new Error(`API server is unreachable (${API_BASE_URL}). Cannot check deletion status.`);
       }
       throw err;
     }
@@ -1846,7 +1879,7 @@ export const assessmentApi = {
       return data;
     } catch (err: any) {
       if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
-        throw new Error('API server is offline (http://localhost:4000). Cannot delete assessment.');
+        throw new Error(`API server is unreachable (${API_BASE_URL}). Cannot delete assessment.`);
       }
       throw err;
     }
@@ -1941,7 +1974,7 @@ export const submissionApi = {
       return data.receipt;
     } catch (err: any) {
       if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
-        throw new Error('API server is offline (http://localhost:4000). Cannot submit answer files.');
+        throw new Error(`API server is unreachable (${API_BASE_URL}). Cannot submit answer files.`);
       }
       throw err;
     }

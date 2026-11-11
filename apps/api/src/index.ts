@@ -171,7 +171,11 @@ export const corsOptions: cors.CorsOptions = {
     'x-reauth-token',
     'Accept',
     'Origin',
-    'X-Requested-With'
+    'X-Requested-With',
+    'Idempotency-Key',
+    'idempotency-key',
+    'X-Idempotency-Key',
+    'x-idempotency-key'
   ],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
   maxAge: 86400,

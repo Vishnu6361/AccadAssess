@@ -1204,7 +1204,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
           <div className="flex items-center space-x-2">
             <AlertCircle className="w-4 h-4 text-[#B28704] flex-shrink-0" />
             <span>
-              <strong>Offline Mock Mode:</strong> The backend API server (http://localhost:4000) is unreachable. Displaying read-only preview data.
+              <strong>Offline Mock Mode:</strong> The backend API server ({assessmentApi.getBaseUrl?.() || 'server'}) is unreachable. Displaying read-only preview data.
             </span>
           </div>
         </div>
