@@ -22,10 +22,15 @@ export interface ISubmissionRepository {
   getFullSubmission(id: string): Promise<any | null>;
   getSubmissionByAssessmentAndStudent(assessmentId: string, studentId: string): Promise<Submission | null>;
   getActiveVersion(submissionId: string): Promise<SubmissionVersion | null>;
+  getSubmissionVersions(submissionId: string): Promise<SubmissionVersion[]>;
+  getDraftSubmission(assessmentId: string, studentId: string): Promise<any | null>;
+  saveDraftSubmission(assessmentId: string, studentId: string, answers: any[]): Promise<any>;
+  deleteDraftSubmission(assessmentId: string, studentId: string): Promise<void>;
   createOrUpdateSubmission(params: {
     assessmentId: string;
     studentId: string;
-    files: Array<{ file_name: string; file_size: number; buffer: Buffer; mime_type: string; sha256: string }>;
+    answers?: Array<{ question_id: string; answer_text: string }>;
+    files: Array<any>;
     serverTime: Date;
     lateStatus: 'on_time' | 'late';
   }): Promise<{ submission: Submission; version: SubmissionVersion; receipt: SubmissionReceipt }>;
@@ -173,11 +178,15 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
     if (!submission) return null;
 
     const activeVersion = this.inMemoryDb.submissionVersions.find(v => v.id === submission.active_version_id);
+    const versions = this.inMemoryDb.submissionVersions
+      .filter(v => v.submission_id === submission.id)
+      .sort((a, b) => a.version - b.version);
     const evaluation = this.inMemoryDb.evaluations.find(e => e.submission_id === submission.id);
 
     return {
       ...submission,
       active_version: activeVersion || null,
+      versions,
       evaluation: evaluation || null
     };
   }
@@ -196,14 +205,61 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
     return v ? { ...v } : null;
   }
 
+  async getSubmissionVersions(submissionId: string): Promise<SubmissionVersion[]> {
+    return this.inMemoryDb.submissionVersions
+      .filter(v => v.submission_id === submissionId)
+      .sort((a, b) => a.version - b.version);
+  }
+
+  async getDraftSubmission(assessmentId: string, studentId: string): Promise<any | null> {
+    const draft = this.inMemoryDb.studentSubmissionDrafts.find(
+      d => d.assessment_id === assessmentId && d.student_id === studentId
+    );
+    return draft ? { ...draft } : null;
+  }
+
+  async saveDraftSubmission(assessmentId: string, studentId: string, answers: any[]): Promise<any> {
+    const nowIso = new Date().toISOString();
+    let draft = this.inMemoryDb.studentSubmissionDrafts.find(
+      d => d.assessment_id === assessmentId && d.student_id === studentId
+    );
+    if (draft) {
+      draft.answers = answers;
+      draft.updated_at = nowIso;
+    } else {
+      draft = {
+        id: randomUUID(),
+        assessment_id: assessmentId,
+        student_id: studentId,
+        answers,
+        created_at: nowIso,
+        updated_at: nowIso
+      };
+      this.inMemoryDb.studentSubmissionDrafts.push(draft);
+    }
+    return { ...draft };
+  }
+
+  async deleteDraftSubmission(assessmentId: string, studentId: string): Promise<void> {
+    const idx = this.inMemoryDb.studentSubmissionDrafts.findIndex(
+      d => d.assessment_id === assessmentId && d.student_id === studentId
+    );
+    if (idx !== -1) {
+      this.inMemoryDb.studentSubmissionDrafts.splice(idx, 1);
+    }
+  }
+
   async createOrUpdateSubmission(params: {
     assessmentId: string;
     studentId: string;
-    files: Array<{ file_name: string; file_size: number; buffer: Buffer; mime_type: string; sha256: string }>;
-    serverTime: Date;
-    lateStatus: 'on_time' | 'late';
+    answers?: Array<{ question_id: string; answer_text: string }>;
+    files?: Array<any>;
+    serverTime?: Date;
+    lateStatus?: 'on_time' | 'late';
   }): Promise<{ submission: Submission; version: SubmissionVersion; receipt: SubmissionReceipt }> {
-    const nowIso = params.serverTime.toISOString();
+    const nowIso = (params.serverTime ? new Date(params.serverTime) : new Date()).toISOString();
+    const files = params.files || [];
+    const lateStatus = params.lateStatus || 'on_time';
 
     if (this.inMemoryDb.resultPublications.some(rp => rp.assessment_id === params.assessmentId)) {
       throw new Error('Submissions are closed: Results have already been published for this assessment');
@@ -220,7 +276,10 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
     const newVersionNumber = existingVersions.length + 1;
     const versionId = randomUUID();
 
-    const uploadedFilesMeta: SubmissionFile[] = params.files.map(f => {
+    const uploadedFilesMeta: SubmissionFile[] = (params.files || []).map(f => {
+      if (f.storage_key) {
+        return f as SubmissionFile;
+      }
       const storagePath = `submissions/${submissionId}/${newVersionNumber}/${f.file_name}`;
       this.inMemoryDb.storageBlobs.set(storagePath, f.buffer);
       return {
@@ -234,28 +293,29 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
       };
     });
 
-    const primaryFile = uploadedFilesMeta[0];
+    const primaryFile = uploadedFilesMeta.length > 0 ? uploadedFilesMeta[0] : null;
     const totalBytes = uploadedFilesMeta.reduce((sum, f) => sum + f.file_size_bytes, 0);
 
     const submissionVersion: SubmissionVersion = {
       id: versionId,
       submission_id: submissionId,
       version: newVersionNumber,
-      storage_path: primaryFile.storage_key,
-      original_name: primaryFile.original_filename,
-      mime_type: primaryFile.mime_type,
+      storage_path: primaryFile ? primaryFile.storage_key : null,
+      original_name: primaryFile ? primaryFile.original_filename : null,
+      mime_type: primaryFile ? primaryFile.mime_type : null,
       size_bytes: totalBytes,
-      sha256: primaryFile.sha256 || '',
+      sha256: primaryFile?.sha256 || null,
       uploaded_at: nowIso,
       superseded_at: null,
       files: uploadedFilesMeta,
-      late_status: params.lateStatus
+      answers: params.answers || [],
+      late_status: lateStatus
     };
 
     if (submission) {
       submission.active_version_id = versionId;
       submission.status = 'uploaded';
-      submission.late_status = params.lateStatus;
+      submission.late_status = lateStatus;
       submission.updated_at = nowIso;
     } else {
       submission = {
@@ -267,12 +327,15 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
         status: 'uploaded',
         first_submitted_at: nowIso,
         updated_at: nowIso,
-        late_status: params.lateStatus
+        late_status: lateStatus
       };
       this.inMemoryDb.submissions.push(submission);
     }
 
     this.inMemoryDb.submissionVersions.push(submissionVersion);
+
+    // Clean up draft upon submission
+    await this.deleteDraftSubmission(params.assessmentId, params.studentId);
 
     const receipt: SubmissionReceipt = {
       submission_id: submissionId,
@@ -280,13 +343,15 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
       version: newVersionNumber,
       status: 'uploaded',
       late_status: params.lateStatus,
-      sha256: primaryFile.sha256 || '',
+      sha256: primaryFile?.sha256 || null,
       size_bytes: totalBytes,
       file_count: uploadedFilesMeta.length,
       files: uploadedFilesMeta,
+      answers: params.answers || [],
+      answers_count: (params.answers || []).length,
       uploaded_at: nowIso,
       is_resubmission: isResubmission,
-      storage_path: primaryFile.storage_key
+      storage_path: primaryFile ? primaryFile.storage_key : null
     };
 
     return { submission, version: submissionVersion, receipt };
@@ -692,6 +757,12 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
       activeVersion = v || null;
     }
 
+    const { data: allVersions } = await this.client
+      .from('submission_versions')
+      .select('*')
+      .eq('submission_id', submission.id)
+      .order('version', { ascending: true });
+
     const { data: evaluation } = await this.client
       .from('evaluations')
       .select('*')
@@ -701,8 +772,63 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
     return {
       ...submission,
       active_version: activeVersion,
+      versions: allVersions || [],
       evaluation: evaluation || null
     };
+  }
+
+  async getSubmissionVersions(submissionId: string): Promise<SubmissionVersion[]> {
+    const { data, error } = await this.client
+      .from('submission_versions')
+      .select('*')
+      .eq('submission_id', submissionId)
+      .order('version', { ascending: true });
+    if (error) throw new Error(`Failed to get submission versions: ${error.message}`);
+    return data || [];
+  }
+
+  async getDraftSubmission(assessmentId: string, studentId: string): Promise<any | null> {
+    const { data, error } = await this.client
+      .from('student_submission_drafts')
+      .select('*')
+      .eq('assessment_id', assessmentId)
+      .eq('student_id', studentId)
+      .maybeSingle();
+    if (error) {
+      // If table doesn't exist yet in a mock or unmigrated DB, fail gracefully
+      console.warn('getDraftSubmission error (ignorable if pre-migration):', error.message);
+      return null;
+    }
+    return data || null;
+  }
+
+  async saveDraftSubmission(assessmentId: string, studentId: string, answers: any[]): Promise<any> {
+    const nowIso = new Date().toISOString();
+    const { data, error } = await this.client
+      .from('student_submission_drafts')
+      .upsert({
+        assessment_id: assessmentId,
+        student_id: studentId,
+        answers,
+        updated_at: nowIso
+      }, {
+        onConflict: 'assessment_id,student_id'
+      })
+      .select()
+      .single();
+    if (error) throw new Error(`Failed to save draft: ${error.message}`);
+    return data;
+  }
+
+  async deleteDraftSubmission(assessmentId: string, studentId: string): Promise<void> {
+    const { error } = await this.client
+      .from('student_submission_drafts')
+      .delete()
+      .eq('assessment_id', assessmentId)
+      .eq('student_id', studentId);
+    if (error) {
+      console.warn('deleteDraftSubmission error (ignorable):', error.message);
+    }
   }
 
   async getSubmissionByAssessmentAndStudent(assessmentId: string, studentId: string): Promise<Submission | null> {
@@ -734,7 +860,8 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
   async createOrUpdateSubmission(params: {
     assessmentId: string;
     studentId: string;
-    files: Array<{ file_name: string; file_size: number; buffer: Buffer; mime_type: string; sha256: string }>;
+    answers?: Array<{ question_id: string; answer_text: string }>;
+    files: Array<any>;
     serverTime: Date;
     lateStatus: 'on_time' | 'late';
   }): Promise<{ submission: Submission; version: SubmissionVersion; receipt: SubmissionReceipt }> {
@@ -754,7 +881,12 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
     const versionId = randomUUID();
 
     const uploadedFilesMeta: SubmissionFile[] = [];
-    for (const f of params.files) {
+    for (const f of (params.files || [])) {
+      if ((f as any).storage_key) {
+        uploadedFilesMeta.push(f as SubmissionFile);
+        continue;
+      }
+
       const storagePath = `submissions/${submissionId}/${newVersionNumber}/${f.file_name}`;
       const { error: uploadError } = await this.client.storage
         .from(this.bucketName)
@@ -778,7 +910,7 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
       });
     }
 
-    const primaryFile = uploadedFilesMeta[0];
+    const primaryFile = uploadedFilesMeta.length > 0 ? uploadedFilesMeta[0] : null;
     const totalBytes = uploadedFilesMeta.reduce((sum, f) => sum + f.file_size_bytes, 0);
 
     const { data: rpcResult, error: rpcErr } = await this.client.rpc('create_submission_atomic', {
@@ -786,19 +918,23 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
       p_student_id: params.studentId,
       p_submission_id: submissionId,
       p_version_id: versionId,
-      p_storage_path: primaryFile.storage_key,
-      p_original_name: primaryFile.original_filename,
-      p_mime_type: primaryFile.mime_type,
+      p_storage_path: primaryFile ? primaryFile.storage_key : null,
+      p_original_name: primaryFile ? primaryFile.original_filename : null,
+      p_mime_type: primaryFile ? primaryFile.mime_type : null,
       p_size_bytes: totalBytes,
-      p_sha256: primaryFile.sha256 || '',
+      p_sha256: primaryFile?.sha256 || null,
       p_files: uploadedFilesMeta,
       p_submitted_at: nowIso,
-      p_late_status: params.lateStatus
+      p_late_status: params.lateStatus,
+      p_answers: params.answers || []
     });
 
     if (rpcErr) {
       throw new Error(`Failed to commit submission transaction: ${rpcErr.message}`);
     }
+
+    // Clean up draft upon submission
+    await this.deleteDraftSubmission(params.assessmentId, params.studentId).catch(() => {});
 
     const updatedSub: Submission = {
       id: rpcResult.submission_id,
@@ -815,13 +951,15 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
       id: rpcResult.version_id,
       submission_id: rpcResult.submission_id,
       version: rpcResult.version_number,
-      storage_path: primaryFile.storage_key,
-      original_name: primaryFile.original_filename,
-      mime_type: primaryFile.mime_type,
+      storage_path: primaryFile ? primaryFile.storage_key : null,
+      original_name: primaryFile ? primaryFile.original_filename : null,
+      mime_type: primaryFile ? primaryFile.mime_type : null,
       size_bytes: totalBytes,
-      sha256: primaryFile.sha256 || '',
+      sha256: primaryFile?.sha256 || null,
       uploaded_at: nowIso,
+      superseded_at: null,
       files: uploadedFilesMeta,
+      answers: params.answers || [],
       late_status: params.lateStatus
     };
 
@@ -833,13 +971,15 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
       version: newVersionNumber,
       status: 'uploaded',
       late_status: params.lateStatus,
-      sha256: primaryFile.sha256 || '',
+      sha256: primaryFile?.sha256 || null,
       size_bytes: totalBytes,
       file_count: uploadedFilesMeta.length,
       files: uploadedFilesMeta,
+      answers: params.answers || [],
+      answers_count: (params.answers || []).length,
       uploaded_at: nowIso,
       is_resubmission: isResubmission,
-      storage_path: primaryFile.storage_key
+      storage_path: primaryFile ? primaryFile.storage_key : null
     };
 
     return { submission: submission!, version: versionRec, receipt };

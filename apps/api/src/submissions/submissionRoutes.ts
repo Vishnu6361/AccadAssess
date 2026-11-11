@@ -15,11 +15,18 @@ router.use(loadUserContext);
 
 const MultiFileSubmissionRequestSchema = z.object({
   assessment_id: z.string().uuid(),
+  answers: z.array(z.object({
+    question_id: z.string().uuid(),
+    question_number: z.number().int().optional(),
+    question_prompt: z.string().optional(),
+    answer_text: z.string()
+  })).optional().default([]),
   files: z.array(z.object({
     file_name: z.string().min(1).max(255),
     file_base64: z.string().min(1),
     mime_type: z.string().optional()
-  })).min(1, 'At least one file must be provided')
+  })).optional().default([]),
+  keep_existing_files: z.boolean().optional().default(false)
 });
 
 function detectMagicMime(buffer: Buffer, declaredName: string): string | null {
@@ -42,6 +49,57 @@ function detectMagicMime(buffer: Buffer, declaredName: string): string | null {
   return null;
 }
 
+// Student Draft Saving Endpoints
+router.get('/assessment/:assessmentId/draft', requireRoles(['student']), async (req: Request, res: Response) => {
+  const user = req.userContext!;
+  const { assessmentId } = req.params;
+  const assRepo = getAssessmentRepository();
+  const subRepo = getSubmissionRepository();
+
+  const assessment = await assRepo.getAssessmentById(assessmentId);
+  if (!assessment) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Assessment not found' } });
+  }
+
+  const isEnrolled = await assRepo.isEnrolledStudent(user.profile.id, assessment.class_subject_id);
+  if (!isEnrolled) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are not actively enrolled in the class for this assessment' } });
+  }
+
+  const draft = await subRepo.getDraftSubmission(assessmentId, user.profile.id);
+  return res.status(200).json({ draft });
+});
+
+router.put('/assessment/:assessmentId/draft', requireRoles(['student']), async (req: Request, res: Response) => {
+  const user = req.userContext!;
+  const { assessmentId } = req.params;
+  const assRepo = getAssessmentRepository();
+  const subRepo = getSubmissionRepository();
+
+  const assessment = await assRepo.getAssessmentById(assessmentId);
+  if (!assessment) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Assessment not found' } });
+  }
+
+  const isEnrolled = await assRepo.isEnrolledStudent(user.profile.id, assessment.class_subject_id);
+  if (!isEnrolled) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are not actively enrolled in the class for this assessment' } });
+  }
+
+  const now = new Date();
+  const deadline = new Date(assessment.deadline_at);
+  const existingSub = await subRepo.getSubmissionByAssessmentAndStudent(assessment.id, user.profile.id);
+  if (existingSub && now > deadline) {
+    return res.status(403).json({
+      error: { code: 'EDIT_DEADLINE_PASSED', message: 'Cannot modify or save drafts after the original submission deadline has passed' }
+    });
+  }
+
+  const answers = Array.isArray(req.body.answers) ? req.body.answers : [];
+  const draft = await subRepo.saveDraftSubmission(assessmentId, user.profile.id, answers);
+  return res.status(200).json({ success: true, draft });
+});
+
 router.post('/', requireRoles(['student']), async (req: Request, res: Response) => {
   const user = req.userContext!;
   const subRepo = getSubmissionRepository();
@@ -54,30 +112,60 @@ router.post('/', requireRoles(['student']), async (req: Request, res: Response) 
     });
   }
 
-  const { assessment_id, files } = parseResult.data;
-  const assessment = await assRepo.getAssessmentById(assessment_id);
+  const { assessment_id, files, answers } = parseResult.data;
+  const fullAssessment = await assRepo.getFullAssessment(assessment_id);
 
-  if (!assessment) {
+  if (!fullAssessment) {
     return res.status(404).json({
       error: { code: 'ASSESSMENT_NOT_FOUND', message: 'Assessment does not exist' }
     });
   }
 
-  if (assessment.status !== 'published') {
+  if (fullAssessment.status !== 'published') {
     return res.status(400).json({
       error: { code: 'ASSESSMENT_NOT_OPEN', message: 'Cannot submit to an assessment that is not published' }
     });
   }
 
-  const isEnrolled = await assRepo.isEnrolledStudent(user.profile.id, assessment.class_subject_id);
+  const isEnrolled = await assRepo.isEnrolledStudent(user.profile.id, fullAssessment.class_subject_id);
   if (!isEnrolled) {
     return res.status(403).json({
       error: { code: 'FORBIDDEN', message: 'You are not actively enrolled in the class for this assessment' }
     });
   }
 
-  const maxAllowedFiles = Number(assessment.max_files || 1);
-  if (files.length > maxAllowedFiles) {
+  // 1. Validate Manual Questions Answering
+  const manualQuestions = fullAssessment.questions || [];
+  if (manualQuestions.length > 0) {
+    const unansweredQuestions = manualQuestions.filter((q: any) => {
+      const userAns = (answers || []).find((a: any) => a.question_id === q.id);
+      return !userAns || !userAns.answer_text || userAns.answer_text.trim().length === 0;
+    });
+
+    if (unansweredQuestions.length > 0) {
+      return res.status(400).json({
+        error: {
+          code: 'QUESTIONS_UNANSWERED',
+          message: `All manual questions must be answered before submitting (${unansweredQuestions.length} unanswered).`,
+          unanswered_question_ids: unansweredQuestions.map((q: any) => q.id)
+        }
+      });
+    }
+  } else {
+    // PDF-based assignment with no manual questions requires at least 1 file
+    if (!files || files.length === 0) {
+      return res.status(400).json({
+        error: {
+          code: 'FILE_REQUIRED',
+          message: 'At least one answer file (PDF, PPT, or PPTX) must be uploaded for document-based assignments.'
+        }
+      });
+    }
+  }
+
+  // 2. Validate Files (if any attached)
+  const maxAllowedFiles = Number(fullAssessment.max_files || 1);
+  if (files && files.length > maxAllowedFiles) {
     return res.status(400).json({
       error: {
         code: 'MAX_FILES_EXCEEDED',
@@ -86,76 +174,101 @@ router.post('/', requireRoles(['student']), async (req: Request, res: Response) 
     });
   }
 
+  // 3. Deadline and Editing Authorization (Strict Server-Side Database Clock)
   const now = new Date();
-  const deadline = new Date(assessment.deadline_at);
-  const allowLate = Boolean(assessment.allow_late);
-  const extensionDeadline = assessment.extension_deadline_at ? new Date(assessment.extension_deadline_at) : null;
+  const deadline = new Date(fullAssessment.deadline_at);
+  const allowLate = Boolean(fullAssessment.allow_late);
+  const extensionDeadline = fullAssessment.extension_deadline_at ? new Date(fullAssessment.extension_deadline_at) : null;
+
+  const existingSubmission = await subRepo.getSubmissionByAssessmentAndStudent(fullAssessment.id, user.profile.id);
+  const isResubmission = Boolean(existingSubmission);
 
   let lateStatus: 'on_time' | 'late' = 'on_time';
 
-  if (now > deadline) {
-    if (!allowLate) {
-      return res.status(400).json({
+  if (isResubmission) {
+    // Requirement 4: Editing after submission is strictly restricted to BEFORE the ORIGINAL deadline
+    if (now > deadline) {
+      return res.status(403).json({
         error: {
-          code: 'DEADLINE_EXCEEDED',
-          message: 'The deadline for this assessment has passed and late submissions are not permitted.'
+          code: 'EDIT_DEADLINE_PASSED',
+          message: 'Submitted assignments cannot be modified after the original deadline has passed.'
         }
       });
     }
-    if (extensionDeadline && now > extensionDeadline) {
-      return res.status(400).json({
-        error: {
-          code: 'DEADLINE_EXCEEDED',
-          message: 'The extended deadline for late submissions has elapsed.'
-        }
-      });
+  } else {
+    // First submission: verify original deadline or extension window
+    if (now > deadline) {
+      if (!allowLate) {
+        return res.status(400).json({
+          error: {
+            code: 'DEADLINE_EXCEEDED',
+            message: 'The deadline for this assessment has passed and late submissions are not permitted.'
+          }
+        });
+      }
+      if (extensionDeadline && now > extensionDeadline) {
+        return res.status(400).json({
+          error: {
+            code: 'DEADLINE_EXCEEDED',
+            message: 'The extended deadline for late submissions has elapsed.'
+          }
+        });
+      }
+      lateStatus = 'late';
     }
-    lateStatus = 'late';
   }
 
-  const validatedFiles: any[] = [];
+  let validatedFiles: any[] = [];
   let totalBytes = 0;
 
-  for (const item of files) {
-    const fileBuffer = Buffer.from(item.file_base64, 'base64');
-    const sizeBytes = fileBuffer.length;
-    totalBytes += sizeBytes;
+  if (files && files.length > 0) {
+    for (const item of files) {
+      const fileBuffer = Buffer.from(item.file_base64, 'base64');
+      const sizeBytes = fileBuffer.length;
+      totalBytes += sizeBytes;
 
-    if (sizeBytes > 26214400) {
-      return res.status(400).json({
-        error: { code: 'FILE_TOO_LARGE', message: `File ${item.file_name} exceeds 25 MB limit` }
+      if (sizeBytes > 26214400) {
+        return res.status(400).json({
+          error: { code: 'FILE_TOO_LARGE', message: `File ${item.file_name} exceeds 25 MB limit` }
+        });
+      }
+
+      const detectedMime = detectMagicMime(fileBuffer, item.file_name);
+      if (!detectedMime) {
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_FILE_TYPE',
+            message: `File ${item.file_name} is not an authentic PDF, PPT, or PPTX file binary signature.`
+          }
+        });
+      }
+
+      const sha256 = createHash('sha256').update(fileBuffer).digest('hex');
+      validatedFiles.push({
+        file_name: item.file_name,
+        file_size: sizeBytes,
+        buffer: fileBuffer,
+        mime_type: detectedMime,
+        sha256
       });
     }
 
-    const detectedMime = detectMagicMime(fileBuffer, item.file_name);
-    if (!detectedMime) {
+    if (totalBytes > 26214400) {
       return res.status(400).json({
-        error: {
-          code: 'INVALID_FILE_TYPE',
-          message: `File ${item.file_name} is not an authentic PDF, PPT, or PPTX file binary signature.`
-        }
+        error: { code: 'TOTAL_SIZE_EXCEEDED', message: 'Combined submission size exceeds 25 MB' }
       });
     }
-
-    const sha256 = createHash('sha256').update(fileBuffer).digest('hex');
-    validatedFiles.push({
-      file_name: item.file_name,
-      file_size: sizeBytes,
-      buffer: fileBuffer,
-      mime_type: detectedMime,
-      sha256
-    });
-  }
-
-  if (totalBytes > 26214400) {
-    return res.status(400).json({
-      error: { code: 'TOTAL_SIZE_EXCEEDED', message: 'Combined submission size exceeds 25 MB' }
-    });
+  } else if (parseResult.data.keep_existing_files && isResubmission && existingSubmission) {
+    const activeVer = await subRepo.getActiveVersion(existingSubmission.id);
+    if (activeVer && Array.isArray(activeVer.files) && activeVer.files.length > 0) {
+      validatedFiles = activeVer.files;
+    }
   }
 
   const result = await subRepo.createOrUpdateSubmission({
-    assessmentId: assessment.id,
+    assessmentId: fullAssessment.id,
     studentId: user.profile.id,
+    answers: answers || [],
     files: validatedFiles,
     serverTime: now,
     lateStatus
@@ -169,12 +282,16 @@ router.post('/', requireRoles(['student']), async (req: Request, res: Response) 
     after: {
       version: result.receipt.version,
       files_count: result.receipt.file_count,
+      answers_count: (answers || []).length,
       late_status: result.receipt.late_status
     },
     correlationId: req.headers['x-correlation-id'] as string
   });
 
-  return res.status(result.receipt.is_resubmission ? 200 : 201).json({ receipt: result.receipt });
+  return res.status(result.receipt.is_resubmission ? 200 : 201).json({
+    receipt: result.receipt,
+    version: result.version
+  });
 });
 
 router.get('/reports/late-submissions', requireRoles(['subject_teacher', 'class_teacher', 'proctor', 'hod']), async (req: Request, res: Response) => {
@@ -269,6 +386,8 @@ router.get('/student/my-submissions', requireRoles(['student']), async (req: Req
           files_count: files.length,
           total_size_bytes: activeVer?.size_bytes || files.reduce((acc: number, f: any) => acc + (f.file_size_bytes || 0), 0),
           files,
+          answers: activeVer?.answers || [],
+          versions: sub.versions || [],
           evaluation: evaluationInfo
         };
       })
@@ -369,6 +488,24 @@ router.get('/:id', async (req: Request, res: Response) => {
   return res.status(200).json({ submission });
 });
 
+router.get('/:id/versions', async (req: Request, res: Response) => {
+  const user = req.userContext!;
+  const subRepo = getSubmissionRepository();
+  const submission = await subRepo.getSubmissionById(req.params.id);
+
+  if (!submission) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Submission not found' } });
+  }
+
+  const authorized = await isUserAuthorizedForSubmission(user, submission);
+  if (!authorized) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Unauthorized access to submission versions' } });
+  }
+
+  const versions = await subRepo.getSubmissionVersions(submission.id);
+  return res.status(200).json({ versions });
+});
+
 router.get('/:id/versions/:versionId/download', async (req: Request, res: Response) => {
   const user = req.userContext!;
   const subRepo = getSubmissionRepository();
@@ -388,13 +525,17 @@ router.get('/:id/versions/:versionId/download', async (req: Request, res: Respon
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Version not found' } });
   }
 
+  if (!version.storage_path) {
+    return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: 'No file attached to this submission version' } });
+  }
+
   const file = await subRepo.downloadSubmissionFile(version.storage_path);
   if (!file) {
     return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: 'Binary not found in storage' } });
   }
 
   res.setHeader('Content-Type', file.mimeType);
-  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(version.original_name)}"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(version.original_name || 'submission.pdf')}"`);
   return res.send(file.buffer);
 });
 
@@ -421,10 +562,14 @@ router.get('/:id/versions/:versionId/files/:fileId/download', async (req: Reques
   const files = (version.files && Array.isArray(version.files)) ? version.files : [];
   const targetFile = files.find((f: any) => f.id === req.params.fileId) || {
     id: req.params.fileId,
-    storage_key: version.storage_path,
-    original_filename: version.original_name,
-    mime_type: version.mime_type
+    storage_key: version.storage_path || '',
+    original_filename: version.original_name || 'file',
+    mime_type: version.mime_type || 'application/octet-stream'
   };
+
+  if (!targetFile.storage_key) {
+    return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: 'File not found in storage' } });
+  }
 
   const fileData = await subRepo.downloadSubmissionFile(targetFile.storage_key);
   if (!fileData) {
@@ -432,7 +577,7 @@ router.get('/:id/versions/:versionId/files/:fileId/download', async (req: Reques
   }
 
   res.setHeader('Content-Type', targetFile.mime_type || fileData.mimeType);
-  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(targetFile.original_filename)}"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(targetFile.original_filename || 'file')}"`);
   res.setHeader('Cache-Control', 'private, max-age=3600');
   return res.send(fileData.buffer);
 });
@@ -460,10 +605,14 @@ router.get('/:id/versions/:versionId/files/:fileId/blob', async (req: Request, r
   const files = (version.files && Array.isArray(version.files)) ? version.files : [];
   const targetFile = files.find((f: any) => f.id === req.params.fileId) || {
     id: req.params.fileId,
-    storage_key: version.storage_path,
-    original_filename: version.original_name,
-    mime_type: version.mime_type
+    storage_key: version.storage_path || '',
+    original_filename: version.original_name || 'file.pdf',
+    mime_type: version.mime_type || 'application/pdf'
   };
+
+  if (!targetFile.storage_key) {
+    return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: 'File not found in storage' } });
+  }
 
   const fileData = await subRepo.downloadSubmissionFile(targetFile.storage_key);
   if (!fileData) {
@@ -471,7 +620,7 @@ router.get('/:id/versions/:versionId/files/:fileId/blob', async (req: Request, r
   }
 
   res.setHeader('Content-Type', targetFile.mime_type || 'application/pdf');
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(targetFile.original_filename)}"`);
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(targetFile.original_filename || 'file.pdf')}"`);
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Cache-Control', 'private, max-age=3600');
   return res.send(fileData.buffer);
@@ -500,11 +649,15 @@ router.get('/:id/versions/:versionId/files/:fileId/url', async (req: Request, re
   const files = (version.files && Array.isArray(version.files)) ? version.files : [];
   const targetFile = files.find((f: any) => f.id === req.params.fileId) || {
     id: req.params.fileId,
-    storage_key: version.storage_path,
-    original_filename: version.original_name,
-    mime_type: version.mime_type,
+    storage_key: version.storage_path || '',
+    original_filename: version.original_name || 'file',
+    mime_type: version.mime_type || 'application/pdf',
     file_size_bytes: version.size_bytes
   };
+
+  if (!targetFile.storage_key) {
+    return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: 'No file attached to this version' } });
+  }
 
   const signedUrl = await subRepo.getSignedSubmissionFileUrl(targetFile.storage_key, 3600);
 

@@ -325,6 +325,7 @@ export class InMemoryDatabase {
   rubricLevels: RubricLevel[] = [];
   submissions: Submission[] = [];
   submissionVersions: SubmissionVersion[] = [];
+  studentSubmissionDrafts: Array<{ id: string; assessment_id: string; student_id: string; answers: any[]; created_at: string; updated_at: string }> = [];
   storageBlobs: Map<string, Buffer> = new Map();
   evaluations: Evaluation[] = [];
   evaluationCriterionScores: EvaluationCriterionScore[] = [];

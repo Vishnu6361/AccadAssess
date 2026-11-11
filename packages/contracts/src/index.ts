@@ -762,17 +762,35 @@ export const SubmissionFileSchema = z.object({
 });
 export type SubmissionFile = z.infer<typeof SubmissionFileSchema>;
 
+export const SubmissionAnswerSchema = z.object({
+  question_id: z.string().uuid(),
+  question_number: z.number().int().optional(),
+  question_prompt: z.string().optional(),
+  answer_text: z.string()
+});
+export type SubmissionAnswer = z.infer<typeof SubmissionAnswerSchema>;
+
+export const StudentSubmissionDraftSchema = z.object({
+  id: z.string().uuid().optional(),
+  assessment_id: z.string().uuid(),
+  student_id: z.string().uuid(),
+  answers: z.array(SubmissionAnswerSchema).default([]),
+  updated_at: z.string().optional()
+});
+export type StudentSubmissionDraft = z.infer<typeof StudentSubmissionDraftSchema>;
+
 export const SubmissionVersionSchema = z.object({
   id: z.string().uuid(),
   submission_id: z.string().uuid(),
   version: z.number().int().min(1),
-  storage_path: z.string().min(1),
-  original_name: z.string().min(1),
-  mime_type: z.string().min(1),
-  size_bytes: z.number().int().positive(),
-  sha256: z.string().length(64, 'SHA-256 must be 64 hexadecimal characters'),
+  storage_path: z.string().nullable().optional(),
+  original_name: z.string().nullable().optional(),
+  mime_type: z.string().nullable().optional(),
+  size_bytes: z.number().int().min(0).default(0),
+  sha256: z.string().length(64, 'SHA-256 must be 64 hexadecimal characters').nullable().optional(),
   late_status: z.enum(['on_time', 'late']).default('on_time'),
   files: z.array(SubmissionFileSchema).optional().default([]),
+  answers: z.array(SubmissionAnswerSchema).optional().default([]),
   uploaded_at: z.string(),
   superseded_at: z.string().nullable().optional()
 });
@@ -799,13 +817,15 @@ export const SubmissionReceiptSchema = z.object({
   version: z.number().int().min(1),
   status: SubmissionStatusSchema,
   late_status: z.enum(['on_time', 'late']).default('on_time').optional(),
-  sha256: z.string().length(64),
-  size_bytes: z.number().int().positive(),
-  file_count: z.number().int().min(1).default(1).optional(),
+  sha256: z.string().length(64).nullable().optional(),
+  size_bytes: z.number().int().min(0).default(0),
+  file_count: z.number().int().min(0).default(0).optional(),
   files: z.array(SubmissionFileSchema).optional(),
+  answers: z.array(SubmissionAnswerSchema).optional().default([]),
+  answers_count: z.number().int().min(0).default(0).optional(),
   uploaded_at: z.string(),
   is_resubmission: z.boolean(),
-  storage_path: z.string()
+  storage_path: z.string().nullable().optional()
 });
 export type SubmissionReceipt = z.infer<typeof SubmissionReceiptSchema>;
 

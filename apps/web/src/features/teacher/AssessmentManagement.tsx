@@ -27,7 +27,9 @@ import {
   Eye,
   EyeOff,
   ChevronUp,
-  ChevronDown
+  ChevronDown,
+  Save,
+  Send
 } from 'lucide-react';
 import { StatusBadge } from '../../components/StatusBadge';
 
@@ -187,6 +189,15 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
   const [studentAnswerFiles, setStudentAnswerFiles] = useState<Array<{ file: File; name: string; size: number; base64: string }>>([]);
   const [isSubmittingAnswers, setIsSubmittingAnswers] = useState<boolean>(false);
 
+  // Student Manual Question Answers & Draft State
+  const [studentAnswers, setStudentAnswers] = useState<Record<string, string>>({});
+  const [draftSaveStatus, setDraftSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'unsaved'>('idle');
+  const [draftLastSavedTime, setDraftLastSavedTime] = useState<Date | null>(null);
+  const [unansweredQuestionIds, setUnansweredQuestionIds] = useState<string[]>([]);
+  const [isConfirmSubmitOpen, setIsConfirmSubmitOpen] = useState<boolean>(false);
+  const [removeExistingUploadedFile, setRemoveExistingUploadedFile] = useState<boolean>(false);
+  const autosaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   // Late Reports State
   const [lateReports, setLateReports] = useState<any[]>([]);
   const [loadingReports, setLoadingReports] = useState<boolean>(false);
@@ -329,6 +340,59 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     );
   };
 
+  const loadStudentAnswers = useCallback(async (assessmentId: string, currentSub?: SubmissionDTO | null) => {
+    if (!isStudent) return;
+    try {
+      const serverDraft = await submissionApi.getDraft(assessmentId);
+      if (serverDraft && Array.isArray(serverDraft.answers) && serverDraft.answers.length > 0) {
+        const map: Record<string, string> = {};
+        serverDraft.answers.forEach((a: any) => {
+          if (a.question_id) map[a.question_id] = a.answer_text;
+          if (a.question_order) map[`q-${a.question_order}`] = a.answer_text;
+        });
+        setStudentAnswers(map);
+        setDraftSaveStatus('saved');
+        if (serverDraft.updated_at) {
+          setDraftLastSavedTime(new Date(serverDraft.updated_at));
+        }
+        return;
+      }
+    } catch {
+      // ignore draft fetch failure, fallback to submission or local storage
+    }
+
+    if (currentSub?.active_version?.answers && currentSub.active_version.answers.length > 0) {
+      const map: Record<string, string> = {};
+      currentSub.active_version.answers.forEach((a: any) => {
+        if (a.question_id) map[a.question_id] = a.answer_text;
+        if (a.question_order) map[`q-${a.question_order}`] = a.answer_text;
+      });
+      setStudentAnswers(map);
+      setDraftSaveStatus('saved');
+      if (currentSub.active_version.uploaded_at) {
+        setDraftLastSavedTime(new Date(currentSub.active_version.uploaded_at));
+      }
+      return;
+    }
+
+    try {
+      const cached = localStorage.getItem(`acadassess_answers_${assessmentId}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && typeof parsed === 'object') {
+          setStudentAnswers(parsed);
+          setDraftSaveStatus('unsaved');
+          return;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    setStudentAnswers({});
+    setDraftSaveStatus('idle');
+  }, [isStudent]);
+
   const loadSubmissions = async (assessmentId: string) => {
     try {
       const subs = await submissionApi.getSubmissionsForAssessment(assessmentId);
@@ -341,6 +405,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
             submission: subs[0] || null
           }
         }));
+        loadStudentAnswers(assessmentId, subs[0] || null);
       }
     } catch {
       if (isStudent) {
@@ -390,15 +455,68 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
         setDraftRubricCriteria([]);
       }
 
-      // 2. Fetch authoritative details and submissions
+      // 2. Fetch authoritative details, submissions and student answers
       loadSubmissions(selectedAssessmentId);
       loadAssessmentDetails(selectedAssessmentId);
+      loadStudentAnswers(selectedAssessmentId);
     } else {
       setDraftQuestions([]);
       setDraftRubricCriteria([]);
       setDetailsError(null);
+      setStudentAnswers({});
+      setDraftSaveStatus('idle');
+      setUnansweredQuestionIds([]);
+      setRemoveExistingUploadedFile(false);
     }
-  }, [selectedAssessmentId, loadAssessmentDetails]);
+  }, [selectedAssessmentId, loadAssessmentDetails, loadStudentAnswers]);
+
+  const saveDraftAnswers = async (answersToSave: Record<string, string>) => {
+    if (!selectedAssessmentId) return;
+    setDraftSaveStatus('saving');
+    try {
+      const formatted = Object.entries(answersToSave).map(([key, val], idx) => ({
+        question_id: key,
+        question_order: idx + 1,
+        answer_text: val
+      }));
+      await submissionApi.saveDraft({
+        assessment_id: selectedAssessmentId,
+        answers: formatted
+      });
+      setDraftSaveStatus('saved');
+      setDraftLastSavedTime(new Date());
+    } catch (err: any) {
+      console.warn('Failed to save draft:', err);
+      setDraftSaveStatus('error');
+    }
+  };
+
+  const handleAnswerChange = (qKey: string, text: string) => {
+    const updated = { ...studentAnswers, [qKey]: text };
+    setStudentAnswers(updated);
+    setDraftSaveStatus('unsaved');
+    setUnansweredQuestionIds(prev => prev.filter(k => k !== qKey));
+
+    if (selectedAssessmentId) {
+      try {
+        localStorage.setItem(`acadassess_answers_${selectedAssessmentId}`, JSON.stringify(updated));
+      } catch {}
+
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+      }
+      autosaveTimerRef.current = setTimeout(() => {
+        saveDraftAnswers(updated);
+      }, 1500);
+    }
+  };
+
+  const handleSaveDraftManual = async () => {
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+    }
+    await saveDraftAnswers(studentAnswers);
+  };
 
   // Load Late Submissions Report
   const loadLateReports = async (assId?: string) => {
@@ -1058,37 +1176,97 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     setStudentAnswerFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleSubmitStudentAnswers = async () => {
+  const handleValidateAndOpenSubmitConfirm = () => {
     if (!selectedAssessment) return;
-    if (studentAnswerFiles.length === 0) {
-      setErrorMessage('Please select at least one answer file to submit.');
-      return;
+    setErrorMessage(null);
+
+    // 1. If manual questions exist, validate that every question has an answer
+    if (draftQuestions.length > 0) {
+      const missingKeys: string[] = [];
+      for (let i = 0; i < draftQuestions.length; i++) {
+        const q = draftQuestions[i];
+        const key = q.id || `q-${q.display_order || i + 1}`;
+        const answer = studentAnswers[key] || (q.id ? studentAnswers[q.id] : undefined) || studentAnswers[`q-${q.display_order || i + 1}`];
+        if (!answer || !answer.trim()) {
+          missingKeys.push(key);
+        }
+      }
+
+      if (missingKeys.length > 0) {
+        setUnansweredQuestionIds(missingKeys);
+        setErrorMessage(
+          `Please answer all ${draftQuestions.length} manual questions before submitting (${missingKeys.length} question(s) remaining).`
+        );
+        return;
+      }
+    } else {
+      // 2. No manual questions: file upload is mandatory
+      const activeSub = assessmentSubmissions[0];
+      const hasExistingFiles = Boolean(
+        activeSub && 
+        !removeExistingUploadedFile && 
+        ((activeSub.active_version?.files && activeSub.active_version.files.length > 0) || activeSub.active_version?.storage_path)
+      );
+      if (studentAnswerFiles.length === 0 && !hasExistingFiles) {
+        setErrorMessage('This assignment does not contain manual questions. You must select at least one answer file to submit.');
+        return;
+      }
     }
 
+    setUnansweredQuestionIds([]);
+    setIsConfirmSubmitOpen(true);
+  };
+
+  const handleConfirmFinalSubmission = async () => {
+    if (!selectedAssessment) return;
     setIsSubmittingAnswers(true);
     setErrorMessage(null);
     try {
+      const formattedAnswers = draftQuestions.map((q, idx) => {
+        const key = q.id || `q-${q.display_order || idx + 1}`;
+        const text = studentAnswers[key] || (q.id ? studentAnswers[q.id] : undefined) || studentAnswers[`q-${q.display_order || idx + 1}`] || '';
+        return {
+          question_id: q.id || key,
+          question_order: q.display_order || (idx + 1),
+          answer_text: text.trim()
+        };
+      });
+
+      const activeSub = assessmentSubmissions[0];
+      const keepFiles = Boolean(
+        activeSub && 
+        !removeExistingUploadedFile && 
+        studentAnswerFiles.length === 0 &&
+        ((activeSub.active_version?.files && activeSub.active_version.files.length > 0) || activeSub.active_version?.storage_path)
+      );
+
       const receipt = await submissionApi.uploadSubmission({
         assessment_id: selectedAssessment.id,
+        answers: formattedAnswers,
         files: studentAnswerFiles.map(f => ({
           file_name: f.name,
           file_base64: f.base64
-        }))
+        })),
+        keep_existing_files: keepFiles
       });
 
       const lateNotice = receipt.late_status === 'late' ? ' (LATE SUBMISSION recorded)' : ' (ON TIME)';
       setActionMessage(
-        `Answer files successfully submitted! Version ${receipt.version} saved${lateNotice}. SHA-256: ${receipt.sha256.substring(0, 16)}...`
+        `Assignment submitted successfully! Version ${receipt.version} saved${lateNotice}.`
       );
+
+      try {
+        localStorage.removeItem(`acadassess_answers_${selectedAssessment.id}`);
+      } catch {}
+
       setStudentAnswerFiles([]);
-      setSubmissionStatuses(prev => ({
-        ...prev,
-        [selectedAssessment.id]: {
-          state: 'submitted',
-          submission: null
-        }
-      }));
+      setRemoveExistingUploadedFile(false);
+      setIsConfirmSubmitOpen(false);
+      setDraftSaveStatus('saved');
+      setDraftLastSavedTime(new Date());
+
       await loadSubmissions(selectedAssessment.id);
+      await loadAssessments();
     } catch (err: any) {
       setErrorMessage(err.message || 'Submission failed.');
     } finally {
@@ -2142,6 +2320,52 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                   ) : null}
                 </div>
 
+                {/* Student Draft Status Bar */}
+                {isStudent && selectedAssessment.status === 'published' && draftQuestions.length > 0 && (
+                  <div className="p-3 bg-academic-paleGreen/30 border border-academic-border rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center space-x-2">
+                      {draftSaveStatus === 'saving' ? (
+                        <span className="inline-flex items-center text-academic-primaryGreen font-medium">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                          Saving draft answers...
+                        </span>
+                      ) : draftSaveStatus === 'saved' ? (
+                        <span className="inline-flex items-center text-academic-primaryGreen font-medium">
+                          <CheckCircle2 className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+                          Draft saved {draftLastSavedTime ? `(${draftLastSavedTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})` : ''}
+                        </span>
+                      ) : draftSaveStatus === 'unsaved' ? (
+                        <span className="inline-flex items-center text-amber-700 font-medium">
+                          <Clock className="w-3.5 h-3.5 mr-1.5" />
+                          Unsaved changes (autosaving...)
+                        </span>
+                      ) : draftSaveStatus === 'error' ? (
+                        <span className="inline-flex items-center text-red-700 font-medium">
+                          <AlertCircle className="w-3.5 h-3.5 mr-1.5" />
+                          Draft save error (cached locally)
+                        </span>
+                      ) : (
+                        <span className="text-academic-muted">
+                          Auto-save active &bull; Type answers below
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={handleSaveDraftManual}
+                        disabled={draftSaveStatus === 'saving'}
+                        className="btn-secondary text-[11px] py-1 px-2.5 inline-flex items-center"
+                        title="Explicitly save draft answers to server"
+                      >
+                        <Save className="w-3 h-3 mr-1 text-academic-primaryGreen" />
+                        <span>Save Draft</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Question List */}
                 {isLoadingDetails && draftQuestions.length === 0 ? (
                   <div className="flex items-center justify-center py-6 text-xs text-academic-muted space-x-2">
@@ -2169,92 +2393,155 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {draftQuestions.map((q, idx) => (
-                      <div key={q.id || idx} className="p-3.5 rounded-lg border border-academic-border bg-academic-surface space-y-2">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center space-x-2">
-                            <span className="px-2 py-0.5 rounded bg-academic-deepGreen text-white text-[11px] font-bold font-mono">
-                              Q{q.display_order || idx + 1}
-                            </span>
+                    {draftQuestions.map((q, idx) => {
+                      const qKey = q.id || `q-${q.display_order || idx + 1}`;
+                      const isUnanswered = unansweredQuestionIds.includes(qKey);
+                      const answerText = studentAnswers[qKey] || (q.id ? studentAnswers[q.id] : undefined) || studentAnswers[`q-${q.display_order || idx + 1}`] || '';
+                      const wordCount = answerText.trim() ? answerText.trim().split(/\s+/).length : 0;
+                      const charCount = answerText.length;
+
+                      const sub = assessmentSubmissions[0];
+                      const now = Date.now();
+                      const origDeadline = new Date(selectedAssessment.deadline_at).getTime();
+                      const extDeadline = selectedAssessment.allow_late && selectedAssessment.extension_deadline_at
+                        ? new Date(selectedAssessment.extension_deadline_at).getTime()
+                        : origDeadline;
+                      const isEditingLocked = sub ? (now > origDeadline) : (now > extDeadline);
+
+                      return (
+                        <div key={q.id || idx} className={`p-3.5 rounded-lg border bg-academic-surface space-y-2 ${isUnanswered ? 'border-red-400 bg-red-50/10' : 'border-academic-border'}`}>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center space-x-2">
+                              <span className="px-2 py-0.5 rounded bg-academic-deepGreen text-white text-[11px] font-bold font-mono">
+                                Question {q.display_order || idx + 1}
+                              </span>
+                              {draftQuestions.length > 1 && (
+                                <span className="text-[11px] text-academic-muted">
+                                  of {draftQuestions.length}
+                                </span>
+                              )}
+                              {q.max_marks ? (
+                                <span className="text-[11px] text-academic-muted">
+                                  ({q.max_marks} marks)
+                                </span>
+                              ) : null}
+                            </div>
+                            {selectedAssessment.status === 'draft' && isTeacher && (
+                              <div className="flex items-center space-x-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleMoveDraftQuestion(idx, 'up')}
+                                  disabled={isSavingQuestions || idx === 0}
+                                  className={`p-1 rounded text-academic-muted hover:text-academic-deepGreen ${idx === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                                  title="Move Question Up"
+                                >
+                                  <ChevronUp className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleMoveDraftQuestion(idx, 'down')}
+                                  disabled={isSavingQuestions || idx === draftQuestions.length - 1}
+                                  className={`p-1 rounded text-academic-muted hover:text-academic-deepGreen ${idx === draftQuestions.length - 1 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                                  title="Move Question Down"
+                                >
+                                  <ChevronDown className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditDraftQuestion(q)}
+                                  disabled={isSavingQuestions}
+                                  className="p-1 rounded text-academic-muted hover:text-academic-primaryGreen"
+                                  title="Edit Question"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveDraftQuestion(idx)}
+                                  disabled={isSavingQuestions}
+                                  className="p-1 rounded text-academic-muted hover:text-red-700"
+                                  title="Delete Question"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            )}
                           </div>
-                          {selectedAssessment.status === 'draft' && isTeacher && (
-                            <div className="flex items-center space-x-1">
-                              <button
-                                type="button"
-                                onClick={() => handleMoveDraftQuestion(idx, 'up')}
-                                disabled={isSavingQuestions || idx === 0}
-                                className={`p-1 rounded text-academic-muted hover:text-academic-deepGreen ${idx === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
-                                title="Move Question Up"
-                              >
-                                <ChevronUp className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleMoveDraftQuestion(idx, 'down')}
-                                disabled={isSavingQuestions || idx === draftQuestions.length - 1}
-                                className={`p-1 rounded text-academic-muted hover:text-academic-deepGreen ${idx === draftQuestions.length - 1 ? 'opacity-30 cursor-not-allowed' : ''}`}
-                                title="Move Question Down"
-                              >
-                                <ChevronDown className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleStartEditDraftQuestion(q)}
-                                disabled={isSavingQuestions}
-                                className="p-1 rounded text-academic-muted hover:text-academic-primaryGreen"
-                                title="Edit Question"
-                              >
-                                <Pencil className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveDraftQuestion(idx)}
-                                disabled={isSavingQuestions}
-                                className="p-1 rounded text-academic-muted hover:text-red-700"
-                                title="Delete Question"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+
+                          {editingDraftQId === (q.id || `temp-${q.display_order}`) ? (
+                            <div className="space-y-2 pt-1">
+                              <textarea
+                                rows={3}
+                                value={editingDraftQPrompt}
+                                onChange={(e) => setEditingDraftQPrompt(e.target.value)}
+                                className="w-full px-2.5 py-1.5 border border-academic-primaryGreen rounded bg-academic-surface text-academic-deepGreen text-xs focus:outline-none"
+                              />
+                              <div className="flex items-center justify-end space-x-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingDraftQId(null);
+                                    setEditingDraftQPrompt('');
+                                  }}
+                                  className="px-2.5 py-1 text-xs text-academic-muted hover:text-academic-deepGreen"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSaveEditDraftQuestion(idx)}
+                                  disabled={!editingDraftQPrompt.trim() || isSavingQuestions}
+                                  className="btn-primary text-xs py-1 px-3"
+                                >
+                                  Save Changes
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-academic-deepGreen leading-relaxed whitespace-pre-wrap font-medium">
+                              {q.prompt}
+                            </p>
+                          )}
+
+                          {/* Student Manual Question Answering Field */}
+                          {isStudent && selectedAssessment.status === 'published' && (
+                            <div className="mt-3 pt-3 border-t border-academic-border/70 space-y-2">
+                              <div className="flex items-center justify-between text-xs">
+                                <label className="font-bold text-academic-deepGreen flex items-center">
+                                  <span>Your Answer</span>
+                                  <span className="text-red-500 ml-1" title="Required question">*</span>
+                                </label>
+                                <span className="text-[11px] font-mono text-academic-muted">
+                                  {wordCount} {wordCount === 1 ? 'word' : 'words'} &bull; {charCount} chars
+                                </span>
+                              </div>
+
+                              <textarea
+                                rows={5}
+                                value={answerText}
+                                onChange={(e) => handleAnswerChange(qKey, e.target.value)}
+                                disabled={isEditingLocked}
+                                placeholder={isEditingLocked ? 'Submission window closed. Answer editing disabled.' : `Type your detailed answer for Question ${q.display_order || idx + 1} here...`}
+                                className={`w-full p-3 rounded-lg border text-xs focus:outline-none transition-colors ${
+                                  isUnanswered 
+                                    ? 'border-red-500 bg-red-50/20 text-academic-deepGreen focus:border-red-600' 
+                                    : isEditingLocked
+                                    ? 'bg-academic-paleGreen/20 border-academic-border text-academic-deepGreen cursor-not-allowed'
+                                    : 'border-academic-border bg-academic-surface text-academic-deepGreen focus:border-academic-primaryGreen'
+                                }`}
+                              />
+
+                              {isUnanswered && (
+                                <p className="text-[11px] text-red-600 font-semibold flex items-center">
+                                  <AlertCircle className="w-3.5 h-3.5 mr-1 flex-shrink-0" />
+                                  Please provide an answer for Question {q.display_order || idx + 1} before submitting.
+                                </p>
+                              )}
                             </div>
                           )}
                         </div>
-
-                        {editingDraftQId === (q.id || `temp-${q.display_order}`) ? (
-                          <div className="space-y-2 pt-1">
-                            <textarea
-                              rows={3}
-                              value={editingDraftQPrompt}
-                              onChange={(e) => setEditingDraftQPrompt(e.target.value)}
-                              className="w-full px-2.5 py-1.5 border border-academic-primaryGreen rounded bg-academic-surface text-academic-deepGreen text-xs focus:outline-none"
-                            />
-                            <div className="flex items-center justify-end space-x-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingDraftQId(null);
-                                  setEditingDraftQPrompt('');
-                                }}
-                                className="px-2.5 py-1 text-xs text-academic-muted hover:text-academic-deepGreen"
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleSaveEditDraftQuestion(idx)}
-                                disabled={!editingDraftQPrompt.trim() || isSavingQuestions}
-                                className="btn-primary text-xs py-1 px-3"
-                              >
-                                Save Changes
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <p className="text-xs text-academic-deepGreen leading-relaxed whitespace-pre-wrap font-medium">
-                            {q.prompt}
-                          </p>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
 
@@ -2297,8 +2584,17 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                 const extDeadline = selectedAssessment.allow_late && selectedAssessment.extension_deadline_at
                   ? new Date(selectedAssessment.extension_deadline_at).getTime()
                   : origDeadline;
-                const isWindowClosed = now > extDeadline;
-                const isInExtensionWindow = now > origDeadline && now <= extDeadline;
+                const isOriginalDeadlinePassed = now > origDeadline;
+                const isExtensionPassed = now > extDeadline;
+                const isEditingLocked = sub ? isOriginalDeadlinePassed : isExtensionPassed;
+                const isInExtensionWindow = !sub && isOriginalDeadlinePassed && !isExtensionPassed;
+
+                const hasManualQuestions = draftQuestions.length > 0;
+                const hasExistingFiles = Boolean(
+                  sub && 
+                  !removeExistingUploadedFile && 
+                  ((sub.active_version?.files && sub.active_version.files.length > 0) || sub.active_version?.original_name)
+                );
 
                 return (
                   <div className="card-surface p-5 border border-academic-border space-y-4">
@@ -2306,10 +2602,12 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                       <div>
                         <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
                           <FileCheck2 className="w-4 h-4 mr-2 text-academic-primaryGreen" />
-                          Your Submission Answers
+                          <span>{hasManualQuestions ? 'Supporting Files & Final Submission' : 'Answer Document & Final Submission'}</span>
                         </h3>
                         <p className="text-xs text-academic-muted mt-0.5">
-                          Upload up to {selectedAssessment.max_files || 1} answer file(s) (PDF, PPT, PPTX). Max 10MB per file, 25MB total.
+                          {hasManualQuestions 
+                            ? `File attachment is optional. You may attach up to ${selectedAssessment.max_files || 1} supporting file(s) (PDF, PPT, PPTX; 25MB total).` 
+                            : `Upload up to ${selectedAssessment.max_files || 1} answer file(s) (PDF, PPT, PPTX; 25MB total). Required.`}
                         </p>
                       </div>
 
@@ -2326,12 +2624,39 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                       )}
                     </div>
 
+                    {/* Deadline Status Banner */}
+                    {isEditingLocked ? (
+                      <div className="p-3 bg-[#FDF6E2] border border-[#D9BD71] rounded text-xs text-[#6D5200] flex items-center space-x-2">
+                        <Lock className="w-4 h-4 text-[#B28704] flex-shrink-0" />
+                        <span>
+                          {sub 
+                            ? `Submissions locked. The original deadline (${new Date(selectedAssessment.deadline_at).toLocaleString()}) has passed. Resubmissions and edits are disabled. Your submission is in read-only mode.`
+                            : `Submissions closed. The deadline for this assignment has passed.`
+                          }
+                        </span>
+                      </div>
+                    ) : sub ? (
+                      <div className="p-3 bg-academic-paleGreen/40 border border-academic-border rounded text-xs text-academic-deepGreen flex items-center space-x-2">
+                        <CheckCircle2 className="w-4 h-4 text-academic-primaryGreen flex-shrink-0" />
+                        <span>
+                          You have submitted <strong>Version {sub.active_version?.version || 1}</strong>. You can update your answers or replace supporting files until the deadline (<strong>{new Date(selectedAssessment.deadline_at).toLocaleString()}</strong>). Resubmitting creates a new auditable version.
+                        </span>
+                      </div>
+                    ) : isInExtensionWindow ? (
+                      <div className="p-3 bg-[#FDF6E2] border border-[#D9BD71] rounded text-xs text-[#6D5200] flex items-center space-x-2">
+                        <AlertTriangle className="w-4 h-4 text-[#B28704] flex-shrink-0" />
+                        <span>
+                          <strong>Late Extension Window Active:</strong> The original deadline has passed. You are submitting during the extension window. A late penalty will apply upon submission.
+                        </span>
+                      </div>
+                    ) : null}
+
                     {/* Active Submission Details */}
                     {sub && sub.active_version && (
                       <div className="p-4 bg-academic-paleGreen/40 rounded border border-academic-border space-y-3 text-xs">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center space-x-2">
-                            <span className="font-bold text-academic-deepGreen">Active Version: v{sub.active_version.version}</span>
+                            <span className="font-bold text-academic-deepGreen">Current Version: v{sub.active_version.version}</span>
                             {sub.active_version.late_status === 'late' ? (
                               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#FDF6E2] text-[#A63214] border border-[#D9BD71]">
                                 ⚠️ LATE SUBMISSION
@@ -2343,69 +2668,92 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                             )}
                           </div>
                           <span className="text-[11px] text-academic-muted">
-                            Uploaded on {new Date(sub.active_version.uploaded_at).toLocaleString()}
+                            Submitted on {new Date(sub.active_version.uploaded_at).toLocaleString()}
                           </span>
                         </div>
 
                         {/* Submitted Files List */}
                         <div className="space-y-1.5 pt-1">
-                          <span className="font-semibold text-academic-deepGreen block">Submitted Answer Files:</span>
-                          {sub.active_version.files && sub.active_version.files.length > 0 ? (
-                            sub.active_version.files.map((f: any) => (
-                              <div key={f.id} className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between">
-                                <div className="flex items-center space-x-2">
-                                  <Paperclip className="w-3.5 h-3.5 text-academic-primaryGreen" />
-                                  <span className="font-medium text-academic-deepGreen">{f.original_name}</span>
-                                  <span className="text-[11px] font-mono text-academic-muted">
-                                    ({(f.size_bytes / 1024).toFixed(1)} KB)
-                                  </span>
+                          <span className="font-semibold text-academic-deepGreen block">Submitted Files:</span>
+                          {hasExistingFiles ? (
+                            sub.active_version.files && sub.active_version.files.length > 0 ? (
+                              sub.active_version.files.map((f: any) => (
+                                <div key={f.id} className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between">
+                                  <div className="flex items-center space-x-2">
+                                    <Paperclip className="w-3.5 h-3.5 text-academic-primaryGreen" />
+                                    <span className="font-medium text-academic-deepGreen">{f.original_name}</span>
+                                    <span className="text-[11px] font-mono text-academic-muted">
+                                      ({(f.size_bytes / 1024).toFixed(1)} KB)
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center space-x-2">
+                                    <a
+                                      href={submissionApi.downloadFileUrl(sub.id, sub.active_version!.id, f.id)}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="btn-secondary text-[11px] py-1 px-2.5 inline-flex items-center"
+                                    >
+                                      <Download className="w-3 h-3 mr-1 text-academic-primaryGreen" />
+                                      <span>Download</span>
+                                    </a>
+                                    {!isEditingLocked && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setRemoveExistingUploadedFile(true)}
+                                        className="text-academic-muted hover:text-red-700 p-1"
+                                        title="Remove file for resubmission"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
-                                <a
-                                  href={submissionApi.downloadFileUrl(sub.id, sub.active_version!.id, f.id)}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="btn-secondary text-[11px] py-1 px-2.5 inline-flex items-center"
-                                >
-                                  <Download className="w-3 h-3 mr-1 text-academic-primaryGreen" />
-                                  <span>Download</span>
-                                </a>
+                              ))
+                            ) : (
+                              <div className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between">
+                                <span className="font-medium text-academic-deepGreen">{sub.active_version.original_name}</span>
+                                <div className="flex items-center space-x-2">
+                                  <a
+                                    href={submissionApi.downloadPdfUrl(sub.id, sub.active_version.id)}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="btn-secondary text-[11px] py-1 px-2.5 inline-flex items-center"
+                                  >
+                                    <Download className="w-3 h-3 mr-1 text-academic-primaryGreen" />
+                                    <span>Download PDF</span>
+                                  </a>
+                                  {!isEditingLocked && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setRemoveExistingUploadedFile(true)}
+                                      className="text-academic-muted hover:text-red-700 p-1"
+                                      title="Remove file for resubmission"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
                               </div>
-                            ))
+                            )
                           ) : (
-                            <div className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between">
-                              <span className="font-medium text-academic-deepGreen">{sub.active_version.original_name}</span>
-                              <a
-                                href={submissionApi.downloadPdfUrl(sub.id, sub.active_version.id)}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="btn-secondary text-[11px] py-1 px-2.5 inline-flex items-center"
-                              >
-                                <Download className="w-3 h-3 mr-1 text-academic-primaryGreen" />
-                                <span>Download PDF</span>
-                              </a>
-                            </div>
+                            <p className="text-academic-muted text-[11px] italic">
+                              {removeExistingUploadedFile ? 'File removed for next version.' : 'No files attached (Text-only submission).'}
+                            </p>
                           )}
                         </div>
 
-                        <div className="text-[10px] text-academic-muted font-mono bg-academic-surface p-1.5 rounded border border-academic-border/60 break-all">
-                          SHA-256: {sub.active_version.sha256}
-                        </div>
+                        {sub.active_version.sha256 && (
+                          <div className="text-[10px] text-academic-muted font-mono bg-academic-surface p-1.5 rounded border border-academic-border/60 break-all">
+                            SHA-256: {sub.active_version.sha256}
+                          </div>
+                        )}
                       </div>
                     )}
 
-                    {/* Multi-File Upload Form (if open) */}
-                    {!isWindowClosed ? (
+                    {/* Staging & Upload Controls (if not locked) */}
+                    {!isEditingLocked && (
                       <div className="space-y-3 pt-2">
-                        {isInExtensionWindow && (
-                          <div className="p-3 bg-[#FDF6E2] border border-[#D9BD71] rounded text-xs text-[#6D5200] flex items-center space-x-2">
-                            <AlertTriangle className="w-4 h-4 text-[#B28704] flex-shrink-0" />
-                            <span>
-                              <strong>Late Extension Active:</strong> The original deadline has passed. You are submitting during the extension window. A late penalty may apply according to assignment policy.
-                            </span>
-                          </div>
-                        )}
-
-                        {/* Selected Files Staging List */}
+                        {/* Staged New Files */}
                         {studentAnswerFiles.length > 0 && (
                           <div className="space-y-2 p-3 bg-academic-paleGreen/20 border border-academic-border rounded">
                             <span className="font-semibold text-xs text-academic-deepGreen block">
@@ -2439,7 +2787,9 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                           {studentAnswerFiles.length < (selectedAssessment.max_files || 1) && (
                             <label className="btn-secondary text-xs flex items-center cursor-pointer min-h-[44px]">
                               <Upload className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
-                              <span>Select Answer File ({studentAnswerFiles.length} / {selectedAssessment.max_files || 1})</span>
+                              <span>
+                                {studentAnswerFiles.length > 0 || hasExistingFiles ? 'Replace / Add Supporting File' : 'Select Supporting File (Optional)'}
+                              </span>
                               <input
                                 type="file"
                                 accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"
@@ -2450,23 +2800,23 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                             </label>
                           )}
 
-                          {studentAnswerFiles.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={handleSubmitStudentAnswers}
-                              disabled={isSubmittingAnswers}
-                              className="btn-primary text-xs flex items-center min-h-[44px]"
-                            >
-                              <CheckCircle2 className="w-4 h-4 mr-1.5" />
-                              <span>{isSubmittingAnswers ? 'Uploading & Verifying...' : `Submit ${studentAnswerFiles.length} File(s)`}</span>
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={handleValidateAndOpenSubmitConfirm}
+                            disabled={isSubmittingAnswers}
+                            className="btn-primary text-xs flex items-center min-h-[44px] px-5"
+                          >
+                            <CheckCircle2 className="w-4 h-4 mr-1.5" />
+                            <span>
+                              {sub 
+                                ? `Save Changes & Resubmit Assignment (v${(sub.active_version?.version || 1) + 1})`
+                                : isInExtensionWindow 
+                                ? 'Submit Late Assignment' 
+                                : 'Submit Assignment'
+                              }
+                            </span>
+                          </button>
                         </div>
-                      </div>
-                    ) : (
-                      <div className="p-3 bg-[#FDF6E2] border border-[#D9BD71] rounded text-xs text-[#6D5200] flex items-center space-x-2">
-                        <Lock className="w-4 h-4 text-[#B28704] flex-shrink-0" />
-                        <span>Submissions locked. The assessment submission deadline has passed. Resubmissions are disabled.</span>
                       </div>
                     )}
                   </div>
@@ -2474,6 +2824,125 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
               })()}
             </div>
           )}
+
+      {/* MODAL: Submit Assignment Confirmation Summary */}
+      {isConfirmSubmitOpen && selectedAssessment && (() => {
+        const sub = assessmentSubmissions[0];
+        const isResubmit = Boolean(sub);
+        const nextVersion = isResubmit ? (sub?.active_version?.version || 1) + 1 : 1;
+        const now = Date.now();
+        const origDeadline = new Date(selectedAssessment.deadline_at).getTime();
+        const extDeadline = selectedAssessment.allow_late && selectedAssessment.extension_deadline_at
+          ? new Date(selectedAssessment.extension_deadline_at).getTime()
+          : origDeadline;
+        const isInLateWindow = !sub && now > origDeadline && now <= extDeadline;
+
+        return (
+          <div className="fixed inset-0 bg-academic-deepGreen/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-academic-surface border border-academic-border rounded-xl shadow-2xl max-w-lg w-full p-6 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+              <div className="flex items-center justify-between pb-3 border-b border-academic-border">
+                <div className="flex items-center space-x-2">
+                  <div className="p-2 rounded-lg bg-academic-lightGreen text-academic-primaryGreen">
+                    <FileCheck2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-academic-deepGreen">
+                      {isResubmit ? 'Confirm Assignment Resubmission' : 'Confirm Assignment Submission'}
+                    </h3>
+                    <p className="text-xs text-academic-muted">
+                      Target Version: v{nextVersion}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => !isSubmittingAnswers && setIsConfirmSubmitOpen(false)}
+                  disabled={isSubmittingAnswers}
+                  className="p-1.5 rounded-lg text-academic-muted hover:text-academic-deepGreen"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Summary Items */}
+              <div className="space-y-3 text-xs">
+                <div className="p-3 bg-academic-paleGreen/30 rounded border border-academic-border space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-academic-muted">Assignment:</span>
+                    <span className="font-semibold text-academic-deepGreen text-right">{selectedAssessment.title}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-academic-muted">Deadline:</span>
+                    <span className="font-mono text-academic-deepGreen">{new Date(selectedAssessment.deadline_at).toLocaleString()}</span>
+                  </div>
+                  {draftQuestions.length > 0 && (
+                    <div className="flex justify-between items-center pt-1 border-t border-academic-border/60">
+                      <span className="text-academic-muted">Manual Questions Answered:</span>
+                      <span className="font-bold text-academic-primaryGreen flex items-center">
+                        <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                        {draftQuestions.length} of {draftQuestions.length} answered
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between items-center pt-1 border-t border-academic-border/60">
+                    <span className="text-academic-muted">Attached File(s):</span>
+                    <span className="font-medium text-academic-deepGreen">
+                      {studentAnswerFiles.length > 0 
+                        ? studentAnswerFiles.map(f => f.name).join(', ')
+                        : sub && !removeExistingUploadedFile && sub.active_version?.original_name
+                        ? `${sub.active_version.original_name} (Retained from v${sub.active_version.version})`
+                        : 'None (Text-only answers)'}
+                    </span>
+                  </div>
+                </div>
+
+                {isInLateWindow && (
+                  <div className="p-3 bg-[#FDF6E2] border border-[#D9BD71] rounded text-xs text-[#6D5200] flex items-start space-x-2">
+                    <AlertTriangle className="w-4 h-4 text-[#B28704] flex-shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Warning - Late Submission:</strong> The official deadline has passed. Submitting now records a formal LATE timestamp and may apply late penalty deductions.
+                    </span>
+                  </div>
+                )}
+
+                <div className="p-3 bg-academic-paleGreen/20 rounded border border-academic-border text-[11px] text-academic-muted leading-relaxed">
+                  Submitting records an authoritative timestamp. Further edits or resubmissions are only permitted before the original deadline.
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end space-x-3 pt-3 border-t border-academic-border">
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmSubmitOpen(false)}
+                  disabled={isSubmittingAnswers}
+                  className="btn-secondary text-xs min-h-[40px] px-4"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmFinalSubmission}
+                  disabled={isSubmittingAnswers}
+                  className="btn-primary text-xs min-h-[40px] px-5 flex items-center"
+                >
+                  {isSubmittingAnswers ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <span>Submitting Assignment...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4 mr-1.5" />
+                      <span>Confirm & Submit (v{nextVersion})</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
         </div>
       ) : null}
 

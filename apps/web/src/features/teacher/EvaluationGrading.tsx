@@ -22,7 +22,9 @@ import {
   ShieldCheck, 
   FileSpreadsheet as PresentationIcon, 
   FileCode, 
-  File
+  File,
+  History,
+  MessageSquare
 } from 'lucide-react';
 import { 
   evaluationApi, 
@@ -75,6 +77,8 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
   const [generalFeedback, setGeneralFeedback] = useState<string>('');
   const [isSavingEvaluation, setIsSavingEvaluation] = useState<boolean>(false);
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
+  const [selectedEvalVersionId, setSelectedEvalVersionId] = useState<string | null>(null);
+  const [evalLeftTab, setEvalLeftTab] = useState<'answers' | 'files'>('answers');
 
   // File Preview in Evaluation Modal
   const [previewingFile, setPreviewingFile] = useState<SubmittedFileDTO | null>(null);
@@ -164,6 +168,13 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
     setPreviewBlobUrl(null);
     setPreviewNotice(null);
 
+    const hasAnswers = Boolean(
+      (row.answers && row.answers.length > 0) || 
+      (row.versions && row.versions.some((v: any) => v.answers && v.answers.length > 0))
+    );
+    setEvalLeftTab(hasAnswers ? 'answers' : 'files');
+    setSelectedEvalVersionId(row.submission?.active_version_id || null);
+
     const questions = currentAssessment?.questions || [];
     const question = questions[0] || null;
     const existing = row.evaluation;
@@ -204,6 +215,8 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
     setPreviewBlobUrl(null);
     setPreviewNotice(null);
     setEvaluationError(null);
+    setSelectedEvalVersionId(null);
+    setEvalLeftTab('answers');
   };
 
   // Handle previewing file inside evaluation modal
@@ -221,9 +234,10 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
     setPreviewLoading(true);
 
     try {
+      const versionIdToUse = selectedEvalVersionId || row.submission!.active_version_id || 'v1';
       const blob = await submissionApi.fetchSubmissionFileBlob(
         row.submission!.id,
-        row.submission!.active_version_id || 'v1',
+        versionIdToUse,
         file.id
       );
       if (previewBlobUrl) {
@@ -800,7 +814,32 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
                 </div>
               </div>
 
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-3">
+                {activeStudentRow.versions && activeStudentRow.versions.length > 1 && (
+                  <div className="flex items-center space-x-2">
+                    <span className="text-[11px] font-semibold text-academic-deepGreen flex items-center">
+                      <History className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
+                      Version:
+                    </span>
+                    <select
+                      value={selectedEvalVersionId || activeStudentRow.submission?.active_version_id || ''}
+                      onChange={(e) => {
+                        setSelectedEvalVersionId(e.target.value);
+                        setPreviewingFile(null);
+                        setPreviewBlobUrl(null);
+                        setPreviewNotice(null);
+                      }}
+                      className="text-xs font-mono px-2 py-1 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen"
+                    >
+                      {activeStudentRow.versions.map((ver: any) => (
+                        <option key={ver.id} value={ver.id}>
+                          v{ver.version} {ver.id === activeStudentRow.submission?.active_version_id ? '(Active)' : ''} &bull; {ver.late_status === 'late' ? 'LATE' : 'ON TIME'} ({new Date(ver.uploaded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 <button
                   onClick={closeEvaluationModal}
                   className="p-1.5 rounded-lg hover:bg-academic-paleGreen text-academic-muted hover:text-academic-deepGreen"
@@ -810,116 +849,233 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
               </div>
             </div>
 
-            {/* Modal Body: 2-Column Split (Left: Submission Files & PDF Viewer | Right: Rubric & Score Inputs) */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
-              {/* Left Column: Student Uploads & In-App PDF Preview (7 cols) */}
-              <div className="lg:col-span-7 flex flex-col space-y-4">
-                {/* Uploaded Files Selector List */}
-                <div className="p-3.5 bg-academic-bg border border-academic-border rounded-lg space-y-2">
-                  <div className="flex items-center justify-between text-xs text-academic-deepGreen font-semibold">
-                    <span className="flex items-center">
-                      <Layers className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
-                      <span>Uploaded Files ({activeStudentRow.files.length})</span>
-                    </span>
-                    <span className="text-[10px] text-academic-muted">
-                      Submitted on {activeStudentRow.submitted_at ? new Date(activeStudentRow.submitted_at).toLocaleString() : '—'}
-                    </span>
-                  </div>
+            {/* Modal Body: 2-Column Split (Left: Submission Answers & Files | Right: Rubric & Score Inputs) */}
+            {(() => {
+              const selectedVersion = activeStudentRow.versions?.find((v: any) => v.id === selectedEvalVersionId) || activeStudentRow.versions?.[0] || null;
+              const displayedAnswers = (selectedVersion?.answers && selectedVersion.answers.length > 0)
+                ? selectedVersion.answers
+                : (activeStudentRow.answers || []);
+              const rawVersionFiles = selectedVersion?.files || activeStudentRow.files || [];
+              const displayedFiles: SubmittedFileDTO[] = rawVersionFiles.length > 0 
+                ? rawVersionFiles.map((f: any) => ({
+                    id: f.id,
+                    original_filename: f.original_name || f.original_filename,
+                    file_size_bytes: f.size_bytes || f.file_size_bytes || 0,
+                    mime_type: f.mime_type || 'application/pdf',
+                    storage_path: f.storage_path || ''
+                  }))
+                : (selectedVersion?.storage_path ? [{
+                    id: selectedVersion.id,
+                    original_filename: selectedVersion.original_name || 'submission.pdf',
+                    file_size_bytes: selectedVersion.size_bytes || 0,
+                    mime_type: selectedVersion.mime_type || 'application/pdf',
+                    storage_path: selectedVersion.storage_path
+                  }] : []);
 
-                  <div className="space-y-1.5">
-                    {activeStudentRow.files.map((file) => {
-                      const isSelected = previewingFile?.id === file.id;
-                      const isDownloading = downloadingFileId === file.id;
+              return (
+                <div className="flex-1 overflow-y-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  {/* Left Column: Student Coursework (Answers & Files) (7 cols) */}
+                  <div className="lg:col-span-7 flex flex-col space-y-4">
+                    {/* View Switcher Tabs (Answers vs Attached Files) */}
+                    <div className="flex items-center space-x-2 border-b border-academic-border pb-2">
+                      <button
+                        type="button"
+                        onClick={() => setEvalLeftTab('answers')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center transition-colors ${
+                          evalLeftTab === 'answers'
+                            ? 'bg-academic-deepGreen text-white shadow-2xs'
+                            : 'bg-academic-paleGreen text-academic-deepGreen hover:bg-academic-paleGreen/70'
+                        }`}
+                      >
+                        <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
+                        <span>Student Answers ({displayedAnswers.length})</span>
+                      </button>
 
-                      return (
-                        <div
-                          key={file.id}
-                          className={`p-2.5 rounded border text-xs flex items-center justify-between gap-3 transition-colors ${
-                            isSelected 
-                              ? 'bg-academic-lightGreen/50 border-academic-primaryGreen/50' 
-                              : 'bg-academic-surface border-academic-border/70 hover:border-academic-primaryGreen/30'
-                          }`}
-                        >
-                          <div className="flex items-center space-x-2 min-w-0 flex-1">
-                            {getFileIcon(file.mime_type, file.original_filename)}
-                            <div className="min-w-0 flex-1">
-                              <p className="font-semibold text-academic-deepGreen truncate">{file.original_filename}</p>
-                              <p className="text-[10px] text-academic-muted">
-                                {formatFileSize(file.file_size_bytes)} &bull; {file.mime_type.split('/')[1]?.toUpperCase() || 'DOCUMENT'}
-                              </p>
+                      <button
+                        type="button"
+                        onClick={() => setEvalLeftTab('files')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center transition-colors ${
+                          evalLeftTab === 'files'
+                            ? 'bg-academic-deepGreen text-white shadow-2xs'
+                            : 'bg-academic-paleGreen text-academic-deepGreen hover:bg-academic-paleGreen/70'
+                        }`}
+                      >
+                        <Layers className="w-3.5 h-3.5 mr-1.5" />
+                        <span>Attached Files ({displayedFiles.length})</span>
+                      </button>
+                    </div>
+
+                    {/* Tab 1: Student Manual Question Answers */}
+                    {evalLeftTab === 'answers' && (
+                      <div className="space-y-3 flex-1 overflow-y-auto pr-1 max-h-[600px]">
+                        {displayedAnswers.length === 0 ? (
+                          <div className="p-8 text-center text-xs text-academic-muted bg-academic-paleGreen/20 rounded-lg border border-academic-border space-y-2">
+                            <MessageSquare className="w-8 h-8 text-academic-muted/50 mx-auto" />
+                            <p className="font-semibold text-academic-deepGreen">No manual question answers submitted.</p>
+                            <p className="text-[11px]">This submission may be document-based. Check the Attached Files tab above.</p>
+                          </div>
+                        ) : (
+                          displayedAnswers.map((ans: any, idx: number) => {
+                            const q = currentAssessment.questions?.find(
+                              (quest: any) => quest.id === ans.question_id || quest.display_order === ans.question_order
+                            );
+                            const qOrder = ans.question_order || q?.display_order || idx + 1;
+                            const qPrompt = q?.prompt || ans.question_prompt || `Question ${qOrder}`;
+                            const qMarks = q?.max_marks;
+                            const wordCount = ans.answer_text ? ans.answer_text.trim().split(/\s+/).length : 0;
+
+                            return (
+                              <div key={ans.question_id || idx} className="p-4 rounded-lg bg-academic-surface border border-academic-border space-y-2.5">
+                                <div className="flex items-start justify-between gap-2 border-b border-academic-border/60 pb-2">
+                                  <div className="flex items-center space-x-2">
+                                    <span className="px-2 py-0.5 rounded bg-academic-deepGreen text-white text-[11px] font-bold font-mono">
+                                      Question {qOrder}
+                                    </span>
+                                    {qMarks ? (
+                                      <span className="font-semibold text-xs text-academic-deepGreen">
+                                        ({qMarks} marks)
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <span className="text-[10px] text-academic-muted font-mono">
+                                    {wordCount} {wordCount === 1 ? 'word' : 'words'} &bull; {ans.answer_text?.length || 0} chars
+                                  </span>
+                                </div>
+
+                                <p className="text-xs font-medium text-academic-deepGreen/90 bg-academic-paleGreen/20 p-2.5 rounded border border-academic-border/60 leading-relaxed whitespace-pre-wrap">
+                                  {qPrompt}
+                                </p>
+
+                                <div className="space-y-1">
+                                  <span className="text-[10px] uppercase font-bold tracking-wider text-academic-primaryGreen">Student's Answer:</span>
+                                  <div className="p-3 bg-academic-bg rounded border border-academic-border/80 text-xs text-academic-deepGreen leading-relaxed whitespace-pre-wrap font-sans select-text">
+                                    {ans.answer_text || <span className="italic text-academic-muted">No answer entered</span>}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    )}
+
+                    {/* Tab 2: Attached Files & PDF Preview */}
+                    {evalLeftTab === 'files' && (
+                      <div className="space-y-4 flex flex-col flex-1">
+                        {/* Uploaded Files Selector List */}
+                        <div className="p-3.5 bg-academic-bg border border-academic-border rounded-lg space-y-2">
+                          <div className="flex items-center justify-between text-xs text-academic-deepGreen font-semibold">
+                            <span className="flex items-center">
+                              <Layers className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+                              <span>Attached Files ({displayedFiles.length})</span>
+                            </span>
+                            <span className="text-[10px] text-academic-muted">
+                              Submitted on {activeStudentRow.submitted_at ? new Date(activeStudentRow.submitted_at).toLocaleString() : '—'}
+                            </span>
+                          </div>
+
+                          {displayedFiles.length === 0 ? (
+                            <p className="text-academic-muted text-xs italic py-2">
+                              No files attached for this submission version (Text-only answers).
+                            </p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {displayedFiles.map((file) => {
+                                const isSelected = previewingFile?.id === file.id;
+                                const isDownloading = downloadingFileId === file.id;
+
+                                return (
+                                  <div
+                                    key={file.id}
+                                    className={`p-2.5 rounded border text-xs flex items-center justify-between gap-3 transition-colors ${
+                                      isSelected 
+                                        ? 'bg-academic-lightGreen/50 border-academic-primaryGreen/50' 
+                                        : 'bg-academic-surface border-academic-border/70 hover:border-academic-primaryGreen/30'
+                                    }`}
+                                  >
+                                    <div className="flex items-center space-x-2 min-w-0 flex-1">
+                                      {getFileIcon(file.mime_type, file.original_filename)}
+                                      <div className="min-w-0 flex-1">
+                                        <p className="font-semibold text-academic-deepGreen truncate">{file.original_filename}</p>
+                                        <p className="text-[10px] text-academic-muted">
+                                          {formatFileSize(file.file_size_bytes)} &bull; {file.mime_type.split('/')[1]?.toUpperCase() || 'DOCUMENT'}
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center space-x-1.5 flex-shrink-0">
+                                      <button
+                                        onClick={() => handlePreviewSubmittedFile(activeStudentRow, file)}
+                                        className="btn-secondary text-[10px] py-1 px-2 flex items-center"
+                                        title="Preview file"
+                                      >
+                                        <Eye className="w-3 h-3 mr-1 text-academic-primaryGreen" />
+                                        <span>Preview</span>
+                                      </button>
+                                      <button
+                                        onClick={() => handleDownloadSubmittedFile(activeStudentRow, file)}
+                                        disabled={isDownloading}
+                                        className="btn-secondary text-[10px] py-1 px-2 flex items-center"
+                                        title="Download original file"
+                                      >
+                                        {isDownloading ? (
+                                          <Loader2 className="w-3 h-3 animate-spin text-academic-primaryGreen" />
+                                        ) : (
+                                          <Download className="w-3 h-3 text-academic-primaryGreen" />
+                                        )}
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
-                          </div>
-
-                          <div className="flex items-center space-x-1.5 flex-shrink-0">
-                            <button
-                              onClick={() => handlePreviewSubmittedFile(activeStudentRow, file)}
-                              className="btn-secondary text-[10px] py-1 px-2 flex items-center"
-                              title="Preview file"
-                            >
-                              <Eye className="w-3 h-3 mr-1 text-academic-primaryGreen" />
-                              <span>Preview</span>
-                            </button>
-                            <button
-                              onClick={() => handleDownloadSubmittedFile(activeStudentRow, file)}
-                              disabled={isDownloading}
-                              className="btn-secondary text-[10px] py-1 px-2 flex items-center"
-                              title="Download original file"
-                            >
-                              {isDownloading ? (
-                                <Loader2 className="w-3 h-3 animate-spin text-academic-primaryGreen" />
-                              ) : (
-                                <Download className="w-3 h-3 text-academic-primaryGreen" />
-                              )}
-                            </button>
-                          </div>
+                          )}
                         </div>
-                      );
-                    })}
+
+                        {/* Embedded In-App PDF Preview Window */}
+                        <div className="flex-1 min-h-[380px] bg-slate-100 rounded-lg border border-academic-border overflow-hidden flex flex-col">
+                          {previewLoading ? (
+                            <div className="h-full flex flex-col items-center justify-center p-8 space-y-3">
+                              <Loader2 className="w-7 h-7 animate-spin text-academic-primaryGreen" />
+                              <p className="text-xs font-semibold text-academic-deepGreen">Loading document preview...</p>
+                            </div>
+                          ) : previewBlobUrl ? (
+                            <div className="h-full flex-1">
+                              <React.Suspense fallback={<div className="flex items-center justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-academic-primaryGreen" /><span className="ml-2 text-sm text-academic-muted">Loading PDF Viewer...</span></div>}>
+                                <PdfViewer
+                                  directUrl={previewBlobUrl}
+                                  filename={previewingFile?.original_filename || 'student-submission.pdf'}
+                                  assessmentId={activeStudentRow.submission?.id || ""}
+                                />
+                              </React.Suspense>
+                            </div>
+                          ) : previewNotice ? (
+                            <div className="h-full flex flex-col items-center justify-center text-center p-8 space-y-3">
+                              <AlertCircle className="w-8 h-8 text-amber-600 mx-auto" />
+                              <p className="text-xs font-semibold text-academic-deepGreen">{previewNotice}</p>
+                              {previewingFile && (
+                                <button
+                                  onClick={() => handleDownloadSubmittedFile(activeStudentRow, previewingFile)}
+                                  className="btn-primary text-xs inline-flex items-center"
+                                >
+                                  <Download className="w-3.5 h-3.5 mr-1.5" />
+                                  <span>Download {previewingFile.original_filename}</span>
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="h-full flex flex-col items-center justify-center text-center p-8 text-xs text-academic-muted space-y-2">
+                              <Eye className="w-8 h-8 text-academic-muted/50 mx-auto" />
+                              <p>Select a submitted file above to preview document in-app</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
 
-                {/* Embedded In-App PDF Preview Window */}
-                <div className="flex-1 min-h-[380px] bg-slate-100 rounded-lg border border-academic-border overflow-hidden flex flex-col">
-                  {previewLoading ? (
-                    <div className="h-full flex flex-col items-center justify-center p-8 space-y-3">
-                      <Loader2 className="w-7 h-7 animate-spin text-academic-primaryGreen" />
-                      <p className="text-xs font-semibold text-academic-deepGreen">Loading document preview...</p>
-                    </div>
-                  ) : previewBlobUrl ? (
-                    <div className="h-full flex-1">
-                      <React.Suspense fallback={<div className="flex items-center justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-academic-primaryGreen" /><span className="ml-2 text-sm text-academic-muted">Loading PDF Viewer...</span></div>}>
-                        <PdfViewer
-                          directUrl={previewBlobUrl}
-                          filename={previewingFile?.original_filename || 'student-submission.pdf'}
-                          assessmentId={activeStudentRow.submission?.id || ""}
-                        />
-                      </React.Suspense>
-                    </div>
-                  ) : previewNotice ? (
-                    <div className="h-full flex flex-col items-center justify-center text-center p-8 space-y-3">
-                      <AlertCircle className="w-8 h-8 text-amber-600 mx-auto" />
-                      <p className="text-xs font-semibold text-academic-deepGreen">{previewNotice}</p>
-                      {previewingFile && (
-                        <button
-                          onClick={() => handleDownloadSubmittedFile(activeStudentRow, previewingFile)}
-                          className="btn-primary text-xs inline-flex items-center"
-                        >
-                          <Download className="w-3.5 h-3.5 mr-1.5" />
-                          <span>Download {previewingFile.original_filename}</span>
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="h-full flex flex-col items-center justify-center text-center p-8 text-xs text-academic-muted space-y-2">
-                      <Eye className="w-8 h-8 text-academic-muted/50 mx-auto" />
-                      <p>Select a submitted file above to preview document in-app</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Right Column: Rubric Criteria & Score Inputs (5 cols) */}
-              <div className="lg:col-span-5 flex flex-col space-y-4">
+                  {/* Right Column: Rubric Criteria & Score Inputs (5 cols) */}
+                  <div className="lg:col-span-5 flex flex-col space-y-4">
                 {/* Error Banner */}
                 {evaluationError && (
                   <div className="p-3 bg-red-50 border border-red-200 text-red-900 text-xs rounded-lg flex items-center justify-between">
@@ -1127,6 +1283,8 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
                 </div>
               </div>
             </div>
+          );
+        })()}
           </div>
         </div>
       )}

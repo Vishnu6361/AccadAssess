@@ -1920,6 +1920,13 @@ export interface StudentSubmissionDTO {
   files_count: number;
   total_size_bytes: number;
   files: SubmittedFileDTO[];
+  answers?: Array<{
+    question_id: string;
+    question_number?: number;
+    question_prompt?: string;
+    answer_text: string;
+  }>;
+  versions?: any[];
   evaluation?: {
     id: string;
     status: 'under_evaluation' | 'published';
@@ -1950,13 +1957,12 @@ export interface SubmissionDTO {
 }
 
 export const submissionApi = {
-  uploadSubmission: async (payload: {
+  submitAssignment: async (payload: {
     assessment_id: string;
-    question_id?: string;
-    file_name?: string;
-    file_base64?: string;
-    files?: Array<{ file_name: string; file_base64: string }>;
-  }): Promise<any> => {
+    answers?: Array<{ question_id: string; question_order?: number; question_number?: number; question_prompt?: string; answer_text: string }>;
+    files?: Array<{ file_name: string; file_base64: string; mime_type?: string }>;
+    keep_existing_files?: boolean;
+  }): Promise<{ receipt: any; version?: any }> => {
     try {
       const authHeaders = await getAuthHeaders();
       const res = await fetchWithTimeout(`${API_BASE_URL}/submissions`, {
@@ -1971,13 +1977,80 @@ export const submissionApi = {
       if (!res.ok) {
         throw new Error(data.error?.message || `Submission failed (${res.status})`);
       }
-      return data.receipt;
+      return data;
     } catch (err: any) {
       if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
-        throw new Error(`API server is unreachable (${API_BASE_URL}). Cannot submit answer files.`);
+        throw new Error(`API server is unreachable (${API_BASE_URL}). Cannot submit assignment.`);
       }
       throw err;
     }
+  },
+
+  getDraft: async (assessmentId: string): Promise<any | null> => {
+    try {
+      const authHeaders = await getAuthHeaders();
+      const res = await fetchWithTimeout(`${API_BASE_URL}/submissions/assessment/${assessmentId}/draft`, {
+        headers: authHeaders
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.draft || null;
+      }
+    } catch { }
+    return null;
+  },
+
+  saveDraft: async (param1: string | { assessment_id: string; answers: Array<any> }, param2?: Array<any>): Promise<any> => {
+    try {
+      const assessmentId = typeof param1 === 'string' ? param1 : param1.assessment_id;
+      const answers = typeof param1 === 'string' ? (param2 || []) : param1.answers;
+      const authHeaders = await getAuthHeaders();
+      const res = await fetchWithTimeout(`${API_BASE_URL}/submissions/assessment/${assessmentId}/draft`, {
+        method: 'PUT',
+        headers: {
+          ...authHeaders,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ answers })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error?.message || `Draft save failed (${res.status})`);
+      }
+      return data.draft;
+    } catch (err: any) {
+      if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
+        throw new Error(`API server is unreachable (${API_BASE_URL}). Cannot save draft.`);
+      }
+      throw err;
+    }
+  },
+
+  getSubmissionVersions: async (submissionId: string): Promise<any[]> => {
+    try {
+      const authHeaders = await getAuthHeaders();
+      const res = await fetchWithTimeout(`${API_BASE_URL}/submissions/${submissionId}/versions`, {
+        headers: authHeaders
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.versions || [];
+      }
+    } catch { }
+    return [];
+  },
+
+  uploadSubmission: async (payload: {
+    assessment_id: string;
+    question_id?: string;
+    file_name?: string;
+    file_base64?: string;
+    files?: Array<{ file_name: string; file_base64: string }>;
+    answers?: Array<{ question_id: string; question_order?: number; question_number?: number; question_prompt?: string; answer_text: string }>;
+    keep_existing_files?: boolean;
+  }): Promise<any> => {
+    const res = await submissionApi.submitAssignment(payload);
+    return res.receipt;
   },
 
   getSubmissionsForAssessment: async (assessmentId: string): Promise<SubmissionDTO[]> => {
@@ -2256,6 +2329,13 @@ export interface StudentLedgerRowDTO {
   version_number: number;
   files_count: number;
   files: SubmittedFileDTO[];
+  answers?: Array<{
+    question_id: string;
+    question_number?: number;
+    question_prompt?: string;
+    answer_text: string;
+  }>;
+  versions?: any[];
   evaluation_status: 'not_submitted' | 'pending' | 'draft' | 'completed' | 'published';
   evaluation: {
     id: string;

@@ -214,6 +214,8 @@ router.get('/assessment/:assessmentId/ledger', requireRoles(['subject_teacher', 
         version_number: activeVer?.version || 1,
         files_count: files.length,
         files,
+        answers: activeVer?.answers || [],
+        versions: sub?.versions || [],
         evaluation_status: evalStatus,
         evaluation: evaluation ? {
           id: evaluation.id,
