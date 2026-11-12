@@ -13,6 +13,7 @@ import {
 const UserManagement = React.lazy(() => import('../features/hod/UserManagement').then(m => ({ default: m.UserManagement })));
 const AcademicStructure = React.lazy(() => import('../features/hod/AcademicStructure').then(m => ({ default: m.AcademicStructure })));
 const InstitutionalSubmissionReport = React.lazy(() => import('../features/hod/InstitutionalSubmissionReport').then(m => ({ default: m.InstitutionalSubmissionReport })));
+const DepartmentAcademicPerformance = React.lazy(() => import('../features/hod/DepartmentAcademicPerformance').then(m => ({ default: m.DepartmentAcademicPerformance })));
 const AssessmentManagement = React.lazy(() => import('../features/teacher/AssessmentManagement').then(m => ({ default: m.AssessmentManagement })));
 const EvaluationGrading = React.lazy(() => import('../features/teacher/EvaluationGrading').then(m => ({ default: m.EvaluationGrading })));
 const StudentResults = React.lazy(() => import('../features/student/StudentResults').then(m => ({ default: m.StudentResults })));
@@ -93,8 +94,8 @@ export const AppContent: React.FC = () => {
     if (!activeRole) return;
 
     if (activeRole === 'hod') {
-      // HOD workspace allows: academics (Academic Structure), users (User Directory & Roles), institutional_reports (Institutional Submission Report)
-      if (activeItem !== 'academics' && activeItem !== 'users' && activeItem !== 'institutional_reports') {
+      // HOD workspace allows: academics (Academic Structure), users (User Directory & Roles), institutional_reports (Institutional Submission Report), academic_performance (Department Academic Performance)
+      if (activeItem !== 'academics' && activeItem !== 'users' && activeItem !== 'institutional_reports' && activeItem !== 'academic_performance') {
         setActiveItem('academics');
       }
     } else if (activeRole === 'subject_teacher') {
@@ -103,8 +104,8 @@ export const AppContent: React.FC = () => {
         setActiveItem('assessments');
       }
     } else if (activeRole === 'class_teacher') {
-      // Class Teacher workspace allows: assessments, students, late_reports
-      if (activeItem !== 'assessments' && activeItem !== 'students' && activeItem !== 'late_reports') {
+      // Class Teacher workspace allows: assessments, performance, students, late_reports
+      if (activeItem !== 'assessments' && activeItem !== 'performance' && activeItem !== 'students' && activeItem !== 'late_reports') {
         setActiveItem('assessments');
       }
     } else if (activeRole === 'proctor') {
@@ -535,6 +536,10 @@ export const AppContent: React.FC = () => {
                     ? 'Submissions Report'
                     : activeItem === 'institutional_reports'
                     ? 'Institutional Submission Report'
+                    : activeItem === 'academic_performance'
+                    ? 'Department Academic Performance'
+                    : activeRole === 'class_teacher' && activeItem === 'performance'
+                    ? 'Class Academic Performance'
                     : 'Workspace', 
                   current: true 
                 }
@@ -546,11 +551,14 @@ export const AppContent: React.FC = () => {
               {activeItem === 'users' && activeRole === 'hod' && <UserManagement />}
               {activeItem === 'academics' && activeRole === 'hod' && <AcademicStructure />}
               {activeItem === 'institutional_reports' && activeRole === 'hod' && <InstitutionalSubmissionReport />}
+              {activeItem === 'academic_performance' && activeRole === 'hod' && <DepartmentAcademicPerformance />}
 
               {/* Class Teacher Dedicated Role-Specific Workspace */}
               {activeRole === 'class_teacher' && (
                 activeItem === 'assessments' ? (
                   <ClassTeacherWorkspace initialTab="overview" />
+                ) : activeItem === 'performance' ? (
+                  <ClassTeacherWorkspace initialTab="performance" />
                 ) : activeItem === 'students' ? (
                   <ClassTeacherWorkspace initialTab="students" />
                 ) : (activeItem === 'submissions' || activeItem === 'late_reports') ? (

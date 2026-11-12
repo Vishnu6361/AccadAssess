@@ -547,4 +547,159 @@ router.get('/student/my-results', requireRoles(['student']), async (req: Request
   return res.status(200).json({ results });
 });
 
+router.get('/student/performance-dashboard', requireRoles(['student']), async (req: Request, res: Response) => {
+  try {
+    const user = req.userContext!;
+    const evalRepo = getEvaluationRepository();
+    const subjects = await evalRepo.getStudentPerformanceDashboard(user.profile.id);
+
+    return res.status(200).json({ subjects });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: { code: 'REPORT_ERROR', message: err.message || 'Failed to fetch student performance dashboard' }
+    });
+  }
+});
+
+router.get('/reports/class-teacher', requireRoles(['class_teacher', 'hod']), async (req: Request, res: Response) => {
+  try {
+    const user = req.userContext!;
+    const evalRepo = getEvaluationRepository();
+    const { class_id, subject_id, assessment_id } = req.query as {
+      class_id?: string;
+      subject_id?: string;
+      assessment_id?: string;
+    };
+
+    const report = await evalRepo.getClassTeacherAcademicReport(user.profile.id, user.isHOD, {
+      class_id,
+      subject_id,
+      assessment_id
+    });
+
+    return res.status(200).json(report);
+  } catch (err: any) {
+    return res.status(500).json({
+      error: { code: 'REPORT_ERROR', message: err.message || 'Failed to fetch class teacher report' }
+    });
+  }
+});
+
+router.get('/reports/proctor', requireRoles(['proctor', 'hod']), async (req: Request, res: Response) => {
+  try {
+    const user = req.userContext!;
+    const evalRepo = getEvaluationRepository();
+    const report = await evalRepo.getProctorAcademicReport(user.profile.id, user.isHOD);
+
+    return res.status(200).json(report);
+  } catch (err: any) {
+    return res.status(500).json({
+      error: { code: 'REPORT_ERROR', message: err.message || 'Failed to fetch proctor report' }
+    });
+  }
+});
+
+router.get('/reports/hod', requireRoles(['hod']), async (req: Request, res: Response) => {
+  try {
+    const evalRepo = getEvaluationRepository();
+    const { semester, class_id, section, subject_id, assessment_id, publication_status } = req.query as {
+      semester?: string;
+      class_id?: string;
+      section?: string;
+      subject_id?: string;
+      assessment_id?: string;
+      publication_status?: string;
+    };
+
+    const report = await evalRepo.getHodDepartmentAcademicReport({
+      semester: semester ? Number(semester) : undefined,
+      class_id,
+      section,
+      subject_id,
+      assessment_id,
+      publication_status
+    });
+
+    return res.status(200).json(report);
+  } catch (err: any) {
+    return res.status(500).json({
+      error: { code: 'REPORT_ERROR', message: err.message || 'Failed to fetch HOD department report' }
+    });
+  }
+});
+
+router.get('/result-detail/:submissionId', async (req: Request, res: Response) => {
+  try {
+    const user = req.userContext!;
+    const evalRepo = getEvaluationRepository();
+    const subRepo = getSubmissionRepository();
+    const academicRepo = getAcademicRepository();
+    const assRepo = getAssessmentRepository();
+
+    const submission = await subRepo.getSubmissionById(req.params.submissionId);
+    if (!submission) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Submission not found' } });
+    }
+
+    // Role-based security checks
+    if (user.isHOD) {
+      // HOD has institutional oversight authorization
+    } else if (user.roles.includes('student') || user.activeRole === 'student') {
+      if (submission.student_id !== user.profile.id) {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Access denied: Cannot view another student results' } });
+      }
+    } else {
+      // Faculty authorization checks: Must be either Subject Teacher, Class Teacher, or Proctor
+      const assessment = await assRepo.getAssessmentById(submission.assessment_id);
+      const classSubject = assessment ? await academicRepo.getClassSubjectById(assessment.class_subject_id) : null;
+
+      let isAuthorizedFaculty = false;
+
+      // 1. Subject Teacher check
+      if (user.roles.includes('subject_teacher') && classSubject && classSubject.subject_teacher_id === user.profile.id) {
+        isAuthorizedFaculty = true;
+      }
+
+      // 2. Class Teacher check
+      if (!isAuthorizedFaculty && user.roles.includes('class_teacher') && classSubject) {
+        const teacherClasses = await academicRepo.listClassesByTeacher(user.profile.id);
+        if (teacherClasses.some((c: any) => c.id === classSubject.class_id)) {
+          isAuthorizedFaculty = true;
+        }
+      }
+
+      // 3. Proctor check
+      if (!isAuthorizedFaculty && user.roles.includes('proctor')) {
+        const mentees = await academicRepo.listProctorAssignmentsByProctor(user.profile.id);
+        if (mentees.some(m => m.student_id === submission.student_id && (!m.valid_to || new Date(m.valid_to) > new Date()))) {
+          isAuthorizedFaculty = true;
+        }
+      }
+
+      if (!isAuthorizedFaculty) {
+        return res.status(403).json({
+          error: { code: 'FORBIDDEN', message: 'Access denied: You are not authorized to view this student assessment result' }
+        });
+      }
+    }
+
+    const detail = await evalRepo.getDetailedResult(submission.id);
+    if (!detail) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Result detail not found' } });
+    }
+
+    // Confidentiality check: Students can ONLY view official published evaluations
+    const isStudentUser = user.roles.includes('student') || user.activeRole === 'student';
+    if (isStudentUser && (!detail.evaluation || detail.evaluation.status !== 'published')) {
+      return res.status(403).json({ error: { code: 'RESULTS_NOT_PUBLISHED', message: 'Evaluation results not published yet' } });
+    }
+
+    return res.status(200).json({ detail });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: { code: 'DETAIL_ERROR', message: err.message || 'Failed to fetch result detail' }
+    });
+  }
+});
+
 export default router;

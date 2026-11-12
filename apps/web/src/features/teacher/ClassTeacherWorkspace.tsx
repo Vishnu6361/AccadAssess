@@ -14,7 +14,8 @@ import {
   ChevronRight,
   Clock,
   CheckCircle2,
-  Calendar
+  Calendar,
+  Award
 } from 'lucide-react';
 import {
   classTeacherApi,
@@ -24,15 +25,16 @@ import {
   ClassTeacherCohortSubjectDTO,
   AssessmentDTO
 } from '../../services/apiClient';
+import { ClassTeacherAcademicReport } from './ClassTeacherAcademicReport';
 
 interface ClassTeacherWorkspaceProps {
-  initialTab?: 'overview' | 'assessments' | 'reports' | 'students';
+  initialTab?: 'overview' | 'assessments' | 'reports' | 'students' | 'performance';
 }
 
 export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
   initialTab = 'overview'
 }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'assessments' | 'reports' | 'students'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'overview' | 'assessments' | 'reports' | 'students' | 'performance'>(initialTab);
   const [cohortClasses, setCohortClasses] = useState<ClassTeacherCohortDTO[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('');
   const [assessments, setAssessments] = useState<AssessmentDTO[]>([]);
@@ -594,6 +596,17 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
             <span className="px-2 py-0.5 rounded-full text-xs bg-academic-paleGreen text-academic-deepGreen">
               {classSubjectsList.length} Subjects
             </span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('performance')}
+            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 ${activeTab === 'performance'
+              ? 'border-academic-primaryGreen text-academic-deepGreen font-bold'
+              : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+              }`}
+          >
+            <Award className="w-4 h-4 text-academic-primaryGreen" />
+            <span>Academic Performance</span>
           </button>
 
           <button
@@ -1321,6 +1334,13 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
             </div>
           )}
         </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB PERFORMANCE: ACADEMIC MARKS & RUBRIC BREAKDOWN (PHASE 3)              */}
+      {/* ========================================================================= */}
+      {activeTab === 'performance' && (
+        <ClassTeacherAcademicReport initialClassId={selectedClassId} />
       )}
 
       {/* ========================================================================= */}

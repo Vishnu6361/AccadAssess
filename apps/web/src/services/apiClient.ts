@@ -2285,7 +2285,9 @@ export interface CriterionScoreDTO {
   id?: string;
   criterion_id: string;
   criterion_title?: string;
+  criterion_description?: string;
   criterion_max_marks?: number;
+  display_order?: number;
   selected_level_id?: string | null;
   selected_level?: {
     id: string;
@@ -2516,6 +2518,308 @@ export const evaluationApi = {
       }
     } catch { }
     return [];
+  },
+
+  getStudentPerformanceDashboard: async (): Promise<StudentSubjectPerformanceDTO[]> => {
+    const authHeaders = await getAuthHeaders();
+    const res = await fetchWithTimeout(`${API_BASE_URL}/evaluations/student/performance-dashboard`, {
+      headers: authHeaders
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Failed to fetch performance dashboard (${res.status})`);
+    }
+    const data = await res.json();
+    return data.subjects || [];
+  },
+
+  getClassTeacherAcademicReport: async (params?: {
+    class_id?: string;
+    subject_id?: string;
+    assessment_id?: string;
+  }): Promise<ClassTeacherAcademicReportDTO> => {
+    const authHeaders = await getAuthHeaders();
+    const query = new URLSearchParams();
+    if (params?.class_id) query.set('class_id', params.class_id);
+    if (params?.subject_id) query.set('subject_id', params.subject_id);
+    if (params?.assessment_id) query.set('assessment_id', params.assessment_id);
+
+    const qs = query.toString();
+    const url = `${API_BASE_URL}/evaluations/reports/class-teacher${qs ? `?${qs}` : ''}`;
+    const res = await fetchWithTimeout(url, { headers: authHeaders });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Failed to fetch class teacher academic report (${res.status})`);
+    }
+    return await res.json();
+  },
+
+  getProctorAcademicReport: async (): Promise<ProctorAcademicReportDTO> => {
+    const authHeaders = await getAuthHeaders();
+    const res = await fetchWithTimeout(`${API_BASE_URL}/evaluations/reports/proctor`, {
+      headers: authHeaders
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Failed to fetch proctor report (${res.status})`);
+    }
+    return await res.json();
+  },
+
+  getHodDepartmentAcademicReport: async (filters?: {
+    semester?: number;
+    class_id?: string;
+    section?: string;
+    subject_id?: string;
+    assessment_id?: string;
+    publication_status?: string;
+  }): Promise<HodAcademicReportDTO> => {
+    const authHeaders = await getAuthHeaders();
+    const query = new URLSearchParams();
+    if (filters?.semester) query.set('semester', String(filters.semester));
+    if (filters?.class_id) query.set('class_id', filters.class_id);
+    if (filters?.section) query.set('section', filters.section);
+    if (filters?.subject_id) query.set('subject_id', filters.subject_id);
+    if (filters?.assessment_id) query.set('assessment_id', filters.assessment_id);
+    if (filters?.publication_status) query.set('publication_status', filters.publication_status);
+
+    const qs = query.toString();
+    const url = `${API_BASE_URL}/evaluations/reports/hod${qs ? `?${qs}` : ''}`;
+    const res = await fetchWithTimeout(url, { headers: authHeaders });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Failed to fetch department academic report (${res.status})`);
+    }
+    return await res.json();
+  },
+
+  getResultDetail: async (submissionId: string): Promise<AssessmentResultDetailDTO> => {
+    const authHeaders = await getAuthHeaders();
+    const res = await fetchWithTimeout(`${API_BASE_URL}/evaluations/result-detail/${submissionId}`, {
+      headers: authHeaders
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Failed to fetch result detail (${res.status})`);
+    }
+    const data = await res.json();
+    return data.detail;
   }
 };
+
+export interface StudentAssessmentResultDetailDTO {
+  evaluation_id: string;
+  submission_id: string;
+  raw_score: number;
+  late_penalty_deducted: number;
+  total_score: number;
+  max_marks: number;
+  percentage: number;
+  late_status: 'on_time' | 'late';
+  published_at: string;
+  general_feedback?: string | null;
+  criterion_scores: CriterionScoreDTO[];
+}
+
+export interface StudentSubjectAssessmentDTO {
+  assessment_id: string;
+  title: string;
+  max_marks: number;
+  due_date?: string | null;
+  published_at?: string | null;
+  has_result: boolean;
+  publication_status: 'results_published' | 'evaluation_pending' | 'not_submitted';
+  result?: StudentAssessmentResultDetailDTO | null;
+}
+
+export interface StudentSubjectPerformanceDTO {
+  subject_id: string;
+  subject_code: string;
+  subject_name: string;
+  credits: number;
+  class_id: string;
+  programme: string;
+  semester: number;
+  section: string;
+  published_assessment_count: number;
+  results_available_count: number;
+  average_percentage: number | null;
+  average_marks: number | null;
+  assessments: StudentSubjectAssessmentDTO[];
+}
+
+export interface ClassTeacherStudentRosterRowDTO {
+  student_id: string;
+  student_name: string;
+  roll_number: string;
+  email?: string;
+  submission_id?: string | null;
+  has_submitted: boolean;
+  submission_date?: string | null;
+  late_status: string;
+  evaluation_id?: string | null;
+  evaluation_status: string;
+  raw_score?: number | null;
+  late_penalty_deducted: number;
+  total_score?: number | null;
+  max_marks: number;
+  percentage?: number | null;
+  criterion_scores?: CriterionScoreDTO[];
+}
+
+export interface ClassTeacherAcademicReportDTO {
+  classes: Array<{
+    class_id: string;
+    programme: string;
+    semester: number;
+    section: string;
+    student_count: number;
+    subjects: Array<{
+      class_subject_id: string;
+      subject_id: string;
+      subject_code: string;
+      subject_name: string;
+      subject_teacher_name: string;
+      published_assessment_count: number;
+      assessments: Array<{
+        id: string;
+        title: string;
+        max_marks: number;
+        due_date?: string | null;
+        published_at?: string | null;
+      }>;
+    }>;
+  }>;
+  selected_assessment?: {
+    id: string;
+    title: string;
+    max_marks: number;
+    due_date?: string | null;
+  } | null;
+  student_roster?: ClassTeacherStudentRosterRowDTO[] | null;
+}
+
+export interface ProctorMenteeDTO {
+  student_id: string;
+  student_name: string;
+  student_email?: string;
+  roll_number: string;
+  programme: string;
+  semester: number;
+  section: string;
+  class_id: string;
+  enrolled_subjects_count: number;
+  overall_results_count: number;
+  overall_average_percentage: number | null;
+  subjects: Array<{
+    subject_id: string;
+    subject_code: string;
+    subject_name: string;
+    credits: number;
+    published_assessment_count: number;
+    results_available_count: number;
+    average_percentage: number | null;
+    assessments: Array<{
+      assessment_id: string;
+      title: string;
+      max_marks: number;
+      has_result: boolean;
+      submission_id?: string | null;
+      total_score?: number | null;
+      raw_score?: number | null;
+      late_penalty_deducted: number;
+      percentage?: number | null;
+      publication_status: string;
+      criterion_scores: CriterionScoreDTO[];
+    }>;
+  }>;
+}
+
+export interface ProctorAcademicReportDTO {
+  mentees: ProctorMenteeDTO[];
+}
+
+export interface HodAcademicReportDTO {
+  kpis: {
+    total_students: number;
+    total_published_assessments: number;
+    students_evaluated: number;
+    total_evaluations_completed?: number;
+    completed_unpublished_results?: number;
+    pending_evaluations: number;
+    published_results: number;
+    department_average_score: number | null;
+  };
+  hierarchy: Array<{
+    semester: number;
+    classes: Array<{
+      class_id: string;
+      programme: string;
+      semester: number;
+      section: string;
+      student_count: number;
+      subjects: Array<{
+        class_subject_id: string;
+        subject_id: string;
+        subject_code: string;
+        subject_name: string;
+        teacher_name: string;
+        published_assessment_count: number;
+        assessments: Array<{
+          id: string;
+          title: string;
+          max_marks: number;
+          due_date?: string | null;
+          published_at?: string | null;
+        }>;
+      }>;
+    }>;
+  }>;
+  selected_assessment?: {
+    id: string;
+    title: string;
+    max_marks: number;
+    due_date?: string | null;
+  } | null;
+  student_roster?: ClassTeacherStudentRosterRowDTO[] | null;
+}
+
+export interface AssessmentResultDetailDTO {
+  assessment: {
+    id: string;
+    title: string;
+    instructions?: string | null;
+    max_marks: number;
+    due_date?: string | null;
+    class_name: string;
+    semester: number;
+    section: string;
+    subject_code?: string;
+    subject_name?: string;
+  };
+  student: {
+    id: string;
+    name: string;
+    email?: string;
+    roll_number: string;
+  };
+  submission: {
+    id: string;
+    version: number;
+    submitted_at: string;
+    late_status: 'on_time' | 'late';
+  };
+  evaluation?: {
+    id: string;
+    evaluator_name: string;
+    status: string;
+    raw_score: number;
+    late_penalty_deducted: number;
+    total_score: number;
+    percentage: number;
+    general_feedback?: string | null;
+    published_at: string;
+    criterion_scores: CriterionScoreDTO[];
+  } | null;
+}
 

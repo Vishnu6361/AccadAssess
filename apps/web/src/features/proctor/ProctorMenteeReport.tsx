@@ -11,10 +11,12 @@ import {
   AlertCircle,
   Calendar,
   RefreshCw,
-  Filter
+  Filter,
+  Award
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useProctorReport } from './proctorReportStore';
+import { ProctorAcademicReport } from './ProctorAcademicReport';
 
 /**
  * Subtle loading skeleton for first-time visit while data is being fetched.
@@ -70,6 +72,9 @@ export const ProctorMenteeReport: React.FC = () => {
     error,
     refresh
   } = useProctorReport(proctorId);
+
+  // Top tab mode: Academic Performance Dashboard vs Submission Tracking
+  const [activeTab, setActiveTab] = useState<'performance' | 'submissions'>('performance');
 
   // Active navigation selection
   const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
@@ -179,16 +184,49 @@ export const ProctorMenteeReport: React.FC = () => {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
-      {/* Top Breadcrumb Navigation Trail */}
-      <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm text-academic-muted flex-wrap">
-        <button
-          onClick={handleBackToSubjects}
-          className={`font-medium transition-colors hover:text-academic-primaryGreen ${
-            !selectedSubject ? 'text-academic-deepGreen font-semibold cursor-default' : ''
-          }`}
-        >
-          Mentee Submissions Report
-        </button>
+      {/* Top Workspace Tab Mode Navigation */}
+      <div className="border-b border-academic-border">
+        <nav className="flex space-x-2 sm:space-x-6" aria-label="Proctor Workspace Modes">
+          <button
+            onClick={() => setActiveTab('performance')}
+            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 ${
+              activeTab === 'performance'
+                ? 'border-academic-primaryGreen text-academic-deepGreen font-bold'
+                : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+            }`}
+          >
+            <Award className="w-4 h-4 text-academic-primaryGreen" />
+            <span>Academic Performance & Results</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('submissions')}
+            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 ${
+              activeTab === 'submissions'
+                ? 'border-academic-primaryGreen text-academic-deepGreen font-bold'
+                : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+            }`}
+          >
+            <FileText className="w-4 h-4 text-academic-primaryGreen" />
+            <span>Mentee Submissions & Deadlines</span>
+          </button>
+        </nav>
+      </div>
+
+      {activeTab === 'performance' ? (
+        <ProctorAcademicReport />
+      ) : (
+        <div className="space-y-6">
+          {/* Top Breadcrumb Navigation Trail */}
+          <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm text-academic-muted flex-wrap">
+            <button
+              onClick={handleBackToSubjects}
+              className={`font-medium transition-colors hover:text-academic-primaryGreen ${
+                !selectedSubject ? 'text-academic-deepGreen font-semibold cursor-default' : ''
+              }`}
+            >
+              Mentee Submissions Report
+            </button>
 
         {selectedSubject && (
           <>
@@ -645,6 +683,8 @@ export const ProctorMenteeReport: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
+      )}
         </div>
       )}
     </div>

@@ -6,7 +6,8 @@ import {
   ScrollText, 
   X, 
   FileSpreadsheet, 
-  GraduationCap 
+  GraduationCap,
+  Award
 } from 'lucide-react';
 import { AcadAssessLogo } from './AcadAssessLogo';
 
@@ -71,6 +72,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       return [
         { id: 'academics', label: 'Academic Structure', icon: BookOpen },
         { id: 'users', label: 'User Directory & Roles', icon: Users },
+        { id: 'academic_performance', label: 'Department Performance', icon: Award },
         { id: 'institutional_reports', label: 'Institutional Submission Report', icon: FileSpreadsheet },
       ];
     }
@@ -85,6 +87,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (activeRole === 'class_teacher') {
       return [
         { id: 'assessments', label: 'Class Workspace', icon: GraduationCap },
+        { id: 'performance', label: 'Academic Performance', icon: Award },
         { id: 'students', label: 'Student Cohort', icon: Users },
         { id: 'late_reports', label: 'Submissions & Late Report', icon: FileSpreadsheet },
       ];

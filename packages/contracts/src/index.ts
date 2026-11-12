@@ -839,7 +839,16 @@ export const EvaluationCriterionScoreSchema = z.object({
   id: z.string().uuid(),
   evaluation_id: z.string().uuid(),
   criterion_id: z.string().uuid(),
+  criterion_title: z.string().optional(),
+  criterion_description: z.string().optional(),
+  criterion_max_marks: z.number().optional(),
+  display_order: z.number().int().optional(),
   selected_level_id: z.string().uuid().nullable().optional(),
+  selected_level: z.object({
+    id: z.string().optional(),
+    label: z.string(),
+    description: z.string().optional()
+  }).nullable().optional(),
   score: z.number().min(0, 'Score cannot be negative'),
   feedback: z.string().nullable().optional(),
   created_at: z.string()
