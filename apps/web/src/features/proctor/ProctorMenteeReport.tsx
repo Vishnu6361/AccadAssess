@@ -12,11 +12,13 @@ import {
   Calendar,
   RefreshCw,
   Filter,
-  Award
+  Award,
+  Eye
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useProctorReport } from './proctorReportStore';
 import { ProctorAcademicReport } from './ProctorAcademicReport';
+import { AssessmentResultDetailModal } from '../../components/AssessmentResultDetailModal';
 
 /**
  * Subtle loading skeleton for first-time visit while data is being fetched.
@@ -79,6 +81,10 @@ export const ProctorMenteeReport: React.FC = () => {
   // Active navigation selection
   const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
   const [selectedAssessmentId, setSelectedAssessmentId] = useState<string | null>(null);
+
+  // Rubric / Submission Detail Modal State
+  const [selectedSubmissionId, setSelectedSubmissionId] = useState<string | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
 
   // Search & Filter states
   const [subjectSearch, setSubjectSearch] = useState<string>('');
@@ -587,6 +593,9 @@ export const ProctorMenteeReport: React.FC = () => {
                       <th scope="col" className="px-6 py-3.5 text-right">
                         Published Marks
                       </th>
+                      <th scope="col" className="px-6 py-3.5 text-right">
+                        Action
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-academic-border bg-academic-surface">
@@ -675,6 +684,31 @@ export const ProctorMenteeReport: React.FC = () => {
                               <span className="text-academic-muted/50">—</span>
                             )}
                           </td>
+
+                          {/* Action Column */}
+                          <td className="px-6 py-4 whitespace-nowrap text-right">
+                            {student.submission_id ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedSubmissionId(student.submission_id!);
+                                  setIsModalOpen(true);
+                                }}
+                                className="btn-secondary py-1 px-2.5 text-xs inline-flex items-center space-x-1"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>View Details</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled
+                                className="py-1 px-2 text-xs text-academic-muted/50 cursor-not-allowed inline-flex items-center space-x-1 opacity-50"
+                              >
+                                <span>Pending</span>
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
@@ -687,6 +721,16 @@ export const ProctorMenteeReport: React.FC = () => {
       )}
         </div>
       )}
+
+      {/* Shared Assessment Result Detail Modal */}
+      <AssessmentResultDetailModal
+        isOpen={isModalOpen}
+        onClose={() => {
+          setIsModalOpen(false);
+          setSelectedSubmissionId(null);
+        }}
+        submissionId={selectedSubmissionId}
+      />
     </div>
   );
 };

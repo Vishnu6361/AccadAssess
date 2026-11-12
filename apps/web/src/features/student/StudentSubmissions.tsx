@@ -20,8 +20,15 @@ import {
   FileCode,
   File
 } from 'lucide-react';
-import { submissionApi, StudentSubmissionDTO, SubmittedFileDTO } from '../../services/apiClient';
+import {
+  submissionApi,
+  evaluationApi,
+  StudentSubmissionDTO,
+  SubmittedFileDTO,
+  AssessmentResultDetailDTO
+} from '../../services/apiClient';
 import { StatusBadge } from '../../components/StatusBadge';
+import { RubricBreakdownSection } from '../../components/RubricBreakdownSection';
 
 const PdfViewer = React.lazy(() => import('../../components/PdfViewer').then(m => ({ default: m.PdfViewer })));
 
@@ -40,6 +47,26 @@ export const StudentSubmissions: React.FC<StudentSubmissionsProps> = ({ onNaviga
 
   // Selected Submission for Details Modal
   const [selectedSubmission, setSelectedSubmission] = useState<StudentSubmissionDTO | null>(null);
+  const [submissionResultDetail, setSubmissionResultDetail] = useState<AssessmentResultDetailDTO | null>(null);
+  const [isLoadingResultDetail, setIsLoadingResultDetail] = useState<boolean>(false);
+
+  const handleOpenSubmissionDetails = async (sub: StudentSubmissionDTO) => {
+    setSelectedSubmission(sub);
+    setSubmissionResultDetail(null);
+
+    // Only attempt to load enriched rubric criteria if results are published
+    if (sub.evaluation?.status === 'published') {
+      setIsLoadingResultDetail(true);
+      try {
+        const detail = await evaluationApi.getResultDetail(sub.id);
+        setSubmissionResultDetail(detail);
+      } catch (err) {
+        console.warn('Could not fetch enriched rubric detail for student submission:', err);
+      } finally {
+        setIsLoadingResultDetail(false);
+      }
+    }
+  };
 
   // PDF Preview State
   const [previewFile, setPreviewFile] = useState<{
@@ -452,7 +479,7 @@ export const StudentSubmissions: React.FC<StudentSubmissionsProps> = ({ onNaviga
                 {/* Card Footer: View Details Action */}
                 <div className="pt-2 flex items-center justify-end">
                   <button
-                    onClick={() => setSelectedSubmission(sub)}
+                    onClick={() => handleOpenSubmissionDetails(sub)}
                     className="text-xs font-bold text-academic-primaryGreen hover:text-academic-deepGreen inline-flex items-center group-hover:translate-x-0.5 transition-transform min-h-[36px]"
                   >
                     <span>View Submission Details</span>
@@ -566,64 +593,18 @@ export const StudentSubmissions: React.FC<StudentSubmissionsProps> = ({ onNaviga
 
               {/* Evaluation Details */}
               <div className="space-y-2">
-                <h4 className="font-bold text-academic-deepGreen text-xs flex items-center">
-                  <Award className="w-4 h-4 mr-1.5 text-academic-primaryGreen" />
-                  Evaluation & Grade Details
-                </h4>
-
-                {selectedSubmission.evaluation?.status === 'published' ? (
-                  <div className="p-4 bg-academic-lightGreen/50 border border-academic-primaryGreen/30 rounded-lg space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-academic-deepGreen">Official Grade Published</span>
-                      <span className="text-sm font-bold text-academic-primaryGreen bg-white px-2.5 py-1 rounded border border-academic-primaryGreen/30">
-                        {selectedSubmission.evaluation.total_score} / {selectedSubmission.max_marks} Marks
-                      </span>
-                    </div>
-
-                    {selectedSubmission.evaluation.late_penalty_deducted ? (
-                      <div className="text-[11px] text-[#A63214] bg-[#FFF5F2] p-2 rounded border border-[#F8D2C9]">
-                        Raw Score: {selectedSubmission.evaluation.raw_score} Marks &bull; Late Penalty Deducted: -{selectedSubmission.evaluation.late_penalty_deducted} Marks
-                      </div>
-                    ) : null}
-
-                    {selectedSubmission.evaluation.general_feedback && (
-                      <div>
-                        <p className="text-[11px] font-bold text-academic-deepGreen">Teacher Feedback:</p>
-                        <p className="text-[11px] text-academic-muted mt-0.5 whitespace-pre-wrap bg-white/70 p-2.5 rounded border border-academic-border/60">
-                          {selectedSubmission.evaluation.general_feedback}
-                        </p>
-                      </div>
-                    )}
-
-                    {selectedSubmission.evaluation.criterion_scores && selectedSubmission.evaluation.criterion_scores.length > 0 && (
-                      <div className="space-y-1.5 pt-1">
-                        <p className="text-[11px] font-bold text-academic-deepGreen">Rubric Breakdown:</p>
-                        <div className="space-y-1">
-                          {selectedSubmission.evaluation.criterion_scores.map((cs: any, i: number) => (
-                            <div key={i} className="flex items-center justify-between bg-white/80 p-2 rounded border border-academic-border/60 text-[11px]">
-                              <span>Criterion {i + 1}</span>
-                              <span className="font-bold text-academic-deepGreen">{cs.score} Marks</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : selectedSubmission.evaluation?.status === 'under_evaluation' ? (
-                  <div className="p-4 bg-blue-50/70 border border-blue-200/70 rounded-lg text-xs space-y-1">
-                    <p className="font-bold text-blue-900">Evaluation in Progress</p>
-                    <p className="text-[11px] text-blue-700">
-                      Your coursework is currently being evaluated by the subject faculty. Official grades and feedback will be visible here once published.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="p-4 bg-academic-bg border border-academic-border rounded-lg text-xs text-academic-muted space-y-1">
-                    <p className="font-semibold text-academic-deepGreen">Pending Evaluation</p>
-                    <p className="text-[11px]">
-                      Your submission is queued and awaiting teacher review. When your faculty publishes grades, your detailed rubric score and feedback will appear here.
-                    </p>
-                  </div>
-                )}
+                <RubricBreakdownSection
+                  criterionScores={submissionResultDetail?.evaluation?.criterion_scores || selectedSubmission.evaluation?.criterion_scores}
+                  totalScore={submissionResultDetail?.evaluation?.total_score ?? selectedSubmission.evaluation?.total_score}
+                  maxMarks={submissionResultDetail?.assessment?.max_marks || selectedSubmission.max_marks || 50}
+                  evaluatorName={submissionResultDetail?.evaluation?.evaluator_name}
+                  evaluationStatus={selectedSubmission.evaluation?.status}
+                  generalFeedback={submissionResultDetail?.evaluation?.general_feedback || selectedSubmission.evaluation?.general_feedback}
+                  latePenaltyDeducted={submissionResultDetail?.evaluation?.late_penalty_deducted ?? selectedSubmission.evaluation?.late_penalty_deducted}
+                  rawScore={submissionResultDetail?.evaluation?.raw_score ?? selectedSubmission.evaluation?.raw_score}
+                  isLoading={isLoadingResultDetail}
+                  isSubmitted={true}
+                />
               </div>
             </div>
 

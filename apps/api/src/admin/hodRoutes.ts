@@ -2946,8 +2946,8 @@ router.get('/institutional-submissions-report', async (req: Request, res: Respon
       a.status === 'published' || a.status === 'closed' || Boolean(a.published_at)
     );
 
-    // 4. Fetch submission records
-    const allReports = await subRepo.getLateSubmissionsReport(user).catch(() => []);
+    // 4. Fetch submission records (scoped to assessmentId if requested for Level 3 on-demand query)
+    const allReports = await subRepo.getLateSubmissionsReport(user, assessmentId).catch(() => []);
 
     // If assessmentId is requested, return Level 3 student report for that specific assessment
     if (assessmentId) {

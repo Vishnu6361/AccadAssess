@@ -2,18 +2,16 @@ import React, { useEffect, useState } from 'react';
 import {
   X,
   ScrollText,
-  Award,
   AlertCircle,
-  CheckCircle2,
   User,
   FileText,
   Loader2
 } from 'lucide-react';
 import {
   evaluationApi,
-  AssessmentResultDetailDTO,
-  CriterionScoreDTO
+  AssessmentResultDetailDTO
 } from '../services/apiClient';
+import { RubricBreakdownSection } from './RubricBreakdownSection';
 
 interface AssessmentResultDetailModalProps {
   isOpen: boolean;
@@ -279,111 +277,17 @@ export const AssessmentResultDetailModal: React.FC<AssessmentResultDetailModalPr
               )}
 
               {/* Rubric Criteria Evaluation Breakdown */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold text-academic-deepGreen uppercase tracking-wider flex items-center space-x-2">
-                    <Award className="w-4 h-4 text-academic-primaryGreen" />
-                    <span>Criterion-Level Rubric Breakdown</span>
-                  </h3>
-                  <span className="text-[11px] text-academic-muted font-medium">
-                    {evaluation?.criterion_scores?.length || 0} Evaluated Criteria
-                  </span>
-                </div>
-
-                {(!evaluation?.criterion_scores || evaluation.criterion_scores.length === 0) ? (
-                  <div className="p-6 text-center bg-academic-paleGreen/10 border border-academic-border rounded-lg text-xs text-academic-muted">
-                    No individual criterion scores recorded for this evaluation.
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {evaluation.criterion_scores.map((cs: CriterionScoreDTO, idx: number) => {
-                      const critMax = cs.criterion_max_marks || 0;
-                      const critScore = cs.score || 0;
-                      const critPct = critMax > 0 ? Math.round((critScore / critMax) * 100) : 0;
-
-                      return (
-                        <div
-                          key={cs.id || cs.criterion_id || idx}
-                          className="p-4 rounded-lg border border-academic-border bg-academic-surface space-y-3 shadow-2xs hover:border-academic-primaryGreen/50 transition-colors"
-                        >
-                          {/* Criterion Header */}
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-academic-border/60 pb-2.5">
-                            <div className="space-y-0.5">
-                              <div className="flex items-center space-x-2">
-                                <span className="w-5 h-5 rounded-full bg-academic-paleGreen text-academic-deepGreen text-[10px] font-bold flex items-center justify-center shrink-0">
-                                  {cs.display_order ?? idx + 1}
-                                </span>
-                                <h4 className="text-xs font-bold text-academic-deepGreen">
-                                  {cs.criterion_title || `Criterion ${idx + 1}`}
-                                </h4>
-                              </div>
-                              {cs.criterion_description && (
-                                <p className="text-[11px] text-academic-muted pl-7">
-                                  {cs.criterion_description}
-                                </p>
-                              )}
-                            </div>
-
-                            <div className="flex items-center space-x-2 pl-7 sm:pl-0">
-                              <span className="px-2 py-0.5 rounded text-xs font-bold bg-academic-paleGreen/60 text-academic-deepGreen border border-academic-border">
-                                {critScore} <span className="text-[10px] text-academic-muted font-normal">/ {critMax} Marks</span>
-                              </span>
-                              <span className="text-[10px] font-semibold text-academic-primaryGreen">
-                                ({critPct}%)
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Selected Rubric Level */}
-                          {cs.selected_level ? (
-                            <div className="p-3 rounded-md bg-emerald-50/60 border border-emerald-200/80 space-y-1 text-xs">
-                              <div className="flex items-center space-x-1.5">
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                                <span className="font-bold text-emerald-900 text-[11px]">
-                                  Attained Performance Level: {cs.selected_level.label}
-                                </span>
-                              </div>
-                              {cs.selected_level.description && (
-                                <p className="text-[11px] text-emerald-800/90 leading-relaxed pl-5">
-                                  {cs.selected_level.description}
-                                </p>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="text-[10px] text-academic-muted italic">
-                              Direct criterion score awarded without level descriptor.
-                            </div>
-                          )}
-
-                          {/* Criterion Feedback */}
-                          {cs.feedback && (
-                            <div className="text-xs text-academic-deepGreen pl-3 border-l-2 border-academic-primaryGreen bg-academic-paleGreen/15 py-1.5 pr-2 rounded-r">
-                              <span className="font-semibold text-academic-muted text-[10px] block uppercase tracking-wider">
-                                Faculty Note:
-                              </span>
-                              <p className="text-[11px] text-academic-deepGreen mt-0.5">
-                                {cs.feedback}
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Overall Faculty Feedback */}
-              {evaluation?.general_feedback && (
-                <div className="p-4 rounded-lg border border-academic-border bg-academic-paleGreen/20 space-y-1.5">
-                  <span className="text-xs font-bold text-academic-deepGreen uppercase tracking-wider flex items-center space-x-2">
-                    <span>Instructor General Feedback & Recommendations</span>
-                  </span>
-                  <p className="text-xs text-academic-deepGreen leading-relaxed italic bg-academic-surface/60 p-3 rounded border border-academic-border/50">
-                    "{evaluation.general_feedback}"
-                  </p>
-                </div>
-              )}
+              <RubricBreakdownSection
+                criterionScores={evaluation?.criterion_scores}
+                totalScore={evaluation?.total_score}
+                maxMarks={assessment?.max_marks || 50}
+                evaluatorName={evaluation?.evaluator_name}
+                evaluationStatus={evaluation?.status}
+                generalFeedback={evaluation?.general_feedback}
+                latePenaltyDeducted={evaluation?.late_penalty_deducted}
+                rawScore={evaluation?.raw_score}
+                isSubmitted={true}
+              />
             </>
           )}
         </div>

@@ -642,7 +642,7 @@ router.get('/result-detail/:submissionId', async (req: Request, res: Response) =
     }
 
     // Role-based security checks
-    if (user.isHOD) {
+    if (user.isHOD || user.roles.includes('hod') || user.activeRole === 'hod') {
       // HOD has institutional oversight authorization
     } else if (user.roles.includes('student') || user.activeRole === 'student') {
       if (submission.student_id !== user.profile.id) {

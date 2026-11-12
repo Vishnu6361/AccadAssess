@@ -21,11 +21,13 @@ import {
   classTeacherApi,
   assessmentApi,
   submissionApi,
+  evaluationApi,
   ClassTeacherCohortDTO,
   ClassTeacherCohortSubjectDTO,
   AssessmentDTO
 } from '../../services/apiClient';
 import { ClassTeacherAcademicReport } from './ClassTeacherAcademicReport';
+import { RubricBreakdownSection } from '../../components/RubricBreakdownSection';
 
 interface ClassTeacherWorkspaceProps {
   initialTab?: 'overview' | 'assessments' | 'reports' | 'students' | 'performance';
@@ -384,25 +386,32 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
   }, [currentClass, cohortSearch]);
 
   const handleOpenSubmissionDetails = async (row: any) => {
+    setSelectedSubmissionDetails({
+      reportRow: row,
+      fullSubmission: null,
+      resultDetail: null
+    });
+
     if (!row.submission_id) {
-      setSelectedSubmissionDetails({
-        reportRow: row,
-        fullSubmission: null
-      });
       return;
     }
 
     setIsLoadingSubmissionDetails(true);
     try {
-      const fullSub = await submissionApi.getSubmissionById(row.submission_id);
+      const [fullSub, resDetail] = await Promise.all([
+        submissionApi.getSubmissionById(row.submission_id).catch(() => null),
+        evaluationApi.getResultDetail(row.submission_id).catch(() => null)
+      ]);
       setSelectedSubmissionDetails({
         reportRow: row,
-        fullSubmission: fullSub
+        fullSubmission: fullSub,
+        resultDetail: resDetail
       });
     } catch {
       setSelectedSubmissionDetails({
         reportRow: row,
-        fullSubmission: null
+        fullSubmission: null,
+        resultDetail: null
       });
     } finally {
       setIsLoadingSubmissionDetails(false);
@@ -1439,8 +1448,8 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
       {/* ========================================================================= */}
       {selectedSubmissionDetails && (
         <div className="fixed inset-0 bg-academic-deepGreen/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="card-surface max-w-xl w-full shadow-2xl border border-academic-border animate-in fade-in p-6">
-            <div className="flex items-center justify-between pb-3 border-b border-academic-border mb-4">
+          <div className="card-surface max-w-2xl w-full max-h-[90vh] shadow-2xl border border-academic-border animate-in fade-in p-6 flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-academic-border mb-4 shrink-0">
               <div className="flex items-center space-x-2">
                 <FileText className="w-5 h-5 text-academic-primaryGreen" />
                 <h3 className="text-base font-bold text-academic-deepGreen">
@@ -1457,7 +1466,7 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
             </div>
 
             {/* Read-Only Notice */}
-            <div className="mb-4 p-2.5 bg-blue-50 border border-blue-200 rounded text-blue-900 text-xs flex items-center space-x-2">
+            <div className="mb-4 p-2.5 bg-blue-50 border border-blue-200 rounded text-blue-900 text-xs flex items-center space-x-2 shrink-0">
               <Shield className="w-4 h-4 text-blue-700 flex-shrink-0" />
               <span>
                 <strong>Read-Only Class Teacher View:</strong> Grading, score authoring, and rubric mark modifications are strictly restricted to authorized Subject Teachers.
@@ -1465,12 +1474,12 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
             </div>
 
             {isLoadingSubmissionDetails ? (
-              <div className="py-8 text-center text-academic-muted flex items-center justify-center space-x-2">
+              <div className="py-12 text-center text-academic-muted flex items-center justify-center space-x-2 flex-1">
                 <RefreshCw className="w-4 h-4 animate-spin text-academic-primaryGreen" />
-                <span>Loading submission files and evaluation details...</span>
+                <span>Loading submission files and rubric evaluation details...</span>
               </div>
             ) : (
-              <div className="space-y-4 text-xs">
+              <div className="space-y-4 text-xs flex-1 overflow-y-auto pr-1">
                 <div className="grid grid-cols-2 gap-3 p-3 bg-academic-surface rounded border border-academic-border">
                   <div>
                     <span className="text-academic-muted block text-[11px]">Student</span>
@@ -1558,21 +1567,24 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
                   )}
                 </div>
 
-                {/* Evaluator Feedback if Available */}
-                {selectedSubmissionDetails.reportRow.feedback && (
-                  <div className="p-3 bg-academic-surface rounded border border-academic-border">
-                    <span className="font-bold text-academic-deepGreen uppercase tracking-wider block mb-1 text-[11px]">
-                      Evaluator Feedback
-                    </span>
-                    <p className="text-academic-muted italic">
-                      "{selectedSubmissionDetails.reportRow.feedback}"
-                    </p>
-                  </div>
-                )}
+                {/* Rubric-wise Evaluation Breakdown Section */}
+                <div className="pt-1">
+                  <RubricBreakdownSection
+                    criterionScores={selectedSubmissionDetails.resultDetail?.evaluation?.criterion_scores}
+                    totalScore={selectedSubmissionDetails.resultDetail?.evaluation?.total_score ?? selectedSubmissionDetails.reportRow.published_score}
+                    maxMarks={selectedSubmissionDetails.resultDetail?.assessment?.max_marks || selectedSubmissionDetails.reportRow.max_marks || 50}
+                    evaluatorName={selectedSubmissionDetails.resultDetail?.evaluation?.evaluator_name}
+                    evaluationStatus={selectedSubmissionDetails.resultDetail?.evaluation?.status || selectedSubmissionDetails.reportRow.evaluation_status}
+                    generalFeedback={selectedSubmissionDetails.resultDetail?.evaluation?.general_feedback || selectedSubmissionDetails.reportRow.feedback}
+                    latePenaltyDeducted={selectedSubmissionDetails.resultDetail?.evaluation?.late_penalty_deducted}
+                    rawScore={selectedSubmissionDetails.resultDetail?.evaluation?.raw_score}
+                    isSubmitted={Boolean(selectedSubmissionDetails.reportRow.is_submitted)}
+                  />
+                </div>
               </div>
             )}
 
-            <div className="mt-5 pt-3 border-t border-academic-border flex justify-end">
+            <div className="mt-4 pt-3 border-t border-academic-border flex justify-end shrink-0">
               <button
                 type="button"
                 onClick={() => setSelectedSubmissionDetails(null)}
