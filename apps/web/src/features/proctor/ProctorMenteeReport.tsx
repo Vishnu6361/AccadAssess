@@ -62,7 +62,13 @@ const ProctorReportSkeleton: React.FC = () => (
   </div>
 );
 
-export const ProctorMenteeReport: React.FC = () => {
+interface ProctorMenteeReportProps {
+  initialTab?: 'performance' | 'submissions';
+}
+
+export const ProctorMenteeReport: React.FC<ProctorMenteeReportProps> = ({
+  initialTab = 'performance'
+}) => {
   const { userContext } = useAuth();
   const proctorId = userContext?.profile.id || '';
 
@@ -76,7 +82,13 @@ export const ProctorMenteeReport: React.FC = () => {
   } = useProctorReport(proctorId);
 
   // Top tab mode: Academic Performance Dashboard vs Submission Tracking
-  const [activeTab, setActiveTab] = useState<'performance' | 'submissions'>('performance');
+  const [activeTab, setActiveTab] = useState<'performance' | 'submissions'>(initialTab);
+
+  React.useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
 
   // Active navigation selection
   const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);

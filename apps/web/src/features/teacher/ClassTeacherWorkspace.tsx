@@ -9,13 +9,14 @@ import {
   FileText,
   X,
   Shield,
-  BookOpen,
   ArrowLeft,
   ChevronRight,
   Clock,
   CheckCircle2,
   Calendar,
-  Award
+  Award,
+  FileSpreadsheet,
+  Users
 } from 'lucide-react';
 import {
   classTeacherApi,
@@ -30,13 +31,19 @@ import { ClassTeacherAcademicReport } from './ClassTeacherAcademicReport';
 import { RubricBreakdownSection } from '../../components/RubricBreakdownSection';
 
 interface ClassTeacherWorkspaceProps {
-  initialTab?: 'overview' | 'assessments' | 'reports' | 'students' | 'performance';
+  initialTab?: 'performance' | 'reports' | 'students';
 }
 
 export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
-  initialTab = 'overview'
+  initialTab = 'performance'
 }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'assessments' | 'reports' | 'students' | 'performance'>(initialTab);
+  const normalizeTab = (tab?: string): 'performance' | 'reports' | 'students' => {
+    if (tab === 'reports' || tab === 'late_reports' || tab === 'submissions') return 'reports';
+    if (tab === 'students') return 'students';
+    return 'performance';
+  };
+
+  const [activeTab, setActiveTab] = useState<'performance' | 'reports' | 'students'>(normalizeTab(initialTab));
   const [cohortClasses, setCohortClasses] = useState<ClassTeacherCohortDTO[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('');
   const [assessments, setAssessments] = useState<AssessmentDTO[]>([]);
@@ -44,19 +51,15 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Filters for Assessments Tab
-  const [assessmentSearch, setAssessmentSearch] = useState<string>('');
-  const [assessmentSubjectFilter, setAssessmentSubjectFilter] = useState<string>('all');
-
-  // Hierarchy state for Submission Report Tab (Subject-First 3-level pattern)
-  const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
+  // Operational Submissions & Late Report State (Direct Assessment View - NO duplicate subject cards)
   const [selectedAssessmentId, setSelectedAssessmentId] = useState<string | null>(null);
+  const [reportSearch, setReportSearch] = useState<string>('');
+  const [reportSubjectFilter, setReportSubjectFilter] = useState<string>('all');
+  const [reportTimelineFilter, setReportTimelineFilter] = useState<'all' | 'open' | 'closed'>('all');
 
-  // Search & Filter states for Submission Report Tab
-  const [subjectSearch, setSubjectSearch] = useState<string>('');
-  const [reportAssessmentSearch, setReportAssessmentSearch] = useState<string>('');
+  // Level 2 student roster filters within selected assessment
   const [studentSearch, setStudentSearch] = useState<string>('');
-  const [studentStatusFilter, setStudentStatusFilter] = useState<'all' | 'submitted' | 'pending'>('all');
+  const [studentStatusFilter, setStudentStatusFilter] = useState<'all' | 'submitted' | 'pending' | 'late'>('all');
 
   // Filters for Cohort Roster Tab
   const [cohortSearch, setCohortSearch] = useState<string>('');
@@ -67,7 +70,7 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
   const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
 
   useEffect(() => {
-    setActiveTab(initialTab);
+    setActiveTab(normalizeTab(initialTab));
   }, [initialTab]);
 
   const loadData = async () => {
@@ -161,32 +164,25 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
     return lateReports.filter(r => r.class_id === currentClass.id);
   }, [lateReports, currentClass]);
 
-  // Selected subject and assessment in 3-level hierarchy
-  const selectedSubject = useMemo(() => {
-    if (!selectedSubjectId || !currentClass) return null;
-    return classSubjectsList.find(s => s.id === selectedSubjectId || s.subject_id === selectedSubjectId) || null;
-  }, [classSubjectsList, selectedSubjectId, currentClass]);
-
+  // Selected assessment object for Level 2 submissions view
   const selectedAssessment = useMemo(() => {
     if (!selectedAssessmentId) return null;
     return assessments.find(a => a.id === selectedAssessmentId) || null;
   }, [assessments, selectedAssessmentId]);
 
-  // Helper to get published assessments for a given subject
-  const getPublishedAssessmentsForSubject = (subject: ClassTeacherCohortSubjectDTO) => {
-    return assessments.filter(a => {
-      const matchesSubject = a.class_subject_id === subject.id || a.class_subject_id === subject.subject_id;
-      const isPublished = a.status === 'published' || a.status === 'closed' || Boolean(a.published_at);
-      return matchesSubject && isPublished;
-    });
-  };
+  // Subject object corresponding to the selected assessment
+  const selectedAssessmentSubject = useMemo(() => {
+    if (!selectedAssessment) return null;
+    return classSubjectsList.find(s => s.id === selectedAssessment.class_subject_id || s.subject_id === selectedAssessment.class_subject_id) || null;
+  }, [selectedAssessment, classSubjectsList]);
 
-  // Academic Cohort Specialization Rule (e.g. MCA Semester 3):
+  // Academic Cohort Specialization Rule:
   // If the subject is tied to a specialization, only enrolled students with matching specialization are eligible.
   // If the subject has no specialization (Core / Common), all enrolled students in the class are eligible.
   const getEligibleStudentsForSubject = (subject: ClassTeacherCohortSubjectDTO | null) => {
-    if (!currentClass || !subject) return [];
+    if (!currentClass) return [];
     const allStudents = currentClass.students || [];
+    if (!subject) return allStudents;
 
     if (subject.specialization_id || subject.specialization_code) {
       return allStudents.filter(student => {
@@ -222,39 +218,62 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
     }
   };
 
-  // Level 1: Filtered Subjects List
-  const filteredSubjectsList = useMemo(() => {
-    const q = subjectSearch.trim().toLowerCase();
-    if (!q) return classSubjectsList;
-    return classSubjectsList.filter(s =>
-      s.subject_name.toLowerCase().includes(q) ||
-      (s.subject_code && s.subject_code.toLowerCase().includes(q))
-    );
-  }, [classSubjectsList, subjectSearch]);
+  // Operational KPI Metrics for Submissions & Late Report
+  const operationalMetrics = useMemo(() => {
+    const totalStudents = currentClass?.students_count || 0;
+    const totalAssessments = classAssessments.length;
+    const totalPossibleSubmissions = totalStudents * totalAssessments;
 
-  // Level 2: Filtered Assessments for Selected Subject
-  const publishedAssessmentsForSelectedSubject = useMemo(() => {
-    if (!selectedSubject) return [];
-    return getPublishedAssessmentsForSubject(selectedSubject);
-  }, [selectedSubject, assessments]);
+    const submittedCount = classReports.filter(r => r.is_submitted).length;
+    const lateCount = classReports.filter(r => r.is_submitted && (r.is_late || r.timing_status === 'Late')).length;
+    const pendingCount = totalPossibleSubmissions > 0
+      ? Math.max(0, totalPossibleSubmissions - submittedCount)
+      : 0;
 
-  const filteredAssessmentsInLevel2 = useMemo(() => {
-    const q = reportAssessmentSearch.trim().toLowerCase();
-    if (!q) return publishedAssessmentsForSelectedSubject;
-    return publishedAssessmentsForSelectedSubject.filter(a =>
-      a.title.toLowerCase().includes(q)
-    );
-  }, [publishedAssessmentsForSelectedSubject, reportAssessmentSearch]);
+    return {
+      totalStudents,
+      totalAssessments,
+      submittedCount,
+      totalPossibleSubmissions,
+      lateCount,
+      pendingCount
+    };
+  }, [currentClass, classAssessments, classReports]);
 
-  // Level 3: Eligible Students & Submissions for Selected Assessment
-  const eligibleStudentsForSelectedSubject = useMemo(() => {
-    return getEligibleStudentsForSubject(selectedSubject);
-  }, [selectedSubject, currentClass]);
+  // Filtered operational assessments for the Submissions & Deadlines direct view
+  const filteredReportAssessments = useMemo(() => {
+    return classAssessments.filter(ass => {
+      // Subject filter
+      if (reportSubjectFilter !== 'all') {
+        const matchesSubject = ass.class_subject_id === reportSubjectFilter;
+        if (!matchesSubject) {
+          const targetSub = classSubjectsList.find(s => s.id === reportSubjectFilter || s.subject_id === reportSubjectFilter);
+          if (!targetSub || (ass.class_subject_id !== targetSub.id && ass.class_subject_id !== targetSub.subject_id)) {
+            return false;
+          }
+        }
+      }
 
-  const level3Students = useMemo(() => {
-    if (!selectedAssessment || !selectedSubject) return [];
+      // Timeline filter
+      const isPastDue = ass.deadline_at ? new Date(ass.deadline_at) < new Date() : false;
+      if (reportTimelineFilter === 'open' && isPastDue) return false;
+      if (reportTimelineFilter === 'closed' && !isPastDue) return false;
 
-    return eligibleStudentsForSelectedSubject.map(student => {
+      // Search filter
+      const q = reportSearch.trim().toLowerCase();
+      if (!q) return true;
+      const titleMatch = (ass.title || '').toLowerCase().includes(q);
+      const subMatch = (ass.subject_details || '').toLowerCase().includes(q);
+      return titleMatch || subMatch;
+    });
+  }, [classAssessments, reportSubjectFilter, reportTimelineFilter, reportSearch, classSubjectsList]);
+
+  // Level 2: Student roster & submissions for selected assessment
+  const assessmentStudentsRoster = useMemo(() => {
+    if (!selectedAssessment) return [];
+    const eligible = selectedAssessmentSubject ? getEligibleStudentsForSubject(selectedAssessmentSubject) : (currentClass?.students || []);
+
+    return eligible.map(student => {
       const match = classReports.find(r =>
         r.assessment_id === selectedAssessment.id &&
         (r.student_id === student.id || (student.usn && r.student_usn === student.usn))
@@ -290,7 +309,7 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
         assessment_title: selectedAssessment.title,
         class_id: currentClass?.id,
         class_name: currentClass?.name,
-        subject_name: selectedSubject.subject_name,
+        subject_name: selectedAssessmentSubject?.subject_name || selectedAssessment.subject_details,
         student_id: student.id,
         student_name: student.name,
         student_email: student.email,
@@ -313,6 +332,7 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
         specialization_code: student.specialization_code,
         specialization_name: student.specialization_name,
         is_submitted: isSubmitted,
+        is_late: isLate,
         submission_id: match?.submission_id || null,
         submitted_at: match?.submitted_at || null,
         timing_status: timingStatus,
@@ -322,13 +342,15 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
         reportRow: fallbackRow
       };
     });
-  }, [selectedAssessment, selectedSubject, eligibleStudentsForSelectedSubject, classReports, currentClass]);
+  }, [selectedAssessment, selectedAssessmentSubject, currentClass, classReports]);
 
-  const filteredLevel3Students = useMemo(() => {
-    return level3Students.filter(item => {
+  // Filtered Level 2 student roster
+  const filteredAssessmentStudents = useMemo(() => {
+    return assessmentStudentsRoster.filter(item => {
       // Status filter
       if (studentStatusFilter === 'submitted' && !item.is_submitted) return false;
       if (studentStatusFilter === 'pending' && item.is_submitted) return false;
+      if (studentStatusFilter === 'late' && (!item.is_submitted || !item.is_late)) return false;
 
       // Search filter
       const q = studentSearch.trim().toLowerCase();
@@ -339,40 +361,9 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
         item.email.toLowerCase().includes(q)
       );
     });
-  }, [level3Students, studentSearch, studentStatusFilter]);
+  }, [assessmentStudentsRoster, studentSearch, studentStatusFilter]);
 
-  // Focused 4 KPI Metrics for Overview Tab
-  const kpiMetrics = useMemo(() => {
-    const totalStudents = currentClass?.students_count || 0;
-    const totalAssessments = classAssessments.length;
-    const totalPossibleSubmissions = totalStudents * totalAssessments;
-
-    const submittedCount = classReports.filter(r => r.is_submitted).length;
-    const pendingCount = totalPossibleSubmissions > 0
-      ? Math.max(0, totalPossibleSubmissions - submittedCount)
-      : 0;
-
-    return {
-      totalStudents,
-      totalAssessments,
-      submittedCount,
-      pendingCount
-    };
-  }, [currentClass, classAssessments, classReports]);
-
-  // Filtered Assessments for Tab B
-  const filteredAssessments = useMemo(() => {
-    return classAssessments.filter(ass => {
-      const matchesSearch = assessmentSearch.trim() === '' ||
-        ass.title.toLowerCase().includes(assessmentSearch.toLowerCase()) ||
-        (ass.subject_details && ass.subject_details.toLowerCase().includes(assessmentSearch.toLowerCase()));
-
-      const matchesSubject = assessmentSubjectFilter === 'all' || ass.class_subject_id === assessmentSubjectFilter;
-      return matchesSearch && matchesSubject;
-    });
-  }, [classAssessments, assessmentSearch, assessmentSubjectFilter]);
-
-  // Filtered Cohort Students
+  // Filtered Cohort Students for Tab Students
   const filteredCohortStudents = useMemo(() => {
     if (!currentClass) return [];
     const students = currentClass.students || [];
@@ -431,7 +422,10 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
   };
 
   const exportAssessmentReportToCsv = () => {
-    if (!selectedAssessment || !selectedSubject) return;
+    if (!selectedAssessment) return;
+    const subjectName = selectedAssessmentSubject?.name || selectedAssessmentSubject?.subject_name || selectedAssessment.subject_details || 'Subject';
+    const subjectCode = selectedAssessmentSubject?.subject_code || 'SUB';
+
     const headers = [
       'Student Name',
       'Institutional ID (USN)',
@@ -447,14 +441,14 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
       'Max Marks'
     ];
 
-    const rows = filteredLevel3Students.map(item => {
+    const rows = filteredAssessmentStudents.map(item => {
       return [
         `"${(item.name || '').replace(/"/g, '""')}"`,
         `"${(item.usn || 'N/A').replace(/"/g, '""')}"`,
         `"${(item.specialization_code || 'Core').replace(/"/g, '""')}"`,
         `"${(selectedAssessment.title || '').replace(/"/g, '""')}"`,
-        `"${(selectedSubject.subject_code || '').replace(/"/g, '""')}"`,
-        `"${(selectedSubject.name || selectedSubject.subject_name || '').replace(/"/g, '""')}"`,
+        `"${subjectCode.replace(/"/g, '""')}"`,
+        `"${subjectName.replace(/"/g, '""')}"`,
         `"${item.is_submitted ? 'Submitted' : 'Pending'}"`,
         `"${item.submitted_at ? formatDateTime(item.submitted_at) : '—'}"`,
         `"${item.timing_status}"`,
@@ -470,7 +464,7 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
     const link = document.createElement('a');
     link.href = url;
     const safeTitle = selectedAssessment.title.toLowerCase().replace(/[^a-z0-9]/g, '_');
-    link.download = `${selectedSubject.subject_code || 'subject'}_${safeTitle}_submissions_${new Date().toISOString().split('T')[0]}.csv`;
+    link.download = `${subjectCode}_${safeTitle}_submissions_${new Date().toISOString().split('T')[0]}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -503,14 +497,13 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
                     Assigned Class: <strong className="text-academic-deepGreen font-semibold">{currentClass.name}</strong> • Authorized Class Teacher: <strong className="text-academic-deepGreen font-semibold">{currentClass.class_teacher_name}</strong>
                   </span>
                 ) : (
-                  'Supervise enrolled students, published assessments, and submission reports.'
+                  'Supervise enrolled students, academic performance, and operational submissions.'
                 )}
               </p>
             </div>
           </div>
 
           <div className="flex items-center space-x-3">
-            {/* Show selector only if multiple distinct classes are authorized */}
             {cohortClasses.length > 1 && (
               <div className="flex items-center space-x-2">
                 <label htmlFor="class-select" className="text-xs font-medium text-academic-muted whitespace-nowrap">
@@ -541,7 +534,6 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
           </div>
         </div>
 
-        {/* Clear HOD Assignment Indicator if viewing via semester allocation without explicit appointment */}
         {currentClass && currentClass.class_teacher_name === 'Unassigned' && (
           <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-md text-amber-800 text-xs flex items-center justify-between">
             <div className="flex items-center space-x-2">
@@ -567,46 +559,11 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* 2. PRIMARY 4-FUNCTION TAB NAVIGATION                                      */}
+      {/* 2. STREAMLINED 3-FUNCTION WORKSPACE TAB NAVIGATION                        */}
+      {/* Distinct responsibilities: Performance vs Submissions vs Cohort Directory */}
       {/* ========================================================================= */}
       <div className="border-b border-academic-border">
         <nav className="flex space-x-2 sm:space-x-6" aria-label="Class Teacher Workspace Tabs">
-          <button
-            onClick={() => setActiveTab('overview')}
-            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 ${activeTab === 'overview'
-              ? 'border-academic-primaryGreen text-academic-deepGreen font-bold'
-              : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-              }`}
-          >
-            <span>Overview</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('assessments')}
-            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 ${activeTab === 'assessments'
-              ? 'border-academic-primaryGreen text-academic-deepGreen font-bold'
-              : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-              }`}
-          >
-            <span>Assessments</span>
-            <span className="px-2 py-0.5 rounded-full text-xs bg-academic-paleGreen text-academic-deepGreen">
-              {classAssessments.length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('reports')}
-            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 ${activeTab === 'reports'
-              ? 'border-academic-primaryGreen text-academic-deepGreen font-bold'
-              : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-              }`}
-          >
-            <span>Submissions & Late Report</span>
-            <span className="px-2 py-0.5 rounded-full text-xs bg-academic-paleGreen text-academic-deepGreen">
-              {classSubjectsList.length} Subjects
-            </span>
-          </button>
-
           <button
             onClick={() => setActiveTab('performance')}
             className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 ${activeTab === 'performance'
@@ -616,6 +573,26 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
           >
             <Award className="w-4 h-4 text-academic-primaryGreen" />
             <span>Academic Performance</span>
+            <span className="px-2 py-0.5 rounded-full text-xs bg-academic-paleGreen text-academic-deepGreen">
+              {classSubjectsList.length} Subjects
+            </span>
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveTab('reports');
+              setSelectedAssessmentId(null);
+            }}
+            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 ${activeTab === 'reports'
+              ? 'border-academic-primaryGreen text-academic-deepGreen font-bold'
+              : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+              }`}
+          >
+            <FileSpreadsheet className="w-4 h-4 text-academic-primaryGreen" />
+            <span>Submissions & Late Report</span>
+            <span className="px-2 py-0.5 rounded-full text-xs bg-academic-paleGreen text-academic-deepGreen">
+              {classAssessments.length} Assessments
+            </span>
           </button>
 
           <button
@@ -625,6 +602,7 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
               : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
               }`}
           >
+            <Users className="w-4 h-4 text-academic-primaryGreen" />
             <span>Student Cohort</span>
             <span className="px-2 py-0.5 rounded-full text-xs bg-academic-paleGreen text-academic-deepGreen">
               {currentClass?.students_count || 0}
@@ -634,228 +612,27 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
       </div>
 
       {/* ========================================================================= */}
-      {/* TAB A: OVERVIEW (FOCUSED 4-METRIC DASHBOARD ONLY)                          */}
+      {/* TAB 1: ACADEMIC PERFORMANCE (Subject-Wise Marks, Class Avg & Rubrics)      */}
       {/* ========================================================================= */}
-      {activeTab === 'overview' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Metric 1: Assigned Class */}
-            <div className="card p-5 bg-academic-surface border border-academic-border shadow-sm">
-              <span className="text-xs font-semibold text-academic-muted uppercase tracking-wider block">
-                Assigned Class
-              </span>
-              <div className="mt-2 text-2xl font-bold text-academic-deepGreen truncate">
-                {currentClass?.name || 'Unassigned'}
-              </div>
-              <p className="text-xs text-academic-muted mt-1 truncate">
-                Teacher: {currentClass?.class_teacher_name || 'Unassigned'}
-              </p>
-            </div>
-
-            {/* Metric 2: Enrolled Student Count */}
-            <div className="card p-5 bg-academic-surface border border-academic-border shadow-sm">
-              <span className="text-xs font-semibold text-academic-muted uppercase tracking-wider block">
-                Enrolled Students
-              </span>
-              <div className="mt-2 text-2xl font-bold text-academic-deepGreen">
-                {kpiMetrics.totalStudents}
-              </div>
-              <p className="text-xs text-academic-muted mt-1">
-                Active students registered in cohort
-              </p>
-            </div>
-
-            {/* Metric 3: Published Assessment Count */}
-            <div className="card p-5 bg-academic-surface border border-academic-border shadow-sm">
-              <span className="text-xs font-semibold text-academic-muted uppercase tracking-wider block">
-                Published Assessments
-              </span>
-              <div className="mt-2 text-2xl font-bold text-academic-deepGreen">
-                {kpiMetrics.totalAssessments}
-              </div>
-              <p className="text-xs text-academic-muted mt-1">
-                Active published evaluations in class
-              </p>
-            </div>
-
-            {/* Metric 4: Pending Submissions Count */}
-            <div className="card p-5 bg-academic-surface border border-academic-border shadow-sm">
-              <span className="text-xs font-semibold text-academic-muted uppercase tracking-wider block">
-                Pending Submissions
-              </span>
-              <div className="mt-2 text-2xl font-bold text-amber-700">
-                {kpiMetrics.pendingCount}
-              </div>
-              <p className="text-xs text-academic-muted mt-1">
-                Submissions awaiting student completion
-              </p>
-            </div>
-          </div>
-
-          {/* Quick Access Navigation */}
-          <div className="card p-5 bg-academic-surface border border-academic-border shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-            <div className="text-academic-muted">
-              Use <strong className="text-academic-deepGreen">Submission Report</strong> to inspect all student submissions, timing status, and evaluation results, or <strong className="text-academic-deepGreen">Student Cohort</strong> for the class roster.
-            </div>
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={() => setActiveTab('reports')}
-                className="btn-primary py-1.5 px-3 text-xs"
-              >
-                Open Submission Report
-              </button>
-            </div>
-          </div>
-        </div>
+      {activeTab === 'performance' && (
+        <ClassTeacherAcademicReport initialClassId={selectedClassId} />
       )}
 
       {/* ========================================================================= */}
-      {/* TAB B: ASSESSMENTS (COMPACT TABLE)                                        */}
-      {/* ========================================================================= */}
-      {activeTab === 'assessments' && (
-        <div className="space-y-4">
-          <div className="p-3.5 bg-academic-surface border border-academic-border rounded-lg shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="w-4 h-4 text-academic-muted absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="Search assessments by title..."
-                value={assessmentSearch}
-                onChange={(e) => setAssessmentSearch(e.target.value)}
-                className="input-field pl-9 text-xs w-full py-1.5"
-              />
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <label htmlFor="subject-filter" className="text-xs text-academic-muted whitespace-nowrap">
-                Subject:
-              </label>
-              <select
-                id="subject-filter"
-                value={assessmentSubjectFilter}
-                onChange={(e) => setAssessmentSubjectFilter(e.target.value)}
-                className="input-field text-xs py-1.5 px-3 min-w-[160px]"
-              >
-                <option value="all">All Class Subjects</option>
-                {(currentClass?.subjects || []).map(s => (
-                  <option key={s.id} value={s.id}>{s.subject_name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="bg-academic-surface border border-academic-border rounded-lg shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-academic-paleGreen/50 text-academic-deepGreen font-semibold border-b border-academic-border">
-                  <tr>
-                    <th className="py-3 px-4">Assessment Title</th>
-                    <th className="py-3 px-4">Subject</th>
-                    <th className="py-3 px-4">Due Date</th>
-                    <th className="py-3 px-4">Submission Progress</th>
-                    <th className="py-3 px-4 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-academic-border">
-                  {filteredAssessments.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="py-8 text-center text-academic-muted">
-                        No published assessments found for this class cohort.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredAssessments.map(ass => {
-                      const assReports = classReports.filter(r => r.assessment_id === ass.id);
-                      const submitted = assReports.filter(r => r.is_submitted).length;
-                      const totalStudents = currentClass?.students_count || 0;
-                      const progressPct = totalStudents > 0 ? Math.round((submitted / totalStudents) * 100) : 0;
-                      const isPastDue = ass.deadline_at ? new Date(ass.deadline_at) < new Date() : false;
-
-                      return (
-                        <tr key={ass.id} className="hover:bg-academic-paleGreen/20 transition-colors">
-                          <td className="py-3 px-4 font-semibold text-academic-deepGreen">
-                            <span className="block">{ass.title}</span>
-                            <span className="text-[11px] font-normal text-academic-muted">Max marks: {ass.max_marks || 50}</span>
-                          </td>
-                          <td className="py-3 px-4 text-academic-deepGreen">
-                            {ass.subject_details || 'Subject'}
-                          </td>
-                          <td className="py-3 px-4 text-academic-muted">
-                            <span>{ass.deadline_at ? new Date(ass.deadline_at).toLocaleDateString() : 'Open'}</span>
-                            {isPastDue && <span className="ml-1.5 text-[10px] text-red-600 font-bold">(Closed)</span>}
-                          </td>
-                          <td className="py-3 px-4">
-                            <div className="flex items-center space-x-2">
-                              <div className="w-20 bg-academic-paleGreen rounded-full h-1.5 overflow-hidden">
-                                <div
-                                  className="h-1.5 rounded-full bg-academic-primaryGreen"
-                                  style={{ width: `${progressPct}%` }}
-                                />
-                              </div>
-                              <span className="font-semibold text-academic-deepGreen">
-                                {submitted} / {totalStudents} ({progressPct}%)
-                              </span>
-                            </div>
-                          </td>
-                          <td className="py-3 px-4 text-right">
-                            <button
-                              onClick={() => {
-                                const sub = classSubjectsList.find(s => s.id === ass.class_subject_id || s.subject_id === ass.class_subject_id);
-                                if (sub) {
-                                  setSelectedSubjectId(sub.id || sub.subject_id);
-                                }
-                                setSelectedAssessmentId(ass.id);
-                                setActiveTab('reports');
-                              }}
-                              className="btn-secondary py-1 px-2.5 text-xs inline-flex items-center space-x-1"
-                            >
-                              <Eye className="w-3.5 h-3.5" />
-                              <span>View Report</span>
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* TAB C: SUBMISSIONS REPORT (SUBJECT-FIRST 3-LEVEL HIERARCHY)                */}
+      {/* TAB 2: SUBMISSIONS & LATE REPORT (Direct Operational Tracking - NO DUPES)  */}
       {/* ========================================================================= */}
       {activeTab === 'reports' && (
         <div className="space-y-6">
           {/* Breadcrumb Navigation Trail */}
           <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm text-academic-muted flex-wrap">
             <button
-              onClick={() => {
-                setSelectedSubjectId(null);
-                setSelectedAssessmentId(null);
-              }}
+              onClick={() => setSelectedAssessmentId(null)}
               className={`font-medium transition-colors hover:text-academic-primaryGreen ${
-                !selectedSubject ? 'text-academic-deepGreen font-semibold cursor-default' : ''
+                !selectedAssessment ? 'text-academic-deepGreen font-semibold cursor-default' : ''
               }`}
             >
-              Class Submissions Report
+              Assessments & Deadlines
             </button>
-
-            {selectedSubject && (
-              <>
-                <ChevronRight className="w-4 h-4 text-academic-muted/60 shrink-0" />
-                <button
-                  onClick={() => setSelectedAssessmentId(null)}
-                  className={`font-medium transition-colors hover:text-academic-primaryGreen ${
-                    !selectedAssessment ? 'text-academic-deepGreen font-semibold cursor-default' : ''
-                  }`}
-                >
-                  {selectedSubject.subject_code || 'Subject'} - {selectedSubject.name || selectedSubject.subject_name}
-                </button>
-              </>
-            )}
 
             {selectedAssessment && (
               <>
@@ -865,276 +642,283 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
                 </span>
                 <ChevronRight className="w-4 h-4 text-academic-muted/60 shrink-0" />
                 <span className="text-academic-primaryGreen font-semibold">
-                  Student Submission Report
+                  Student Submissions Roster
                 </span>
               </>
             )}
           </nav>
 
           {/* ================================================================== */}
-          {/* LEVEL 1: SUBJECTS LIST (Clean, Subject-First Overview)             */}
+          {/* LEVEL 1: DIRECT ASSESSMENTS & DEADLINES VIEW (Zero Duplicate Cards) */}
           {/* ================================================================== */}
-          {!selectedSubject && (
+          {!selectedAssessment && (
             <div className="space-y-6">
               {/* Header */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-academic-border">
                 <div>
                   <h2 className="text-xl font-bold text-academic-deepGreen flex items-center gap-2.5">
-                    <BookOpen className="w-6 h-6 text-academic-primaryGreen" />
-                    Class Submissions Report
+                    <FileSpreadsheet className="w-6 h-6 text-academic-primaryGreen" />
+                    Submissions & Late Report
                   </h2>
                   <p className="text-sm text-academic-muted mt-1">
-                    Select a subject to monitor published assessments and student submission progress for your class cohort
+                    Operational deadline tracking, submission compliance, and late turn-in monitoring across all class assessments.
                   </p>
                 </div>
                 <button
                   onClick={loadData}
                   disabled={isLoading}
                   className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-academic-deepGreen bg-academic-surface border border-academic-border rounded-lg hover:bg-academic-lightGreen/50 transition-colors self-start sm:self-auto shadow-sm"
-                  title="Refresh Cohort Data"
+                  title="Refresh Submission Data"
                 >
                   <RefreshCw className={`w-4 h-4 text-academic-primaryGreen ${isLoading ? 'animate-spin' : ''}`} />
                   <span>{isLoading ? 'Refreshing...' : 'Refresh'}</span>
                 </button>
               </div>
 
-              {/* Search by Subject Name or Subject Code */}
-              <div className="relative max-w-md">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-academic-muted" />
-                <input
-                  type="text"
-                  placeholder="Search by subject name or subject code..."
-                  value={subjectSearch}
-                  onChange={(e) => setSubjectSearch(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 border border-academic-border rounded-lg text-sm bg-academic-surface text-academic-deepGreen placeholder:text-academic-muted/70 focus:outline-none focus:ring-2 focus:ring-academic-primaryGreen/20 focus:border-academic-primaryGreen"
-                />
-              </div>
-
-              {/* Subjects Grid */}
-              {filteredSubjectsList.length === 0 ? (
-                <div className="text-center py-16 bg-academic-surface border border-dashed border-academic-border rounded-xl">
-                  <BookOpen className="w-12 h-12 text-academic-muted/50 mx-auto mb-3" />
-                  <h3 className="text-base font-semibold text-academic-deepGreen">No Subjects Found</h3>
-                  <p className="text-sm text-academic-muted mt-1 max-w-md mx-auto">
-                    {subjectSearch.trim()
-                      ? `No subjects match "${subjectSearch}". Try a different keyword.`
-                      : 'No subjects are currently assigned to this class cohort.'}
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                  {filteredSubjectsList.map((sub) => {
-                    const publishedAss = getPublishedAssessmentsForSubject(sub);
-                    const publishedCount = publishedAss.length;
-
-                    return (
-                      <div
-                        key={sub.id || sub.subject_id}
-                        onClick={() => {
-                          setSelectedSubjectId(sub.id || sub.subject_id);
-                          setSelectedAssessmentId(null);
-                          setReportAssessmentSearch('');
-                        }}
-                        className="bg-academic-surface border border-academic-border rounded-xl p-5 hover:border-academic-primaryGreen/40 hover:shadow-academicCard transition-all cursor-pointer group flex flex-col justify-between"
-                      >
-                        <div>
-                          <div className="flex items-center justify-between gap-2 mb-2">
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-semibold bg-academic-lightGreen text-academic-deepGreen border border-academic-border">
-                              {sub.subject_code || 'SUB'}
-                            </span>
-                            {sub.specialization_code ? (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                {sub.specialization_code}
-                              </span>
-                            ) : (
-                              <span className="text-xs text-academic-muted font-medium">Core / Common</span>
-                            )}
-                          </div>
-                          <h3 className="text-base font-bold text-academic-deepGreen group-hover:text-academic-primaryGreen transition-colors mt-2">
-                            {sub.name || (sub.subject_name.includes(' - ') ? sub.subject_name.split(' - ').slice(1).join(' - ') : sub.subject_name)}
-                          </h3>
-                          {sub.teacher_name && sub.teacher_name !== 'Unassigned' && (
-                            <p className="text-xs text-academic-muted mt-1">
-                              Faculty: <span className="font-medium text-academic-deepGreen">{sub.teacher_name}</span>
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="pt-4 mt-4 border-t border-academic-borderSubtle flex justify-between items-center text-xs">
-                          <div className="flex items-center gap-1.5 text-academic-muted">
-                            <FileText className="w-4 h-4 text-academic-primaryGreen" />
-                            <span className="font-semibold text-academic-deepGreen">{publishedCount}</span>
-                            <span>{publishedCount === 1 ? 'Assessment' : 'Assessments'}</span>
-                          </div>
-                          <span className="inline-flex items-center gap-1 text-academic-primaryGreen font-semibold group-hover:translate-x-0.5 transition-transform">
-                            <span>View Assessments</span>
-                            <ChevronRight className="w-4 h-4" />
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ================================================================== */}
-          {/* LEVEL 2: ASSESSMENTS LIST (Belonging to Selected Subject)           */}
-          {/* ================================================================== */}
-          {selectedSubject && !selectedAssessment && (
-            <div className="space-y-6">
-              <button
-                onClick={() => {
-                  setSelectedSubjectId(null);
-                  setSelectedAssessmentId(null);
-                }}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-academic-muted hover:text-academic-deepGreen transition-colors"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                <span>Back to Subjects</span>
-              </button>
-
-              {/* Header */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-academic-border">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-semibold bg-academic-lightGreen text-academic-deepGreen border border-academic-border">
-                      {selectedSubject.subject_code || 'SUB'}
-                    </span>
-                    {selectedSubject.specialization_code && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                        {selectedSubject.specialization_code}
-                      </span>
-                    )}
+              {/* Operational KPI Metric Strip */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="card p-4 bg-academic-surface border border-academic-border shadow-sm">
+                  <span className="text-xs font-semibold text-academic-muted uppercase tracking-wider block">
+                    Published Assessments
+                  </span>
+                  <div className="mt-1.5 text-2xl font-bold text-academic-deepGreen">
+                    {operationalMetrics.totalAssessments}
                   </div>
-                  <h2 className="text-xl font-bold text-academic-deepGreen">
-                    {selectedSubject.name || selectedSubject.subject_name}
-                  </h2>
-                  <p className="text-sm text-academic-muted mt-1">
-                    Published assessments for this subject. Select an assessment to view student submissions.
+                  <p className="text-xs text-academic-muted mt-0.5">
+                    Across {classSubjectsList.length} subjects
                   </p>
                 </div>
-                <button
-                  onClick={loadData}
-                  disabled={isLoading}
-                  className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-academic-deepGreen bg-academic-surface border border-academic-border rounded-lg hover:bg-academic-lightGreen/50 transition-colors self-start sm:self-auto shadow-sm"
-                  title="Refresh Assessments"
-                >
-                  <RefreshCw className={`w-4 h-4 text-academic-primaryGreen ${isLoading ? 'animate-spin' : ''}`} />
-                  <span>{isLoading ? 'Refreshing...' : 'Refresh'}</span>
-                </button>
-              </div>
 
-              {/* Search by Assessment Title */}
-              <div className="relative max-w-md">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-academic-muted" />
-                <input
-                  type="text"
-                  placeholder="Search assessments by title..."
-                  value={reportAssessmentSearch}
-                  onChange={(e) => setReportAssessmentSearch(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 border border-academic-border rounded-lg text-sm bg-academic-surface text-academic-deepGreen placeholder:text-academic-muted/70 focus:outline-none focus:ring-2 focus:ring-academic-primaryGreen/20 focus:border-academic-primaryGreen"
-                />
-              </div>
-
-              {/* Assessments Grid */}
-              {filteredAssessmentsInLevel2.length === 0 ? (
-                <div className="text-center py-16 bg-academic-surface border border-dashed border-academic-border rounded-xl">
-                  <FileText className="w-12 h-12 text-academic-muted/50 mx-auto mb-3" />
-                  <h3 className="text-base font-semibold text-academic-deepGreen">No Assessments Found</h3>
-                  <p className="text-sm text-academic-muted mt-1 max-w-md mx-auto">
-                    {reportAssessmentSearch.trim()
-                      ? `No assessments match "${reportAssessmentSearch}". Try a different keyword.`
-                      : 'No published assessments are available for this subject yet.'}
+                <div className="card p-4 bg-academic-surface border border-academic-border shadow-sm">
+                  <span className="text-xs font-semibold text-academic-muted uppercase tracking-wider block">
+                    Submissions Received
+                  </span>
+                  <div className="mt-1.5 text-2xl font-bold text-academic-deepGreen">
+                    {operationalMetrics.submittedCount}
+                    <span className="text-xs font-normal text-academic-muted ml-1.5">
+                      / {operationalMetrics.totalPossibleSubmissions} (
+                      {operationalMetrics.totalPossibleSubmissions > 0
+                        ? Math.round((operationalMetrics.submittedCount / operationalMetrics.totalPossibleSubmissions) * 100)
+                        : 0}%)
+                    </span>
+                  </div>
+                  <p className="text-xs text-academic-muted mt-0.5">
+                    Turned in by cohort students
                   </p>
                 </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                  {filteredAssessmentsInLevel2.map((ass) => {
-                    const eligible = getEligibleStudentsForSubject(selectedSubject);
-                    const totalEligible = eligible.length;
-                    const submittedCount = eligible.filter(st => {
-                      const rep = classReports.find(r => r.assessment_id === ass.id && (r.student_id === st.id || (st.usn && r.student_usn === st.usn)));
-                      return rep && rep.is_submitted;
-                    }).length;
-                    const progressPct = totalEligible > 0 ? Math.round((submittedCount / totalEligible) * 100) : 0;
-                    const isPastDue = ass.deadline_at ? new Date(ass.deadline_at) < new Date() : false;
 
-                    return (
-                      <div
-                        key={ass.id}
-                        className="bg-academic-surface border border-academic-border rounded-xl p-5 hover:border-academic-primaryGreen/40 hover:shadow-academicCard transition-all flex flex-col justify-between"
-                      >
-                        <div>
-                          <div className="flex items-center justify-between gap-2 mb-2">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                              Published
-                            </span>
-                            <span className="text-xs font-medium text-academic-muted">
-                              Max marks: {ass.max_marks || 50}
-                            </span>
-                          </div>
-                          <h3 className="text-base font-bold text-academic-deepGreen mb-1">
-                            {ass.title}
-                          </h3>
-                          <p className="text-xs text-academic-muted">
-                            Subject: <span className="font-medium text-academic-deepGreen">{selectedSubject.subject_code || 'SUB'} - {selectedSubject.name || selectedSubject.subject_name}</span>
-                          </p>
-                          <div className="flex items-center gap-1.5 text-xs text-academic-muted mt-2">
-                            <Calendar className="w-3.5 h-3.5 text-academic-primaryGreen" />
-                            <span>Due: {ass.deadline_at ? formatDateTime(ass.deadline_at) : 'Open'}</span>
-                            {isPastDue && <span className="text-[10px] text-rose-600 font-bold ml-1">(Closed)</span>}
-                          </div>
-                        </div>
-
-                        <div className="pt-4 mt-4 border-t border-academic-borderSubtle space-y-3">
-                          <div>
-                            <div className="flex justify-between items-center text-xs mb-1.5">
-                              <span className="text-academic-muted">Submission Progress</span>
-                              <span className="font-bold text-academic-deepGreen">{submittedCount} / {totalEligible} ({progressPct}%)</span>
-                            </div>
-                            <div className="w-full bg-academic-paleGreen rounded-full h-2 overflow-hidden">
-                              <div
-                                className="h-2 rounded-full bg-academic-primaryGreen transition-all duration-300"
-                                style={{ width: `${progressPct}%` }}
-                              />
-                            </div>
-                          </div>
-
-                          <div className="flex justify-end pt-1">
-                            <button
-                              onClick={() => {
-                                setSelectedAssessmentId(ass.id);
-                                setStudentSearch('');
-                                setStudentStatusFilter('all');
-                              }}
-                              className="btn-primary py-1.5 px-3 text-xs inline-flex items-center space-x-1.5"
-                            >
-                              <Eye className="w-3.5 h-3.5" />
-                              <span>View Student Report</span>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div className="card p-4 bg-academic-surface border border-academic-border shadow-sm">
+                  <span className="text-xs font-semibold text-academic-muted uppercase tracking-wider block">
+                    Late Submissions
+                  </span>
+                  <div className={`mt-1.5 text-2xl font-bold ${operationalMetrics.lateCount > 0 ? 'text-rose-600' : 'text-academic-deepGreen'}`}>
+                    {operationalMetrics.lateCount}
+                  </div>
+                  <p className="text-xs text-academic-muted mt-0.5">
+                    Turned in past deadline
+                  </p>
                 </div>
-              )}
+
+                <div className="card p-4 bg-academic-surface border border-academic-border shadow-sm">
+                  <span className="text-xs font-semibold text-academic-muted uppercase tracking-wider block">
+                    Pending Submissions
+                  </span>
+                  <div className="mt-1.5 text-2xl font-bold text-amber-700">
+                    {operationalMetrics.pendingCount}
+                  </div>
+                  <p className="text-xs text-academic-muted mt-0.5">
+                    Awaiting student submission
+                  </p>
+                </div>
+              </div>
+
+              {/* Filter Controls Bar */}
+              <div className="p-3.5 bg-academic-surface border border-academic-border rounded-lg shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="relative flex-1 max-w-sm">
+                  <Search className="w-4 h-4 text-academic-muted absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Search assessments by title..."
+                    value={reportSearch}
+                    onChange={(e) => setReportSearch(e.target.value)}
+                    className="input-field pl-9 text-xs w-full py-1.5"
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center space-x-2">
+                    <label htmlFor="filter-subject" className="text-xs text-academic-muted whitespace-nowrap">
+                      Subject:
+                    </label>
+                    <select
+                      id="filter-subject"
+                      value={reportSubjectFilter}
+                      onChange={(e) => setReportSubjectFilter(e.target.value)}
+                      className="input-field text-xs py-1.5 px-3 min-w-[160px]"
+                    >
+                      <option value="all">All Class Subjects ({classSubjectsList.length})</option>
+                      {classSubjectsList.map(s => (
+                        <option key={s.id || s.subject_id} value={s.id || s.subject_id}>
+                          {s.subject_code || 'SUB'} - {s.name || s.subject_name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <label htmlFor="filter-timeline" className="text-xs text-academic-muted whitespace-nowrap">
+                      Deadline:
+                    </label>
+                    <select
+                      id="filter-timeline"
+                      value={reportTimelineFilter}
+                      onChange={(e) => setReportTimelineFilter(e.target.value as any)}
+                      className="input-field text-xs py-1.5 px-3 min-w-[130px]"
+                    >
+                      <option value="all">All Deadlines</option>
+                      <option value="open">Open (Upcoming)</option>
+                      <option value="closed">Closed (Past Due)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Direct Assessments & Deadlines Table */}
+              <div className="bg-academic-surface border border-academic-border rounded-lg shadow-sm overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-academic-paleGreen/50 text-academic-deepGreen font-semibold border-b border-academic-border">
+                      <tr>
+                        <th className="py-3 px-4">Assessment Title</th>
+                        <th className="py-3 px-4">Subject</th>
+                        <th className="py-3 px-4">Deadline & Status</th>
+                        <th className="py-3 px-4">Submission Progress</th>
+                        <th className="py-3 px-4 text-center">Late Turn-ins</th>
+                        <th className="py-3 px-4 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-academic-border">
+                      {filteredReportAssessments.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-12 text-center text-academic-muted">
+                            <FileText className="w-10 h-10 text-academic-muted/40 mx-auto mb-2" />
+                            <p className="font-semibold text-academic-deepGreen">No assessments match your criteria</p>
+                            <p className="text-xs text-academic-muted mt-0.5">Try clearing or adjusting the search query and filters.</p>
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredReportAssessments.map(ass => {
+                          const assSubject = classSubjectsList.find(s => s.id === ass.class_subject_id || s.subject_id === ass.class_subject_id);
+                          const eligible = getEligibleStudentsForSubject(assSubject || null);
+                          const totalEligible = eligible.length;
+                          const assReports = classReports.filter(r => r.assessment_id === ass.id);
+                          const submittedCount = eligible.filter(st => {
+                            const rep = assReports.find(r => r.student_id === st.id || (st.usn && r.student_usn === st.usn));
+                            return rep && rep.is_submitted;
+                          }).length;
+                          const lateCount = eligible.filter(st => {
+                            const rep = assReports.find(r => r.student_id === st.id || (st.usn && r.student_usn === st.usn));
+                            return rep && rep.is_submitted && (rep.is_late || rep.timing_status === 'Late');
+                          }).length;
+                          const progressPct = totalEligible > 0 ? Math.round((submittedCount / totalEligible) * 100) : 0;
+                          const isPastDue = ass.deadline_at ? new Date(ass.deadline_at) < new Date() : false;
+
+                          return (
+                            <tr key={ass.id} className="hover:bg-academic-paleGreen/20 transition-colors">
+                              <td className="py-3.5 px-4 font-semibold text-academic-deepGreen">
+                                <span className="block text-sm">{ass.title}</span>
+                                <span className="text-[11px] font-normal text-academic-muted">Max marks: {ass.max_marks || 50}</span>
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-academic-lightGreen text-academic-deepGreen border border-academic-border">
+                                    {assSubject?.subject_code || 'SUB'}
+                                  </span>
+                                  {assSubject?.specialization_code && (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                      {assSubject.specialization_code}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-xs text-academic-deepGreen mt-0.5 block truncate max-w-xs">
+                                  {assSubject?.name || assSubject?.subject_name || ass.subject_details || 'Subject'}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 text-academic-muted">
+                                <div className="flex items-center gap-1.5">
+                                  <Calendar className="w-3.5 h-3.5 text-academic-primaryGreen shrink-0" />
+                                  <span>{ass.deadline_at ? formatDateTime(ass.deadline_at) : 'Open Schedule'}</span>
+                                </div>
+                                {isPastDue ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200 mt-1">
+                                    Closed (Past Due)
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 mt-1">
+                                    Open
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <div className="space-y-1">
+                                  <div className="flex justify-between items-center text-[11px]">
+                                    <span className="font-semibold text-academic-deepGreen">
+                                      {submittedCount} / {totalEligible}
+                                    </span>
+                                    <span className="text-academic-muted">{progressPct}%</span>
+                                  </div>
+                                  <div className="w-28 bg-academic-paleGreen rounded-full h-1.5 overflow-hidden">
+                                    <div
+                                      className="h-1.5 rounded-full bg-academic-primaryGreen transition-all duration-300"
+                                      style={{ width: `${progressPct}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="py-3.5 px-4 text-center">
+                                {lateCount > 0 ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                    {lateCount} Late
+                                  </span>
+                                ) : (
+                                  <span className="text-academic-muted font-mono text-[11px]">0 Late</span>
+                                )}
+                              </td>
+                              <td className="py-3.5 px-4 text-right">
+                                <button
+                                  onClick={() => {
+                                    setSelectedAssessmentId(ass.id);
+                                    setStudentSearch('');
+                                    setStudentStatusFilter('all');
+                                  }}
+                                  className="btn-primary py-1.5 px-3 text-xs inline-flex items-center space-x-1.5 shadow-sm"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  <span>View Submissions</span>
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           )}
 
           {/* ================================================================== */}
-          {/* LEVEL 3: STUDENT SUBMISSION REPORT (For Selected Assessment)       */}
+          {/* LEVEL 2: STUDENT SUBMISSIONS ROSTER (For Selected Assessment)       */}
           {/* ================================================================== */}
-          {selectedSubject && selectedAssessment && (
+          {selectedAssessment && (
             <div className="space-y-6">
               <button
                 onClick={() => setSelectedAssessmentId(null)}
                 className="inline-flex items-center gap-1.5 text-xs font-medium text-academic-muted hover:text-academic-deepGreen transition-colors"
               >
                 <ArrowLeft className="w-4 h-4" />
-                <span>Back to Assessments</span>
+                <span>Back to Assessments & Deadlines</span>
               </button>
 
               {/* Assessment Summary Header */}
@@ -1142,14 +926,14 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
                 <div>
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                      Published
+                      Published Assessment
                     </span>
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-academic-lightGreen text-academic-deepGreen border border-academic-border">
-                      {selectedSubject.subject_code || 'SUB'}
+                      {selectedAssessmentSubject?.subject_code || 'SUB'}
                     </span>
-                    {selectedSubject.specialization_code && (
+                    {selectedAssessmentSubject?.specialization_code && (
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                        {selectedSubject.specialization_code}
+                        {selectedAssessmentSubject.specialization_code}
                       </span>
                     )}
                   </div>
@@ -1157,16 +941,16 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
                     {selectedAssessment.title}
                   </h2>
                   <div className="flex items-center gap-4 text-xs text-academic-muted mt-2 flex-wrap">
-                    <span>Subject: <strong className="text-academic-deepGreen font-semibold">{selectedSubject.name || selectedSubject.subject_name}</strong></span>
+                    <span>Subject: <strong className="text-academic-deepGreen font-semibold">{selectedAssessmentSubject?.name || selectedAssessmentSubject?.subject_name || selectedAssessment.subject_details}</strong></span>
                     <span>Max Marks: <strong className="text-academic-deepGreen font-semibold">{selectedAssessment.max_marks || 50}</strong></span>
-                    <span>Deadline: <strong className="text-academic-deepGreen font-semibold">{selectedAssessment.deadline_at ? formatDateTime(selectedAssessment.deadline_at) : 'Open'}</strong></span>
+                    <span>Deadline: <strong className="text-academic-deepGreen font-semibold">{selectedAssessment.deadline_at ? formatDateTime(selectedAssessment.deadline_at) : 'Open Schedule'}</strong></span>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-3 shrink-0">
                   <button
                     onClick={exportAssessmentReportToCsv}
-                    disabled={filteredLevel3Students.length === 0}
+                    disabled={filteredAssessmentStudents.length === 0}
                     className="btn-secondary text-xs px-3 py-2 flex items-center space-x-1.5 disabled:opacity-50 shadow-sm"
                   >
                     <Download className="w-3.5 h-3.5" />
@@ -1205,11 +989,12 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
                     id="filter-student-status"
                     value={studentStatusFilter}
                     onChange={(e) => setStudentStatusFilter(e.target.value as any)}
-                    className="input-field text-xs py-1.5 px-2.5 min-w-[130px]"
+                    className="input-field text-xs py-1.5 px-2.5 min-w-[140px]"
                   >
-                    <option value="all">All Students ({level3Students.length})</option>
-                    <option value="submitted">Submitted ({level3Students.filter(s => s.is_submitted).length})</option>
-                    <option value="pending">Pending ({level3Students.filter(s => !s.is_submitted).length})</option>
+                    <option value="all">All Students ({assessmentStudentsRoster.length})</option>
+                    <option value="submitted">Submitted ({assessmentStudentsRoster.filter(s => s.is_submitted).length})</option>
+                    <option value="pending">Pending ({assessmentStudentsRoster.filter(s => !s.is_submitted).length})</option>
+                    <option value="late">Late Only ({assessmentStudentsRoster.filter(s => s.is_submitted && s.is_late).length})</option>
                   </select>
                 </div>
               </div>
@@ -1231,14 +1016,14 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-academic-border">
-                      {filteredLevel3Students.length === 0 ? (
+                      {filteredAssessmentStudents.length === 0 ? (
                         <tr>
                           <td colSpan={8} className="py-8 text-center text-academic-muted">
                             No student records match your filter criteria.
                           </td>
                         </tr>
                       ) : (
-                        filteredLevel3Students.map((item) => (
+                        filteredAssessmentStudents.map((item) => (
                           <tr key={item.id} className="hover:bg-academic-paleGreen/20 transition-colors">
                             <td className="py-3 px-4 font-semibold text-academic-deepGreen">
                               <div className="flex items-center gap-1.5">
@@ -1346,14 +1131,7 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* TAB PERFORMANCE: ACADEMIC MARKS & RUBRIC BREAKDOWN (PHASE 3)              */}
-      {/* ========================================================================= */}
-      {activeTab === 'performance' && (
-        <ClassTeacherAcademicReport initialClassId={selectedClassId} />
-      )}
-
-      {/* ========================================================================= */}
-      {/* TAB D: STUDENT COHORT (ROSTER ONLY)                                      */}
+      {/* TAB 3: STUDENT COHORT (Roster & Directory Only)                          */}
       {/* ========================================================================= */}
       {activeTab === 'students' && (
         <div className="space-y-4">
@@ -1421,9 +1199,8 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
                           <td className="py-3 px-4 text-right">
                             <button
                               onClick={() => {
-                                setSelectedSubjectId(null);
                                 setSelectedAssessmentId(null);
-                                setSubjectSearch('');
+                                setReportSearch('');
                                 setStudentSearch(student.usn || student.name);
                                 setActiveTab('reports');
                               }}
@@ -1444,7 +1221,7 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* 5. SUBMISSION DETAILS MODAL (READ-ONLY FOR CLASS TEACHER)                 */}
+      {/* 4. SUBMISSION DETAILS MODAL (READ-ONLY FOR CLASS TEACHER)                 */}
       {/* ========================================================================= */}
       {selectedSubmissionDetails && (
         <div className="fixed inset-0 bg-academic-deepGreen/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">

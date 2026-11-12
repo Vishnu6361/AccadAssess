@@ -39,10 +39,10 @@ const getDefaultActiveItemForRole = (role: string | null): string => {
   switch (role) {
     case 'hod':
       return 'academics';
-    case 'proctor':
-      return 'late_reports';
-    case 'subject_teacher':
     case 'class_teacher':
+    case 'proctor':
+      return 'performance';
+    case 'subject_teacher':
     case 'student':
     default:
       return 'assessments';
@@ -104,14 +104,14 @@ export const AppContent: React.FC = () => {
         setActiveItem('assessments');
       }
     } else if (activeRole === 'class_teacher') {
-      // Class Teacher workspace allows: assessments, performance, students, late_reports
-      if (activeItem !== 'assessments' && activeItem !== 'performance' && activeItem !== 'students' && activeItem !== 'late_reports') {
-        setActiveItem('assessments');
+      // Class Teacher workspace allows: performance, late_reports, students
+      if (activeItem !== 'performance' && activeItem !== 'students' && activeItem !== 'late_reports' && activeItem !== 'submissions') {
+        setActiveItem('performance');
       }
     } else if (activeRole === 'proctor') {
-      // Proctor workspace allows: late_reports
-      if (activeItem !== 'late_reports') {
-        setActiveItem('late_reports');
+      // Proctor workspace allows: performance, late_reports
+      if (activeItem !== 'performance' && activeItem !== 'late_reports') {
+        setActiveItem('performance');
       }
     } else if (activeRole === 'student') {
       // Student workspace allows: assessments, submissions, results
@@ -514,14 +514,16 @@ export const AppContent: React.FC = () => {
                     ? 'User Directory & Roles' 
                     : activeItem === 'academics' 
                     ? 'Academic Structure' 
-                    : activeRole === 'class_teacher' && activeItem === 'assessments'
-                    ? 'Class Teacher Workspace'
                     : activeRole === 'class_teacher' && activeItem === 'students'
-                    ? 'Student Submission Tracking'
+                    ? 'Student Cohort'
                     : activeRole === 'class_teacher' && (activeItem === 'late_reports' || activeItem === 'submissions')
-                    ? 'Class Submissions & Late Report'
+                    ? 'Submissions & Late Report'
+                    : activeRole === 'class_teacher' && activeItem === 'performance'
+                    ? 'Class Academic Performance'
+                    : activeRole === 'proctor' && activeItem === 'performance'
+                    ? 'Mentee Academic Performance'
                     : activeRole === 'proctor' && activeItem === 'late_reports'
-                    ? 'Mentee Submissions Report'
+                    ? 'Mentee Submissions & Deadlines'
                     : activeRole === 'subject_teacher' && activeItem === 'assessments'
                     ? 'Formative Assessments'
                     : activeItem === 'assessments'
@@ -555,15 +557,13 @@ export const AppContent: React.FC = () => {
 
               {/* Class Teacher Dedicated Role-Specific Workspace */}
               {activeRole === 'class_teacher' && (
-                activeItem === 'assessments' ? (
-                  <ClassTeacherWorkspace initialTab="overview" />
-                ) : activeItem === 'performance' ? (
+                activeItem === 'performance' ? (
                   <ClassTeacherWorkspace initialTab="performance" />
                 ) : activeItem === 'students' ? (
                   <ClassTeacherWorkspace initialTab="students" />
-                ) : (activeItem === 'submissions' || activeItem === 'late_reports') ? (
+                ) : (
                   <ClassTeacherWorkspace initialTab="reports" />
-                ) : null
+                )
               )}
 
               {/* Other Roles Assessment / Submission Management */}
@@ -577,8 +577,12 @@ export const AppContent: React.FC = () => {
                   <AssessmentManagement activeRole={activeRole} initialTab="submissions" />
                 )
               )}
-              {activeRole === 'proctor' && activeItem === 'late_reports' && (
-                <ProctorMenteeReport />
+              {activeRole === 'proctor' && (
+                activeItem === 'performance' ? (
+                  <ProctorMenteeReport initialTab="performance" />
+                ) : (
+                  <ProctorMenteeReport initialTab="submissions" />
+                )
               )}
               {activeRole !== 'class_teacher' && activeRole !== 'proctor' && activeRole !== 'hod' && activeItem === 'late_reports' && (
                 <AssessmentManagement activeRole={activeRole} initialTab="submissions_report" />
