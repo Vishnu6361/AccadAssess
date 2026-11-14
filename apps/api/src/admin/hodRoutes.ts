@@ -2912,22 +2912,38 @@ router.get('/institutional-submissions-report', async (req: Request, res: Respon
     const assRepo = getAssessmentRepository();
     const subRepo = getSubmissionRepository();
 
-    // 1. Fetch academic structure entities independently
-    const [allProgrammes, allSpecializations, allClasses, allClassSubjects, allSubjects] = await Promise.all([
-      academicRepo.listProgrammes().catch(() => []),
-      academicRepo.listSpecializations().catch(() => []),
-      academicRepo.listClasses().catch(() => []),
-      academicRepo.listClassSubjects().catch(() => []),
-      academicRepo.listSubjects().catch(() => [])
+    // Fetch all academic structure entities, active enrollments, assessments, and submission reports concurrently
+    const [
+      allProgrammes,
+      allSpecializations,
+      allClasses,
+      allClassSubjects,
+      allSubjects,
+      allEnrollments,
+      allAssessments,
+      allReports,
+      rawSubjectSpecs
+    ] = await Promise.all([
+      academicRepo.listProgrammes().catch(() => [] as Programme[]),
+      academicRepo.listSpecializations().catch(() => [] as Specialization[]),
+      academicRepo.listClasses().catch(() => [] as Class[]),
+      academicRepo.listClassSubjects().catch(() => [] as any[]),
+      academicRepo.listSubjects().catch(() => [] as Subject[]),
+      academicRepo.listEnrollments().catch(() => [] as any[]),
+      assRepo.listAssessments(user).catch(() => [] as any[]),
+      subRepo.getLateSubmissionsReport(user, assessmentId).catch(() => [] as any[]),
+      (async (): Promise<Array<{ subject_id: string; specialization_id: string }>> => {
+        if (!supabaseAdmin) return [];
+        try {
+          const { data } = await supabaseAdmin.from('subject_specializations').select('subject_id, specialization_id');
+          return data || [];
+        } catch {
+          return [];
+        }
+      })()
     ]);
 
-    let subjectSpecializations: Array<{ subject_id: string; specialization_id: string }> = [];
-    try {
-      if (supabaseAdmin) {
-        const { data } = await supabaseAdmin.from('subject_specializations').select('subject_id, specialization_id');
-        if (data) subjectSpecializations = data;
-      }
-    } catch {}
+    let subjectSpecializations: Array<{ subject_id: string; specialization_id: string }> = rawSubjectSpecs || [];
     if (db.subject_specializations && db.subject_specializations.length > 0) {
       for (const ss of db.subject_specializations) {
         if (!subjectSpecializations.some(s => s.subject_id === ss.subject_id && s.specialization_id === ss.specialization_id)) {
@@ -2936,18 +2952,10 @@ router.get('/institutional-submissions-report', async (req: Request, res: Respon
       }
     }
 
-    // 2. Fetch active enrollments independently across the entire institution
-    const allEnrollments = await academicRepo.listEnrollments().catch(() => []);
     const activeEnrollments = allEnrollments.filter(e => e.status === 'active');
-
-    // 3. Fetch published assessments
-    const allAssessments = await assRepo.listAssessments(user).catch(() => []);
     const publishedAssessments = allAssessments.filter(a => 
       a.status === 'published' || a.status === 'closed' || Boolean(a.published_at)
     );
-
-    // 4. Fetch submission records (scoped to assessmentId if requested for Level 3 on-demand query)
-    const allReports = await subRepo.getLateSubmissionsReport(user, assessmentId).catch(() => []);
 
     // If assessmentId is requested, return Level 3 student report for that specific assessment
     if (assessmentId) {

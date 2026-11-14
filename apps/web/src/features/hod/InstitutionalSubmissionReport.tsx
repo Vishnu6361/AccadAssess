@@ -12,20 +12,70 @@ import {
   Download,
   Eye,
   Shield,
-  X
+  X,
+  AlertCircle,
 } from 'lucide-react';
 import {
   hodApi,
   submissionApi,
   evaluationApi,
   InstitutionalSubjectReportItem,
-  InstitutionalStudentReportItem
+  InstitutionalStudentReportItem,
+  ApiErrorKind,
 } from '../../services/apiClient';
 import { RubricBreakdownSection } from '../../components/RubricBreakdownSection';
 
 /**
  * Loading skeleton for first-time visit while data is being fetched.
  */
+const RenderApiErrorAlert: React.FC<{
+  error: { message: string; kind?: ApiErrorKind; status?: number; isRetryable?: boolean };
+  onRetry: () => void;
+  isLoading: boolean;
+}> = ({ error, onRetry, isLoading }) => {
+  const getBadgeStyle = () => {
+    switch (error.kind) {
+      case 'TIMEOUT':
+        return { label: 'Request Timeout', bg: 'bg-amber-100 text-amber-800 border-amber-300' };
+      case 'BACKEND_UNAVAILABLE':
+        return { label: 'Server Unavailable', bg: 'bg-red-100 text-red-800 border-red-300' };
+      case 'AUTH_FAILURE':
+        return { label: 'Access Denied', bg: 'bg-purple-100 text-purple-800 border-purple-300' };
+      case 'DATABASE_FAILURE':
+        return { label: 'Database Error', bg: 'bg-orange-100 text-orange-800 border-orange-300' };
+      default:
+        return { label: error.status ? `Error ${error.status}` : 'API Error', bg: 'bg-rose-100 text-rose-800 border-rose-300' };
+    }
+  };
+
+  const badge = getBadgeStyle();
+
+  return (
+    <div className="p-4 bg-red-50/90 border border-red-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-sm shadow-xs">
+      <div className="flex items-start sm:items-center gap-2.5">
+        <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5 sm:mt-0" />
+        <div>
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border ${badge.bg}`}>
+              {badge.label}
+            </span>
+            {error.status && <span className="text-xs text-academic-muted font-mono">HTTP {error.status}</span>}
+          </div>
+          <p className="text-red-900 font-medium text-xs sm:text-sm">{error.message}</p>
+        </div>
+      </div>
+      <button
+        onClick={onRetry}
+        disabled={isLoading}
+        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg transition-colors shadow-sm shrink-0"
+      >
+        <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+        <span>{isLoading ? 'Retrying...' : 'Retry'}</span>
+      </button>
+    </div>
+  );
+};
+
 const InstitutionalReportSkeleton: React.FC = () => (
   <div className="space-y-6 max-w-7xl mx-auto pb-12 animate-pulse">
     <div className="h-4 w-48 bg-academic-borderSubtle rounded" />
@@ -53,7 +103,8 @@ export const InstitutionalSubmissionReport: React.FC = () => {
   const [subjects, setSubjects] = useState<InstitutionalSubjectReportItem[]>([]);
   const [classesList, setClassesList] = useState<Array<{ id: string; name: string; programme: string; semester: number }>>([]);
   const [isLoadingOverview, setIsLoadingOverview] = useState<boolean>(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [overviewError, setOverviewError] = useState<{ message: string; kind?: ApiErrorKind; status?: number; isRetryable?: boolean } | null>(null);
+  const [level3Error, setLevel3Error] = useState<{ message: string; kind?: ApiErrorKind; status?: number; isRetryable?: boolean } | null>(null);
 
   // Level 3 Cache (Assessment ID -> Students array)
   const [assessmentStudentsCache, setAssessmentStudentsCache] = useState<Record<string, InstitutionalStudentReportItem[]>>({});
@@ -76,14 +127,19 @@ export const InstitutionalSubmissionReport: React.FC = () => {
   // Load Institutional Overview Data
   const loadOverviewData = async () => {
     setIsLoadingOverview(true);
-    setErrorMessage(null);
+    setOverviewError(null);
     try {
       const res = await hodApi.getInstitutionalSubmissionsReport();
       setSubjects(res.subjects || []);
       setClassesList(res.classes || []);
     } catch (err: any) {
       console.error('Failed to load institutional submissions report overview:', err);
-      setErrorMessage(err.message || 'Failed to load institutional overview data.');
+      setOverviewError({
+        message: err.message || 'Failed to load institutional overview data.',
+        kind: err.kind || (err.isTimeout ? 'TIMEOUT' : 'ENDPOINT_FAILURE'),
+        status: err.status,
+        isRetryable: err.isRetryable ?? true
+      });
     } finally {
       setIsLoadingOverview(false);
     }
@@ -104,6 +160,7 @@ export const InstitutionalSubmissionReport: React.FC = () => {
 
     const fetchAssessmentStudents = async () => {
       setIsLoadingStudents(true);
+      setLevel3Error(null);
       try {
         const res = await hodApi.getInstitutionalSubmissionsReport(selectedAssessmentId);
         if (res.students) {
@@ -114,6 +171,12 @@ export const InstitutionalSubmissionReport: React.FC = () => {
         }
       } catch (err: any) {
         console.error('Failed to load assessment student roster:', err);
+        setLevel3Error({
+          message: err.message || 'Failed to load student roster for this assessment.',
+          kind: err.kind || (err.isTimeout ? 'TIMEOUT' : 'ENDPOINT_FAILURE'),
+          status: err.status,
+          isRetryable: err.isRetryable ?? true
+        });
       } finally {
         setIsLoadingStudents(false);
       }
@@ -330,7 +393,7 @@ export const InstitutionalSubmissionReport: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  if (isLoadingOverview && subjects.length === 0 && !errorMessage) {
+  if (isLoadingOverview && subjects.length === 0 && !overviewError) {
     return <InstitutionalReportSkeleton />;
   }
 
@@ -376,16 +439,14 @@ export const InstitutionalSubmissionReport: React.FC = () => {
       </nav>
 
       {/* Error Alert */}
-      {errorMessage && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between text-red-800 text-sm">
-          <span>{errorMessage}</span>
-          <button onClick={loadOverviewData} className="font-semibold underline hover:text-red-950">
-            Retry
-          </button>
-        </div>
+      {overviewError && (
+        <RenderApiErrorAlert
+          error={overviewError}
+          onRetry={loadOverviewData}
+          isLoading={isLoadingOverview}
+        />
       )}
 
-      {/* ====================================================================== */}
       {/* LEVEL 1: SUBJECTS LIST (Clean, Subject-First Main Page)                 */}
       {/* ====================================================================== */}
       {!selectedSubject && (
@@ -787,6 +848,42 @@ export const InstitutionalSubmissionReport: React.FC = () => {
           </div>
 
           {/* Student Submissions Table */}
+          {level3Error && (
+            <RenderApiErrorAlert
+              error={level3Error}
+              onRetry={() => {
+                if (selectedAssessmentId) {
+                  setAssessmentStudentsCache(prev => {
+                    const next = { ...prev };
+                    delete next[selectedAssessmentId];
+                    return next;
+                  });
+                  setIsLoadingStudents(true);
+                  setLevel3Error(null);
+                  hodApi.getInstitutionalSubmissionsReport(selectedAssessmentId)
+                    .then(res => {
+                      if (res.students) {
+                        setAssessmentStudentsCache(prev => ({
+                          ...prev,
+                          [selectedAssessmentId]: res.students
+                        }));
+                      }
+                    })
+                    .catch(err => {
+                      setLevel3Error({
+                        message: err.message || 'Failed to load student roster.',
+                        kind: err.kind || (err.isTimeout ? 'TIMEOUT' : 'ENDPOINT_FAILURE'),
+                        status: err.status,
+                        isRetryable: err.isRetryable ?? true
+                      });
+                    })
+                    .finally(() => setIsLoadingStudents(false));
+                }
+              }}
+              isLoading={isLoadingStudents}
+            />
+          )}
+
           <div className="bg-academic-surface border border-academic-border rounded-lg shadow-sm overflow-hidden">
             {isLoadingStudents ? (
               <div className="py-16 text-center text-academic-muted flex items-center justify-center space-x-2">

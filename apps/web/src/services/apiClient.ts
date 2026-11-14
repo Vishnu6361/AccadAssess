@@ -78,7 +78,60 @@ function resolveApiBaseUrl(): string {
 const API_BASE_URL = resolveApiBaseUrl();
 export const getApiBaseUrl = (): string => API_BASE_URL;
 
+export type ApiErrorKind =
+  | 'TIMEOUT'
+  | 'BACKEND_UNAVAILABLE'
+  | 'AUTH_FAILURE'
+  | 'DATABASE_FAILURE'
+  | 'ENDPOINT_FAILURE';
+
+export class ApiClientError extends Error {
+  public readonly kind: ApiErrorKind;
+  public readonly status?: number;
+  public readonly endpoint: string;
+  public readonly isTimeout: boolean;
+  public readonly isRetryable: boolean;
+  public readonly details?: string;
+
+  constructor(params: {
+    message: string;
+    kind: ApiErrorKind;
+    endpoint: string;
+    status?: number;
+    details?: string;
+    isRetryable?: boolean;
+  }) {
+    super(params.message);
+    this.name = 'ApiClientError';
+    this.kind = params.kind;
+    this.status = params.status;
+    this.endpoint = params.endpoint;
+    this.isTimeout = params.kind === 'TIMEOUT';
+    this.isRetryable = params.isRetryable ?? (params.kind === 'TIMEOUT' || params.kind === 'BACKEND_UNAVAILABLE');
+    this.details = params.details;
+  }
+}
+
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+const HEAVY_REPORT_TIMEOUT_MS = 30000;
+
+const HEAVY_REPORT_PATHS = new Set([
+  '/admin/hod/institutional-submissions-report',
+  '/evaluations/reports/hod',
+  '/evaluations/reports/class-teacher',
+  '/evaluations/reports/proctor',
+  '/evaluations/student/performance-dashboard',
+  '/submissions/reports/late',
+  '/submissions/reports/mentee-progress'
+]);
+
+export function getTimeoutForPath(path: string): number {
+  const basePath = path.split('?')[0];
+  if (HEAVY_REPORT_PATHS.has(basePath)) {
+    return HEAVY_REPORT_TIMEOUT_MS;
+  }
+  return DEFAULT_REQUEST_TIMEOUT_MS;
+}
 
 /**
  * Fetch wrapper with strict timeout support using AbortController.
@@ -575,6 +628,7 @@ const executeApiRequest = async <T>(
 ): Promise<T> => {
   const isGet = !options.method || options.method.toUpperCase() === 'GET';
   const basePath = path.split('?')[0];
+  const timeoutMs = getTimeoutForPath(path);
 
   // 1. Check client catalog cache for GET requests
   if (isGet && CATALOG_PATHS.has(basePath)) {
@@ -593,52 +647,122 @@ const executeApiRequest = async <T>(
   }
 
   const requestPromise = (async () => {
-    const authHeaders = await getAuthHeaders();
-    const headers = {
-      ...authHeaders,
-      ...(options.headers || {})
-    };
+    const maxAttempts = isGet ? 2 : 1; // 1 automatic retry with backoff for safe GET requests
+    let lastError: any = null;
 
-    let res: Response;
-    try {
-      res = await fetchWithTimeout(`${API_BASE_URL}${path}`, {
-        ...options,
-        headers
-      });
-    } catch (err: any) {
-      const isProd = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.PROD : process.env.NODE_ENV === 'production';
-      if (isProd || isSupabaseConfigured) {
-        throw new Error(`API server is unreachable (${API_BASE_URL}): ${err.message || 'Network error'}`);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (attempt > 1) {
+        // Backoff delay before retry (1000ms)
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
-      // In dev mode when offline and Supabase is not configured, use fallback with warning
-      console.warn(`[SmartFA apiClient] API unreachable at ${path}. Using dev fallback.`);
-      return fallback();
-    }
 
-    if (!res.ok) {
-      let errorMsg = `Server error (${res.status}): ${res.statusText}`;
+      const authHeaders = await getAuthHeaders();
+      const headers = {
+        ...authHeaders,
+        ...(options.headers || {})
+      };
+
+      let res: Response;
       try {
-        const data = await res.json();
-        if (data.error) {
-          errorMsg = typeof data.error === 'string' ? data.error : (data.error.message || JSON.stringify(data.error));
-        } else if (data.message) {
-          errorMsg = data.message;
+        res = await fetchWithTimeout(`${API_BASE_URL}${path}`, {
+          ...options,
+          headers
+        }, timeoutMs);
+      } catch (err: any) {
+        const isTimeout = Boolean(err.isTimeout || err.name === 'AbortError' || err.code === 'TIMEOUT');
+        const isNetworkErr = Boolean(err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError') || err.name === 'TypeError');
+
+        if (attempt < maxAttempts && (isTimeout || isNetworkErr)) {
+          console.warn(`[apiClient] Request to ${path} ${isTimeout ? 'timed out' : 'failed network check'} on attempt ${attempt}. Retrying with backoff...`);
+          lastError = err;
+          continue;
         }
-      } catch { }
-      throw new Error(errorMsg);
+
+        const isProd = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.PROD : process.env.NODE_ENV === 'production';
+        if (isProd || isSupabaseConfigured) {
+          if (isTimeout) {
+            throw new ApiClientError({
+              message: `Request timed out after ${Math.round(timeoutMs / 1000)}s while loading ${basePath}. The backend server may be waking up or processing heavy records. Please retry.`,
+              kind: 'TIMEOUT',
+              endpoint: basePath,
+              status: 504,
+              isRetryable: true
+            });
+          }
+          if (isNetworkErr) {
+            throw new ApiClientError({
+              message: `Cannot reach API server at ${API_BASE_URL}. Please check your connection.`,
+              kind: 'BACKEND_UNAVAILABLE',
+              endpoint: basePath,
+              isRetryable: true
+            });
+          }
+          throw new ApiClientError({
+            message: `Request failed at ${basePath}: ${err.message || 'Unknown network error'}`,
+            kind: 'BACKEND_UNAVAILABLE',
+            endpoint: basePath,
+            details: err.message,
+            isRetryable: true
+          });
+        }
+
+        console.warn(`[SmartFA apiClient] API unreachable at ${path}. Using dev fallback.`);
+        return fallback();
+      }
+
+      // Check HTTP status
+      if (!res.ok) {
+        // For safe GET requests on 502/503/504 gateway errors, retry once
+        if (attempt < maxAttempts && (res.status === 502 || res.status === 503 || res.status === 504)) {
+          console.warn(`[apiClient] Gateway returned ${res.status} on attempt ${attempt} for ${path}. Retrying...`);
+          continue;
+        }
+
+        let errorMsg = `Server error (${res.status}): ${res.statusText}`;
+        let serverErrorData: any = null;
+        try {
+          serverErrorData = await res.json();
+          if (serverErrorData.error) {
+            errorMsg = typeof serverErrorData.error === 'string' ? serverErrorData.error : (serverErrorData.error.message || JSON.stringify(serverErrorData.error));
+          } else if (serverErrorData.message) {
+            errorMsg = serverErrorData.message;
+          }
+        } catch { }
+
+        // Distinguish error types
+        let kind: ApiErrorKind = 'ENDPOINT_FAILURE';
+        if (res.status === 401 || res.status === 403) {
+          kind = 'AUTH_FAILURE';
+        } else if (res.status === 504) {
+          kind = 'TIMEOUT';
+        } else if (res.status >= 500 && (errorMsg.toLowerCase().includes('database') || errorMsg.toLowerCase().includes('postgres') || errorMsg.toLowerCase().includes('relation') || errorMsg.toLowerCase().includes('connection'))) {
+          kind = 'DATABASE_FAILURE';
+        }
+
+        throw new ApiClientError({
+          message: errorMsg,
+          kind,
+          endpoint: basePath,
+          status: res.status,
+          details: serverErrorData?.error?.details ? JSON.stringify(serverErrorData.error.details) : undefined,
+          isRetryable: kind === 'TIMEOUT' || kind === 'DATABASE_FAILURE'
+        });
+      }
+
+      const json = await res.json();
+
+      // Cache catalog GET responses for 30 seconds
+      if (isGet && CATALOG_PATHS.has(basePath)) {
+        clientCatalogCache.set(path, {
+          data: json,
+          expiresAt: Date.now() + 30000
+        });
+      }
+
+      return json as T;
     }
 
-    const json = await res.json();
-
-    // Cache catalog GET responses for 30 seconds
-    if (isGet && CATALOG_PATHS.has(basePath)) {
-      clientCatalogCache.set(path, {
-        data: json,
-        expiresAt: Date.now() + 30000
-      });
-    }
-
-    return json as T;
+    throw lastError || new Error(`Request failed after multiple attempts.`);
   })();
 
   if (isGet) {

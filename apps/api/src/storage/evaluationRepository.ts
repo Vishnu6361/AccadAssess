@@ -1700,6 +1700,8 @@ export class SupabaseEvaluationRepository implements IEvaluationRepository {
 }
 
 let activeEvaluationRepoOverride: IEvaluationRepository | null = null;
+let cachedSupabaseEvaluationRepo: SupabaseEvaluationRepository | null = null;
+let cachedInMemoryEvaluationRepo: InMemoryEvaluationRepository | null = null;
 
 export const setEvaluationRepositoryForTesting = (repo: IEvaluationRepository | null): void => {
   activeEvaluationRepoOverride = repo;
@@ -1709,12 +1711,15 @@ export const getEvaluationRepository = (): IEvaluationRepository => {
   if (activeEvaluationRepoOverride) return activeEvaluationRepoOverride;
 
   if (process.env.NODE_ENV === 'test' || process.env.SMARTFA_TEST_MODE === 'true') {
-    return new InMemoryEvaluationRepository(db);
+    if (!cachedInMemoryEvaluationRepo) cachedInMemoryEvaluationRepo = new InMemoryEvaluationRepository(db);
+    return cachedInMemoryEvaluationRepo;
   }
 
   if (isLiveSupabaseConfigured && supabaseAdmin) {
-    return new SupabaseEvaluationRepository(supabaseAdmin);
+    if (!cachedSupabaseEvaluationRepo) cachedSupabaseEvaluationRepo = new SupabaseEvaluationRepository(supabaseAdmin);
+    return cachedSupabaseEvaluationRepo;
   }
 
-  return new InMemoryEvaluationRepository(db);
+  if (!cachedInMemoryEvaluationRepo) cachedInMemoryEvaluationRepo = new InMemoryEvaluationRepository(db);
+  return cachedInMemoryEvaluationRepo;
 };

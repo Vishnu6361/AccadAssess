@@ -2338,6 +2338,8 @@ export class SupabaseAcademicRepository implements IAcademicRepository {
 
 // Configurable singleton with optional test override hook
 let activeAcademicRepoOverride: IAcademicRepository | null = null;
+let cachedSupabaseAcademicRepo: SupabaseAcademicRepository | null = null;
+let cachedInMemoryAcademicRepo: InMemoryAcademicRepository | null = null;
 
 export const setAcademicRepositoryForTesting = (repo: IAcademicRepository | null): void => {
   activeAcademicRepoOverride = repo;
@@ -2362,16 +2364,20 @@ export const getAcademicRepository = (): IAcademicRepository => {
         'CRITICAL CONFIGURATION ERROR: Production mode requires active Supabase credentials (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY). Offline mock storage is strictly prohibited in production.'
       );
     }
-    return new SupabaseAcademicRepository(supabaseAdmin);
+    if (!cachedSupabaseAcademicRepo) cachedSupabaseAcademicRepo = new SupabaseAcademicRepository(supabaseAdmin);
+    return cachedSupabaseAcademicRepo;
   }
 
   if (process.env.NODE_ENV === 'test' || process.env.SMARTFA_TEST_MODE === 'true') {
-    return new InMemoryAcademicRepository(db);
+    if (!cachedInMemoryAcademicRepo) cachedInMemoryAcademicRepo = new InMemoryAcademicRepository(db);
+    return cachedInMemoryAcademicRepo;
   }
 
   if (isLiveSupabaseConfigured && supabaseAdmin) {
-    return new SupabaseAcademicRepository(supabaseAdmin);
+    if (!cachedSupabaseAcademicRepo) cachedSupabaseAcademicRepo = new SupabaseAcademicRepository(supabaseAdmin);
+    return cachedSupabaseAcademicRepo;
   }
 
-  return new InMemoryAcademicRepository(db);
+  if (!cachedInMemoryAcademicRepo) cachedInMemoryAcademicRepo = new InMemoryAcademicRepository(db);
+  return cachedInMemoryAcademicRepo;
 };

@@ -1944,6 +1944,8 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
 }
 
 let activeAssessmentRepoOverride: IAssessmentRepository | null = null;
+let cachedSupabaseAssessmentRepo: SupabaseAssessmentRepository | null = null;
+let cachedInMemoryAssessmentRepo: InMemoryAssessmentRepository | null = null;
 
 export const setAssessmentRepositoryForTesting = (repo: IAssessmentRepository | null): void => {
   activeAssessmentRepoOverride = repo;
@@ -1953,12 +1955,15 @@ export const getAssessmentRepository = (): IAssessmentRepository => {
   if (activeAssessmentRepoOverride) return activeAssessmentRepoOverride;
 
   if (process.env.NODE_ENV === 'test' || process.env.SMARTFA_TEST_MODE === 'true') {
-    return new InMemoryAssessmentRepository(db);
+    if (!cachedInMemoryAssessmentRepo) cachedInMemoryAssessmentRepo = new InMemoryAssessmentRepository(db);
+    return cachedInMemoryAssessmentRepo;
   }
 
   if (isLiveSupabaseConfigured && supabaseAdmin) {
-    return new SupabaseAssessmentRepository(supabaseAdmin);
+    if (!cachedSupabaseAssessmentRepo) cachedSupabaseAssessmentRepo = new SupabaseAssessmentRepository(supabaseAdmin);
+    return cachedSupabaseAssessmentRepo;
   }
 
-  return new InMemoryAssessmentRepository(db);
+  if (!cachedInMemoryAssessmentRepo) cachedInMemoryAssessmentRepo = new InMemoryAssessmentRepository(db);
+  return cachedInMemoryAssessmentRepo;
 };

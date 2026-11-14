@@ -827,6 +827,8 @@ export class SupabaseUserRepository implements IUserRepository {
 
 // Configurable singleton with optional test override hook
 let activeRepositoryOverride: IUserRepository | null = null;
+let cachedSupabaseUserRepo: SupabaseUserRepository | null = null;
+let cachedInMemoryUserRepo: InMemoryUserRepository | null = null;
 
 export const setUserRepositoryForTesting = (repo: IUserRepository | null): void => {
   activeRepositoryOverride = repo;
@@ -848,16 +850,20 @@ export const getUserRepository = (): IUserRepository => {
         'CRITICAL CONFIGURATION ERROR: Production mode requires active Supabase credentials (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY). Offline mock storage is strictly prohibited in production.'
       );
     }
-    return new SupabaseUserRepository(supabaseAdmin);
+    if (!cachedSupabaseUserRepo) cachedSupabaseUserRepo = new SupabaseUserRepository(supabaseAdmin);
+    return cachedSupabaseUserRepo;
   }
 
   if (process.env.NODE_ENV === 'test' || process.env.SMARTFA_TEST_MODE === 'true') {
-    return new InMemoryUserRepository(db);
+    if (!cachedInMemoryUserRepo) cachedInMemoryUserRepo = new InMemoryUserRepository(db);
+    return cachedInMemoryUserRepo;
   }
 
   if (isLiveSupabaseConfigured && supabaseAdmin) {
-    return new SupabaseUserRepository(supabaseAdmin);
+    if (!cachedSupabaseUserRepo) cachedSupabaseUserRepo = new SupabaseUserRepository(supabaseAdmin);
+    return cachedSupabaseUserRepo;
   }
 
-  return new InMemoryUserRepository(db);
+  if (!cachedInMemoryUserRepo) cachedInMemoryUserRepo = new InMemoryUserRepository(db);
+  return cachedInMemoryUserRepo;
 };

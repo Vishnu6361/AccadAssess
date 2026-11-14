@@ -1362,79 +1362,96 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
     const { data: scopedAssessments, error } = await query;
     if (error) throw new Error(`Failed to query assessments for late report: ${error.message}`);
 
+    const scopedList = scopedAssessments || [];
+    if (scopedList.length === 0) return [];
+
+    const csIds = Array.from(new Set(scopedList.map(a => a.class_subject_id).filter(Boolean)));
+    if (csIds.length === 0) return [];
+
+    // 1. Batch query class_subjects with joined classes and subjects
+    const { data: csRows, error: csErr } = await this.client
+      .from('class_subjects')
+      .select(`
+        id, class_id, subject_id,
+        classes(id, programme, semester, section),
+        subjects(id, code, name)
+      `)
+      .in('id', csIds);
+    if (csErr) throw new Error(`Failed to query class subjects: ${csErr.message}`);
+
+    const csMap = new Map<string, any>((csRows || []).map(cs => [cs.id, cs]));
+    const classIds = Array.from(new Set((csRows || []).map(cs => cs.class_id).filter(Boolean)));
+    if (classIds.length === 0) return [];
+
+    // 2. Batch query active enrollments with joined profiles for all relevant classes
+    const { data: enrollments, error: enrErr } = await this.client
+      .from('enrollments')
+      .select(`
+        id, student_id, class_id, specialization_id, roll_number, status,
+        profiles(id, full_name, email, usn)
+      `)
+      .in('class_id', classIds)
+      .eq('status', 'active');
+    if (enrErr) throw new Error(`Failed to query enrollments: ${enrErr.message}`);
+
+    const enrollmentsByClass = new Map<string, any[]>();
+    for (const enr of (enrollments || [])) {
+      if (!enrollmentsByClass.has(enr.class_id)) {
+        enrollmentsByClass.set(enr.class_id, []);
+      }
+      enrollmentsByClass.get(enr.class_id)!.push(enr);
+    }
+
+    // 3. Batch query submissions and result publications in parallel
+    const assessmentIds = scopedList.map(a => a.id);
+    const [subsRes, pubRes] = await Promise.all([
+      this.client.from('submissions').select('*').in('assessment_id', assessmentIds),
+      this.client.from('result_publications').select('id, assessment_id').in('assessment_id', assessmentIds)
+    ]);
+    if (subsRes.error) throw new Error(`Failed to query submissions: ${subsRes.error.message}`);
+    if (pubRes.error) throw new Error(`Failed to query result publications: ${pubRes.error.message}`);
+
+    const submissions = subsRes.data || [];
+    const publishedAssessmentIds = new Set((pubRes.data || []).map(p => p.assessment_id));
+
+    const submissionsByKey = new Map<string, any>();
+    for (const s of submissions) {
+      submissionsByKey.set(`${s.assessment_id}:${s.student_id}`, s);
+    }
+
+    // 4. Batch query evaluations and submission versions in parallel
+    const subIds = submissions.map(s => s.id);
+    const activeVersionIds = submissions.map(s => s.active_version_id).filter(Boolean);
+
+    const [evalsRes, versRes] = await Promise.all([
+      subIds.length > 0 ? this.client.from('evaluations').select('*').in('submission_id', subIds) : Promise.resolve({ data: [] }),
+      activeVersionIds.length > 0 ? this.client.from('submission_versions').select('*').in('id', activeVersionIds) : Promise.resolve({ data: [] })
+    ]);
+
+    const evalsBySubId = new Map<string, any>((evalsRes.data || []).map((e: any) => [e.submission_id, e]));
+    const versionsById = new Map<string, any>((versRes.data || []).map((v: any) => [v.id, v]));
+
+    // 5. In-memory assembly with zero subsequent network round trips
     const reportRows: any[] = [];
-    for (const assessment of (scopedAssessments || [])) {
-      const { data: cs } = await this.client
-        .from('class_subjects')
-        .select('id, class_id, subject_id')
-        .eq('id', assessment.class_subject_id)
-        .maybeSingle();
-
+    for (const assessment of scopedList) {
+      const cs = csMap.get(assessment.class_subject_id);
       if (!cs) continue;
-
-      const { data: cls } = await this.client
-        .from('classes')
-        .select('id, programme, semester, section')
-        .eq('id', cs.class_id)
-        .maybeSingle();
-
-      const { data: sub } = await this.client
-        .from('subjects')
-        .select('code, name')
-        .eq('id', cs.subject_id)
-        .maybeSingle();
-
+      const cls = cs.classes;
       if (!cls) continue;
+      const sub = cs.subjects;
 
-      const enrollmentsQuery = this.client
-        .from('enrollments')
-        .select('student_id, profiles(id, full_name, email, usn)')
-        .eq('class_id', cls.id)
-        .eq('status', 'active');
-
-      const { data: enrolledStudents } = await enrollmentsQuery;
-
-      for (const row of (enrolledStudents || [])) {
-        const student = (row as any).profiles;
+      const classEnrs = enrollmentsByClass.get(cls.id) || [];
+      for (const enr of classEnrs) {
+        const student = enr.profiles;
         if (!student) continue;
 
-        const { data: subRec } = await this.client
-          .from('submissions')
-          .select('*')
-          .eq('assessment_id', assessment.id)
-          .eq('student_id', student.id)
-          .maybeSingle();
-
-        let versionRec: any = null;
-        if (subRec?.active_version_id) {
-          const { data: v } = await this.client
-            .from('submission_versions')
-            .select('*')
-            .eq('id', subRec.active_version_id)
-            .maybeSingle();
-          versionRec = v || null;
-        }
-
-        let evalRec: any = null;
-        if (subRec) {
-          const { data: ev } = await this.client
-            .from('evaluations')
-            .select('*')
-            .eq('submission_id', subRec.id)
-            .maybeSingle();
-          evalRec = ev || null;
-        }
+        const subRec = submissionsByKey.get(`${assessment.id}:${student.id}`);
+        const versionRec = subRec?.active_version_id ? versionsById.get(subRec.active_version_id) : null;
+        const evalRec = subRec ? evalsBySubId.get(subRec.id) : null;
 
         const isLate = Boolean(subRec?.late_status === 'late' || versionRec?.late_status === 'late');
         const isSubmitted = Boolean(subRec);
-
-        const { data: pubRec } = await this.client
-          .from('result_publications')
-          .select('id')
-          .eq('assessment_id', assessment.id)
-          .maybeSingle();
-
-        const isAssessmentPublished = Boolean(pubRec);
+        const isAssessmentPublished = publishedAssessmentIds.has(assessment.id);
         const isScoreDisclosable = isAssessmentPublished || evalRec?.status === 'published';
 
         reportRows.push({
@@ -1472,7 +1489,6 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
 
     return reportRows;
   }
-
   async listSubmissionsForStudent(studentId: string): Promise<any[]> {
     const { data: list, error } = await this.client
       .from('submissions')
@@ -1511,6 +1527,8 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
 }
 
 let activeSubmissionRepoOverride: ISubmissionRepository | null = null;
+let cachedSupabaseSubmissionRepo: SupabaseSubmissionRepository | null = null;
+let cachedInMemorySubmissionRepo: InMemorySubmissionRepository | null = null;
 
 export const setSubmissionRepositoryForTesting = (repo: ISubmissionRepository | null): void => {
   activeSubmissionRepoOverride = repo;
@@ -1520,12 +1538,15 @@ export const getSubmissionRepository = (): ISubmissionRepository => {
   if (activeSubmissionRepoOverride) return activeSubmissionRepoOverride;
 
   if (process.env.NODE_ENV === 'test' || process.env.SMARTFA_TEST_MODE === 'true') {
-    return new InMemorySubmissionRepository(db);
+    if (!cachedInMemorySubmissionRepo) cachedInMemorySubmissionRepo = new InMemorySubmissionRepository(db);
+    return cachedInMemorySubmissionRepo;
   }
 
   if (isLiveSupabaseConfigured && supabaseAdmin) {
-    return new SupabaseSubmissionRepository(supabaseAdmin);
+    if (!cachedSupabaseSubmissionRepo) cachedSupabaseSubmissionRepo = new SupabaseSubmissionRepository(supabaseAdmin);
+    return cachedSupabaseSubmissionRepo;
   }
 
-  return new InMemorySubmissionRepository(db);
+  if (!cachedInMemorySubmissionRepo) cachedInMemorySubmissionRepo = new InMemorySubmissionRepository(db);
+  return cachedInMemorySubmissionRepo;
 };
