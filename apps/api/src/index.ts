@@ -14,6 +14,7 @@ import hodRouter from './admin/hodRoutes.js';
 import assessmentRouter from './assessments/assessmentRoutes.js';
 import submissionRouter from './submissions/submissionRoutes.js';
 import evaluationRouter from './evaluations/evaluationRoutes.js';
+import assessmentReportRouter from './reports/assessmentReportRoutes.js';
 
 dotenv.config();
 
@@ -531,6 +532,7 @@ app.use('/api/v1/admin/hod', hodRouter);
 app.use('/api/v1/assessments', assessmentRouter);
 app.use('/api/v1/submissions', submissionRouter);
 app.use('/api/v1/evaluations', evaluationRouter);
+app.use('/api/v1/reports/assessment-marks', assessmentReportRouter);
 
 /**
  * Root Info Endpoint

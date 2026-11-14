@@ -11,7 +11,8 @@ import {
   RefreshCw,
   Eye,
   Filter,
-  GraduationCap
+  GraduationCap,
+  FileText
 } from 'lucide-react';
 import {
   evaluationApi,
@@ -19,6 +20,7 @@ import {
   ClassTeacherStudentRosterRowDTO
 } from '../../services/apiClient';
 import { AssessmentResultDetailModal } from '../../components/AssessmentResultDetailModal';
+import { AssessmentMarksReportModal } from '../reports/AssessmentMarksReportModal';
 
 export const DepartmentAcademicPerformance: React.FC = () => {
   const [reportData, setReportData] = useState<HodAcademicReportDTO | null>(null);
@@ -39,6 +41,7 @@ export const DepartmentAcademicPerformance: React.FC = () => {
   // Modal State
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [isReportPdfModalOpen, setIsReportPdfModalOpen] = useState<boolean>(false);
 
   // Persistent option lists
   const [availableSemesters, setAvailableSemesters] = useState<number[]>([]);
@@ -199,14 +202,24 @@ export const DepartmentAcademicPerformance: React.FC = () => {
             </div>
           </div>
 
-          <button
-            onClick={() => loadData(selectedAssessmentId)}
-            disabled={isLoading || isLoadingRoster}
-            className="btn-secondary text-xs px-3.5 py-1.5 self-start sm:self-auto shrink-0 flex items-center space-x-1.5"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 text-academic-primaryGreen ${isLoading || isLoadingRoster ? 'animate-spin' : ''}`} />
-            <span>Refresh Department</span>
-          </button>
+          <div className="flex items-center space-x-2.5 self-start sm:self-auto shrink-0">
+            <button
+              onClick={() => setIsReportPdfModalOpen(true)}
+              className="btn-primary text-xs px-3.5 py-1.5 flex items-center space-x-1.5 bg-academic-primaryGreen text-white rounded-lg shadow-xs hover:bg-academic-deepGreen transition-colors"
+            >
+              <FileText className="w-3.5 h-3.5 text-white" />
+              <span>Assessment Marks PDF</span>
+            </button>
+
+            <button
+              onClick={() => loadData(selectedAssessmentId)}
+              disabled={isLoading || isLoadingRoster}
+              className="btn-secondary text-xs px-3.5 py-1.5 flex items-center space-x-1.5"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-academic-primaryGreen ${isLoading || isLoadingRoster ? 'animate-spin' : ''}`} />
+              <span>Refresh Department</span>
+            </button>
+          </div>
         </div>
 
         {/* Department KPIs */}
@@ -762,6 +775,14 @@ export const DepartmentAcademicPerformance: React.FC = () => {
           setSelectedSubmissionId(null);
         }}
         submissionId={selectedSubmissionId}
+      />
+
+      {/* Official Assessment Marks Report PDF Generator Modal */}
+      <AssessmentMarksReportModal
+        isOpen={isReportPdfModalOpen}
+        onClose={() => setIsReportPdfModalOpen(false)}
+        activeRole="hod"
+        defaultAssessmentId={selectedAssessmentId || undefined}
       />
     </div>
   );

@@ -2947,3 +2947,63 @@ export interface AssessmentResultDetailDTO {
   } | null;
 }
 
+export interface AssessmentReportFilterOptionsDTO {
+  programmes: Array<{ id: string; code: string; name: string }>;
+  specializations: Array<{ id: string; code: string; name: string }>;
+  semesters: number[];
+  classes: Array<{ id: string; name: string; semester: number; section: string }>;
+  subjects: Array<{ id: string; code: string; name: string; credits: number }>;
+  assessments: Array<{ id: string; title: string; subject_id: string; max_marks: number }>;
+  students: Array<{ id: string; usn: string; full_name: string }>;
+}
+
+export const assessmentReportApi = {
+  getFilterOptions: async (): Promise<AssessmentReportFilterOptionsDTO> => {
+    return executeApiRequest('/reports/assessment-marks/options', { method: 'GET' }, () => {
+      throw new Error('Failed to retrieve report filter options');
+    });
+  },
+  getReportData: async (params: {
+    report_type: 'consolidated' | 'subject' | 'student' | 'rubric';
+    class_id?: string;
+    subject_id?: string;
+    assessment_id?: string;
+    student_id?: string;
+  }): Promise<any> => {
+    return executeApiRequest(
+      '/reports/assessment-marks/data',
+      {
+        method: 'POST',
+        body: JSON.stringify(params)
+      },
+      () => {
+        throw new Error('Failed to retrieve report data');
+      }
+    );
+  },
+  fetchReportPdfBlob: async (params: {
+    report_type: 'consolidated' | 'subject' | 'student' | 'rubric';
+    class_id?: string;
+    subject_id?: string;
+    assessment_id?: string;
+    student_id?: string;
+    download?: boolean;
+  }): Promise<Blob> => {
+    const authHeaders = await getAuthHeaders();
+    const res = await fetchWithTimeout(`${API_BASE_URL}/reports/assessment-marks/pdf`, {
+      method: 'POST',
+      headers: {
+        ...authHeaders,
+        'Content-Type': 'application/json',
+        Accept: 'application/pdf'
+      },
+      body: JSON.stringify(params)
+    }, 35000);
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(err?.error?.message || `Failed to generate PDF report (HTTP ${res.status})`);
+    }
+    return res.blob();
+  }
+};
+

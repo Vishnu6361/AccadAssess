@@ -37,6 +37,7 @@ const PdfViewer = React.lazy(() => import('../../components/PdfViewer').then(m =
 import { assessmentApi, AssessmentDTO, submissionApi, SubmissionDTO, authApi } from '../../services/apiClient';
 import { formatClassName } from '@smartfa/contracts';
 import { ProctorMenteeReport } from '../proctor/ProctorMenteeReport';
+import { AssessmentMarksReportModal } from '../reports/AssessmentMarksReportModal';
 
 interface AssessmentManagementProps {
   activeRole: string;
@@ -70,6 +71,7 @@ export const DEFAULT_RUBRIC_CRITERIA: RubricCriterionItem[] = [
 export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ activeRole, initialTab }) => {
   const [assessments, setAssessments] = useState<AssessmentDTO[]>([]);
   const [selectedAssessmentId, setSelectedAssessmentId] = useState<string | null>(null);
+  const [isReportPdfModalOpen, setIsReportPdfModalOpen] = useState<boolean>(false);
   const [loading, setLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -1432,28 +1434,41 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
 
           {/* Top Level Staff Tab Switcher (Assessments vs Submissions Report) */}
           {isStaff && activeRole !== 'proctor' && (
-            <div className="flex border-b border-academic-border gap-2">
-              <button
-                onClick={() => setActiveTab('questions')}
-                className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors ${
-                  activeTab !== 'submissions_report'
-                    ? 'border-academic-primaryGreen text-academic-deepGreen'
-                    : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-                }`}
-              >
-                Assessments Catalog ({assessments.length})
-              </button>
-              <button
-                onClick={() => setActiveTab('submissions_report')}
-                className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors flex items-center space-x-2 ${
-                  activeTab === 'submissions_report'
-                    ? 'border-academic-primaryGreen text-academic-deepGreen'
-                    : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-                }`}
-              >
-                <FileSpreadsheet className="w-4 h-4 text-academic-primaryGreen" />
-                <span>Submissions Report</span>
-              </button>
+            <div className="flex border-b border-academic-border items-center justify-between gap-2">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setActiveTab('questions')}
+                  className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors ${
+                    activeTab !== 'submissions_report'
+                      ? 'border-academic-primaryGreen text-academic-deepGreen'
+                      : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+                  }`}
+                >
+                  Assessments Catalog ({assessments.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab('submissions_report')}
+                  className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors flex items-center space-x-2 ${
+                    activeTab === 'submissions_report'
+                      ? 'border-academic-primaryGreen text-academic-deepGreen'
+                      : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+                  }`}
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-academic-primaryGreen" />
+                  <span>Submissions Report</span>
+                </button>
+              </div>
+
+              {isTeacher && (
+                <button
+                  type="button"
+                  onClick={() => setIsReportPdfModalOpen(true)}
+                  className="btn-primary text-xs px-3 py-1.5 flex items-center space-x-1.5 bg-academic-primaryGreen text-white rounded-lg shadow-xs hover:bg-academic-deepGreen transition-colors mb-1 shrink-0"
+                >
+                  <FileText className="w-3.5 h-3.5 text-white" />
+                  <span>Assessment Marks PDF</span>
+                </button>
+              )}
             </div>
           )}
 
@@ -3872,6 +3887,13 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
           </div>
         </div>
       )}
+      {/* Official Assessment Marks Report PDF Generator Modal */}
+      <AssessmentMarksReportModal
+        isOpen={isReportPdfModalOpen}
+        onClose={() => setIsReportPdfModalOpen(false)}
+        activeRole="subject_teacher"
+        defaultAssessmentId={selectedAssessmentId || undefined}
+      />
     </div>
   );
 };

@@ -19,6 +19,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useProctorReport } from './proctorReportStore';
 import { ProctorAcademicReport } from './ProctorAcademicReport';
 import { AssessmentResultDetailModal } from '../../components/AssessmentResultDetailModal';
+import { AssessmentMarksReportModal } from '../reports/AssessmentMarksReportModal';
 
 /**
  * Subtle loading skeleton for first-time visit while data is being fetched.
@@ -83,6 +84,7 @@ export const ProctorMenteeReport: React.FC<ProctorMenteeReportProps> = ({
 
   // Top tab mode: Academic Performance Dashboard vs Submission Tracking
   const [activeTab, setActiveTab] = useState<'performance' | 'submissions'>(initialTab);
+  const [isReportPdfModalOpen, setIsReportPdfModalOpen] = useState<boolean>(false);
 
   React.useEffect(() => {
     if (initialTab) {
@@ -203,7 +205,7 @@ export const ProctorMenteeReport: React.FC<ProctorMenteeReportProps> = ({
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
       {/* Top Workspace Tab Mode Navigation */}
-      <div className="border-b border-academic-border">
+      <div className="border-b border-academic-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <nav className="flex space-x-2 sm:space-x-6" aria-label="Proctor Workspace Modes">
           <button
             onClick={() => setActiveTab('performance')}
@@ -229,6 +231,14 @@ export const ProctorMenteeReport: React.FC<ProctorMenteeReportProps> = ({
             <span>Mentee Submissions & Deadlines</span>
           </button>
         </nav>
+
+        <button
+          onClick={() => setIsReportPdfModalOpen(true)}
+          className="btn-primary text-xs px-3.5 py-1.5 flex items-center space-x-1.5 bg-academic-primaryGreen text-white rounded-lg shadow-xs hover:bg-academic-deepGreen transition-colors self-start sm:self-auto mb-2 sm:mb-0 shrink-0"
+        >
+          <FileText className="w-3.5 h-3.5 text-white" />
+          <span>Assessment Marks PDF</span>
+        </button>
       </div>
 
       {activeTab === 'performance' ? (
@@ -742,6 +752,14 @@ export const ProctorMenteeReport: React.FC<ProctorMenteeReportProps> = ({
           setSelectedSubmissionId(null);
         }}
         submissionId={selectedSubmissionId}
+      />
+
+      {/* Official Assessment Marks Report PDF Generator Modal */}
+      <AssessmentMarksReportModal
+        isOpen={isReportPdfModalOpen}
+        onClose={() => setIsReportPdfModalOpen(false)}
+        activeRole="proctor"
+        defaultSubjectId={selectedSubjectId || undefined}
       />
     </div>
   );

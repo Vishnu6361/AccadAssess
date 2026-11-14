@@ -29,6 +29,7 @@ import {
 } from '../../services/apiClient';
 import { ClassTeacherAcademicReport } from './ClassTeacherAcademicReport';
 import { RubricBreakdownSection } from '../../components/RubricBreakdownSection';
+import { AssessmentMarksReportModal } from '../reports/AssessmentMarksReportModal';
 
 interface ClassTeacherWorkspaceProps {
   initialTab?: 'performance' | 'reports' | 'students';
@@ -44,6 +45,7 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
   };
 
   const [activeTab, setActiveTab] = useState<'performance' | 'reports' | 'students'>(normalizeTab(initialTab));
+  const [isReportPdfModalOpen, setIsReportPdfModalOpen] = useState<boolean>(false);
   const [cohortClasses, setCohortClasses] = useState<ClassTeacherCohortDTO[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('');
   const [assessments, setAssessments] = useState<AssessmentDTO[]>([]);
@@ -562,11 +564,11 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
       {/* 2. STREAMLINED 3-FUNCTION WORKSPACE TAB NAVIGATION                        */}
       {/* Distinct responsibilities: Performance vs Submissions vs Cohort Directory */}
       {/* ========================================================================= */}
-      <div className="border-b border-academic-border">
-        <nav className="flex space-x-2 sm:space-x-6" aria-label="Class Teacher Workspace Tabs">
+      <div className="border-b border-academic-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <nav className="flex space-x-2 sm:space-x-6 overflow-x-auto" aria-label="Class Teacher Workspace Tabs">
           <button
             onClick={() => setActiveTab('performance')}
-            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 ${activeTab === 'performance'
+            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 shrink-0 ${activeTab === 'performance'
               ? 'border-academic-primaryGreen text-academic-deepGreen font-bold'
               : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
               }`}
@@ -583,7 +585,7 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
               setActiveTab('reports');
               setSelectedAssessmentId(null);
             }}
-            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 ${activeTab === 'reports'
+            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 shrink-0 ${activeTab === 'reports'
               ? 'border-academic-primaryGreen text-academic-deepGreen font-bold'
               : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
               }`}
@@ -597,7 +599,7 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
 
           <button
             onClick={() => setActiveTab('students')}
-            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 ${activeTab === 'students'
+            className={`py-3 px-2 text-sm font-medium border-b-2 transition-colors flex items-center space-x-2 shrink-0 ${activeTab === 'students'
               ? 'border-academic-primaryGreen text-academic-deepGreen font-bold'
               : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
               }`}
@@ -609,6 +611,14 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
             </span>
           </button>
         </nav>
+
+        <button
+          onClick={() => setIsReportPdfModalOpen(true)}
+          className="btn-primary text-xs px-3.5 py-1.5 flex items-center space-x-1.5 bg-academic-primaryGreen text-white rounded-lg shadow-xs hover:bg-academic-deepGreen transition-colors self-start sm:self-auto mb-2 sm:mb-0 shrink-0"
+        >
+          <FileText className="w-3.5 h-3.5 text-white" />
+          <span>Assessment Marks PDF</span>
+        </button>
       </div>
 
       {/* ========================================================================= */}
@@ -1373,6 +1383,13 @@ export const ClassTeacherWorkspace: React.FC<ClassTeacherWorkspaceProps> = ({
           </div>
         </div>
       )}
+      {/* Official Assessment Marks Report PDF Generator Modal */}
+      <AssessmentMarksReportModal
+        isOpen={isReportPdfModalOpen}
+        onClose={() => setIsReportPdfModalOpen(false)}
+        activeRole="class_teacher"
+        defaultAssessmentId={selectedAssessmentId || undefined}
+      />
     </div>
   );
 };
