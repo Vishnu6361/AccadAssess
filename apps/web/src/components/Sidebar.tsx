@@ -231,8 +231,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </span>
             </div>
             <div className="flex justify-between">
-              <span>Security</span>
-              <span className="text-academic-primaryGreen font-medium">RBAC / RLS Active</span>
+              <span>Status</span>
+              <span className="text-academic-primaryGreen font-medium">Active Session</span>
             </div>
           </div>
         </div>

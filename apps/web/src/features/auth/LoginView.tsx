@@ -878,7 +878,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
             <div className="pt-2.5 border-t border-academic-borderSubtle text-[11px] text-academic-muted leading-relaxed flex items-start space-x-2">
               <ShieldCheck className="w-4 h-4 text-academic-primaryGreen flex-shrink-0 mt-0.5" />
               <p>
-                Supabase Auth authenticates your session. Role context is cryptographically verified by the backend API. Client-side role self-assignment is strictly disabled.
+                Secure institutional login. Access is restricted to authorized faculty, students, and administration. Role permissions are centrally managed.
               </p>
             </div>
           </div>

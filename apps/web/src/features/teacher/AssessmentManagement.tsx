@@ -1393,7 +1393,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
           <div className="flex items-center space-x-2">
             <AlertCircle className="w-4 h-4 text-[#B28704] flex-shrink-0" />
             <span>
-              <strong>Offline Mock Mode:</strong> The backend API server ({assessmentApi.getBaseUrl?.() || 'server'}) is unreachable. Displaying read-only preview data.
+              <strong>Connection Notice:</strong> Unable to reach the server. Displaying cached academic data.
             </span>
           </div>
         </div>
@@ -1658,7 +1658,6 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                   {assessments.map(ass => {
                     const isDraft = ass.status === 'draft';
                     const isPublished = ass.status === 'published';
-                    const isDocBased = Boolean(ass.document_storage_key);
 
                     return (
                       <div 
@@ -1678,17 +1677,10 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                           <div className="flex items-start justify-between gap-3 mb-2">
                             <div className="flex items-center space-x-2">
                               {isTeacher ? (
-                                <>
-                                  <StatusBadge 
-                                    label={ass.status.toUpperCase()} 
-                                    variant={isPublished ? 'published' : isDraft ? 'draft' : 'neutral'} 
-                                  />
-                                  {isDocBased && (
-                                    <span className="text-[10px] font-bold text-academic-primaryGreen bg-academic-lightGreen px-2 py-0.5 rounded border border-academic-primaryGreen/30">
-                                      PDF-Based
-                                    </span>
-                                  )}
-                                </>
+                                <StatusBadge 
+                                  label={ass.status.toUpperCase()} 
+                                  variant={isPublished ? 'published' : isDraft ? 'draft' : 'neutral'} 
+                                />
                               ) : isStudent ? (
                                 renderStudentSubmissionBadge(ass.id)
                               ) : (
@@ -1698,9 +1690,6 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                                 />
                               )}
                             </div>
-                            <span className="text-[11px] font-mono text-academic-muted bg-academic-paleGreen px-2 py-0.5 rounded border border-academic-border">
-                              v{ass.version || 1}
-                            </span>
                           </div>
 
                           <h3 className="text-base font-bold text-academic-deepGreen group-hover:text-academic-primaryGreen transition-colors">
@@ -1718,9 +1707,9 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
 
                         <div className="mt-4 pt-3 border-t border-academic-border/70 flex flex-col gap-2">
                           <div className="flex items-center justify-between text-xs text-academic-muted">
-                            <span className="flex items-center">
+                            <span className="flex items-center font-medium">
                               <Layers className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
-                              {isDocBased ? `Max ${ass.max_files || 1} File(s) • ${ass.max_marks || 50} Marks` : `${ass.questions?.length || 0} Questions`}
+                              {`${ass.max_marks || 50} Marks`}
                             </span>
                             <span className="flex items-center">
                               <Clock className="w-3.5 h-3.5 mr-1 text-academic-primaryGreen" />
@@ -2444,11 +2433,6 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                                   of {draftQuestions.length}
                                 </span>
                               )}
-                              {q.max_marks ? (
-                                <span className="text-[11px] text-academic-muted">
-                                  ({q.max_marks} marks)
-                                </span>
-                              ) : null}
                             </div>
                             {selectedAssessment.status === 'draft' && isTeacher && (
                               <div className="flex items-center space-x-1">
@@ -3790,14 +3774,14 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                       <span>Irreversible Academic Deletion Warning</span>
                     </div>
                     <p className="text-[11px] leading-relaxed">
-                      This action will permanently delete this assignment and completely purge all associated records from the institutional database and private storage. This action <strong>cannot be undone</strong>.
+                      This action will permanently delete this assessment and all associated student submissions and evaluation records. This action <strong>cannot be undone</strong>.
                     </p>
                   </div>
 
-                  {/* Summary of Dependent Entities to be Removed */}
+                  {/* Summary of Associated Entities to be Removed */}
                   <div className="p-3 bg-academic-paleGreen/20 border border-academic-border rounded-lg space-y-1.5">
                     <span className="text-[11px] font-bold text-academic-deepGreen uppercase tracking-wider block">
-                      Dependent Entities To Be Purged:
+                      Associated Records:
                     </span>
                     <div className="grid grid-cols-2 gap-2 text-[11px] text-academic-deepGreen">
                       <div className="flex items-center justify-between p-1.5 bg-white rounded border border-academic-border">

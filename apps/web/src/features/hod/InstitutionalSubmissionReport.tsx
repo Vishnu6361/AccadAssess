@@ -42,9 +42,9 @@ const RenderApiErrorAlert: React.FC<{
       case 'AUTH_FAILURE':
         return { label: 'Access Denied', bg: 'bg-purple-100 text-purple-800 border-purple-300' };
       case 'DATABASE_FAILURE':
-        return { label: 'Database Error', bg: 'bg-orange-100 text-orange-800 border-orange-300' };
+        return { label: 'System Notice', bg: 'bg-orange-100 text-orange-800 border-orange-300' };
       default:
-        return { label: error.status ? `Error ${error.status}` : 'API Error', bg: 'bg-rose-100 text-rose-800 border-rose-300' };
+        return { label: error.status ? `Notice (${error.status})` : 'Connection Notice', bg: 'bg-rose-100 text-rose-800 border-rose-300' };
     }
   };
 

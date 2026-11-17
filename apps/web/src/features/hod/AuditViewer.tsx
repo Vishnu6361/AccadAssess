@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, 
   Clock, 
-  Terminal, 
+  FileText, 
   RefreshCw,
   Search,
   AlertTriangle
@@ -45,10 +45,10 @@ export const AuditViewer: React.FC = () => {
         <div>
           <h2 className="text-xl font-bold text-academic-deepGreen flex items-center">
             <ShieldCheck className="w-5 h-5 mr-2 text-academic-primaryGreen" />
-            Append-Only Audit Log Records
+            Institutional Audit Log
           </h2>
           <p className="text-xs text-academic-muted mt-1">
-            Tamper-evident, append-only chronological log of institutional administrative actions, role grants, and status changes.
+            Chronological record of institutional administrative actions, role assignments, and status updates.
           </p>
         </div>
 
@@ -91,7 +91,7 @@ export const AuditViewer: React.FC = () => {
 
         <div className="text-[11px] text-academic-muted flex items-center space-x-2">
           <span className="w-2 h-2 rounded-full bg-academic-primaryGreen inline-block"></span>
-          <span>Policy: Append-Only (Zero Deletions Permitted)</span>
+          <span>Policy: Permanent Institutional Record</span>
         </div>
       </div>
 
@@ -131,13 +131,13 @@ export const AuditViewer: React.FC = () => {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                 <div>
-                  <p className="text-[11px] text-academic-muted">Actor ID:</p>
+                  <p className="text-[11px] text-academic-muted">Authorized User:</p>
                   <p className="font-mono text-academic-deepGreen font-medium">
                     {event.actor_id || 'System / Automated'}
                   </p>
                 </div>
                 <div>
-                  <p className="text-[11px] text-academic-muted">Resource Identifier:</p>
+                  <p className="text-[11px] text-academic-muted">Target Resource:</p>
                   <p className="font-mono text-academic-deepGreen font-medium truncate">
                     {event.resource_id}
                   </p>
@@ -147,8 +147,8 @@ export const AuditViewer: React.FC = () => {
               {(event.before || event.after) && (
                 <div className="mt-3 pt-2 border-t border-academic-border/40">
                   <p className="text-[10px] uppercase font-bold text-academic-muted tracking-wider mb-1 flex items-center">
-                    <Terminal className="w-3 h-3 mr-1" />
-                    Event Snapshot
+                    <FileText className="w-3 h-3 mr-1 text-academic-primaryGreen" />
+                    Record Snapshot
                   </p>
                   <pre className="p-2.5 bg-academic-paleGreen rounded text-[11px] font-mono text-academic-deepGreen overflow-x-auto">
                     {JSON.stringify({ before: event.before, after: event.after }, null, 2)}

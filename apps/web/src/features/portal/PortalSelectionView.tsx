@@ -132,7 +132,7 @@ export const PortalSelectionView: React.FC<PortalSelectionViewProps> = ({ onSele
             <div className="pt-2 border-t border-academic-borderSubtle text-[11px] text-academic-muted leading-normal flex items-center justify-center space-x-1.5 text-center">
               <ShieldCheck className="w-3.5 h-3.5 text-academic-primaryGreen flex-shrink-0" />
               <span>
-                Supabase Auth verified &bull; Database-backed role isolation &bull; Strict portal access governance
+                Verified institutional authentication &bull; Role-based access governance &bull; Academic policy enforced
               </span>
             </div>
           </div>

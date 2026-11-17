@@ -180,7 +180,7 @@ export const ProctorAcademicReport: React.FC = () => {
             No Assigned Mentees
           </h2>
           <p className="text-xs text-academic-muted max-w-md mx-auto leading-relaxed">
-            There are currently no students assigned to your proctor cohort in the institutional database.
+            There are currently no students assigned to your proctor cohort.
           </p>
         </div>
       ) : (

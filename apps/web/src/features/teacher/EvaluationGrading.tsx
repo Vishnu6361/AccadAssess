@@ -921,7 +921,6 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
                             );
                             const qOrder = ans.question_order || q?.display_order || idx + 1;
                             const qPrompt = q?.prompt || ans.question_prompt || `Question ${qOrder}`;
-                            const qMarks = q?.max_marks;
                             const wordCount = ans.answer_text ? ans.answer_text.trim().split(/\s+/).length : 0;
 
                             return (
@@ -931,11 +930,6 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
                                     <span className="px-2 py-0.5 rounded bg-academic-deepGreen text-white text-[11px] font-bold font-mono">
                                       Question {qOrder}
                                     </span>
-                                    {qMarks ? (
-                                      <span className="font-semibold text-xs text-academic-deepGreen">
-                                        ({qMarks} marks)
-                                      </span>
-                                    ) : null}
                                   </div>
                                   <span className="text-[10px] text-academic-muted font-mono">
                                     {wordCount} {wordCount === 1 ? 'word' : 'words'} &bull; {ans.answer_text?.length || 0} chars

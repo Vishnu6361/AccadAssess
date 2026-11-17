@@ -2343,7 +2343,7 @@ export const UserManagement: React.FC = () => {
                     </p>
                   ) : (
                     <p className="text-[10px] text-academic-muted mt-1">
-                      Updating the email address automatically synchronizes Supabase Authentication and the institutional profile.
+                      Updating the email address automatically updates institutional login credentials and profile records.
                     </p>
                   )}
                 </div>
@@ -2914,7 +2914,7 @@ export const UserManagement: React.FC = () => {
                           Authoritative Access & Permissions
                         </h4>
                         <p className="text-[10px] text-academic-muted mt-0.5">
-                          Enforced by backend security rules based on authoritative roles and allocations.
+                          Enforced by institutional governance policy based on authoritative roles and allocations.
                         </p>
                       </div>
 

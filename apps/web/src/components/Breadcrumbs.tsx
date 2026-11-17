@@ -16,7 +16,7 @@ export const Breadcrumbs: React.FC<BreadcrumbsProps> = ({ items }) => {
     <nav className="flex items-center space-x-2 text-xs text-academic-muted mb-4" aria-label="Breadcrumb">
       <div className="flex items-center text-academic-muted hover:text-academic-deepGreen">
         <Home className="w-3.5 h-3.5 mr-1" />
-        <span>Institutional Root</span>
+        <span>Home</span>
       </div>
       {items.map((item, idx) => (
         <React.Fragment key={idx}>

@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  BookOpen, 
-  Building2, 
-  GraduationCap, 
-  Layers, 
-  Plus, 
-  CheckCircle2, 
-  AlertCircle, 
-  UserCheck, 
-  Shield, 
-  RefreshCw, 
+import {
+  BookOpen,
+  Building2,
+  GraduationCap,
+  Layers,
+  Plus,
+  CheckCircle2,
+  AlertCircle,
+  UserCheck,
+  Shield,
+  RefreshCw,
   X,
   FolderTree,
   Edit3,
@@ -24,13 +24,13 @@ import {
   ArrowRightLeft
 } from 'lucide-react';
 import { hodApi } from '../../services/apiClient';
-import { 
-  Subject, 
+import {
+  Subject,
   ClassSubject,
   Programme,
   Specialization,
-  CreateClassRequest, 
-  CreateSubjectRequest, 
+  CreateClassRequest,
+  CreateSubjectRequest,
   UpdateSubjectRequest,
   SubjectDependencies,
   CreateProgrammeRequest,
@@ -180,14 +180,14 @@ export const AcademicStructure: React.FC = () => {
   } | null>(null);
 
   // Specializations for MCA Semester 3
-  const securitySpec = specializations.find(s => 
-    s.code?.toUpperCase() === 'CYBER' || 
+  const securitySpec = specializations.find(s =>
+    s.code?.toUpperCase() === 'CYBER' ||
     s.name?.toLowerCase().includes('security')
   ) || (specializations.length > 0 ? specializations[0] : null);
 
-  const aiSpec = specializations.find(s => 
-    s.code?.toUpperCase() === 'AI' || 
-    s.name?.toLowerCase().includes('artificial') || 
+  const aiSpec = specializations.find(s =>
+    s.code?.toUpperCase() === 'AI' ||
+    s.name?.toLowerCase().includes('artificial') ||
     s.name?.toLowerCase().includes('intelligence')
   ) || (specializations.length > 1 ? specializations[1] : null);
 
@@ -213,43 +213,43 @@ export const AcademicStructure: React.FC = () => {
   const getStudentEnrollmentStatus = (studentId: string) => {
     const currentEnrollment = enrollments.find(e => e.student_id === studentId && (e.semester === 3 || !e.semester));
     if (!currentEnrollment) {
-      return { 
-        isEnrolled: false, 
-        stream: null, 
-        label: 'Not Enrolled', 
-        badgeClass: 'bg-slate-100 text-slate-700 border-slate-300' 
+      return {
+        isEnrolled: false,
+        stream: null,
+        label: 'Not Enrolled',
+        badgeClass: 'bg-slate-100 text-slate-700 border-slate-300'
       };
     }
     const isSecurity = (securitySpec && currentEnrollment.specialization_id === securitySpec.id) ||
       currentEnrollment.specialization_code?.toUpperCase() === 'CYBER' ||
       (!currentEnrollment.specialization_id && currentEnrollment.class_name && currentEnrollment.class_name.toLowerCase().includes('security'));
-    
+
     const isAI = (aiSpec && currentEnrollment.specialization_id === aiSpec.id) ||
       currentEnrollment.specialization_code?.toUpperCase() === 'AI' ||
       (!currentEnrollment.specialization_id && currentEnrollment.class_name && currentEnrollment.class_name.toLowerCase().includes('ai'));
 
     if (isSecurity) {
-      return { 
-        isEnrolled: true, 
-        stream: 'security', 
-        label: 'Enrolled in Security Stream', 
+      return {
+        isEnrolled: true,
+        stream: 'security',
+        label: 'Enrolled in Security Stream',
         enrollmentId: currentEnrollment.id,
         badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-300'
       };
     }
     if (isAI) {
-      return { 
-        isEnrolled: true, 
-        stream: 'ai', 
-        label: 'Enrolled in AI Stream', 
+      return {
+        isEnrolled: true,
+        stream: 'ai',
+        label: 'Enrolled in AI Stream',
         enrollmentId: currentEnrollment.id,
         badgeClass: 'bg-purple-100 text-purple-800 border-purple-300'
       };
     }
-    return { 
-      isEnrolled: true, 
-      stream: 'core', 
-      label: 'Enrolled in Common Class', 
+    return {
+      isEnrolled: true,
+      stream: 'core',
+      label: 'Enrolled in Common Class',
       enrollmentId: currentEnrollment.id,
       badgeClass: 'bg-blue-100 text-blue-800 border-blue-300'
     };
@@ -301,15 +301,15 @@ export const AcademicStructure: React.FC = () => {
       setSpecializations(specs || []);
 
       // Filter users by role
-      setTeachers(u.filter((user: any) => 
-        user.roles?.includes('subject_teacher') || 
-        user.roles?.includes('class_teacher') || 
+      setTeachers(u.filter((user: any) =>
+        user.roles?.includes('subject_teacher') ||
+        user.roles?.includes('class_teacher') ||
         user.roles?.includes('hod')
       ));
       setStudents(u.filter((user: any) => user.roles?.includes('student')));
       setProctors(u.filter((user: any) => user.roles?.includes('proctor')));
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to load academic records from database');
+      setErrorMessage(err.message || 'Failed to load academic records');
     } finally {
       setLoading(false);
     }
@@ -497,7 +497,7 @@ export const AcademicStructure: React.FC = () => {
         await hodApi.addSubjectToSpecialization(specTarget.id, {
           subject_id: newSub.id,
           semester: Number(specSubSemester)
-        }).catch(() => {});
+        }).catch(() => { });
         setNotification(`Subject ${newSub.code} created and mapped to ${specTarget.code}.`);
       }
       setShowSpecSubjectModal(false);
@@ -1055,11 +1055,10 @@ export const AcademicStructure: React.FC = () => {
       <div className="flex overflow-x-auto border-b border-academic-border gap-1 scrollbar-none">
         <button
           onClick={() => setActiveTab('programmes')}
-          className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[44px] flex items-center whitespace-nowrap ${
-            activeTab === 'programmes'
+          className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[44px] flex items-center whitespace-nowrap ${activeTab === 'programmes'
               ? 'border-academic-primaryGreen text-academic-deepGreen bg-academic-paleGreen/50'
               : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-          }`}
+            }`}
         >
           <FolderTree className="w-3.5 h-3.5 mr-2" />
           Programmes & Specializations ({programmes.length})
@@ -1067,11 +1066,10 @@ export const AcademicStructure: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('classes')}
-          className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[44px] flex items-center whitespace-nowrap ${
-            activeTab === 'classes'
+          className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[44px] flex items-center whitespace-nowrap ${activeTab === 'classes'
               ? 'border-academic-primaryGreen text-academic-deepGreen bg-academic-paleGreen/50'
               : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-          }`}
+            }`}
         >
           <Layers className="w-3.5 h-3.5 mr-2" />
           Classes & Batches ({classes.length})
@@ -1079,11 +1077,10 @@ export const AcademicStructure: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('subjects')}
-          className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[44px] flex items-center whitespace-nowrap ${
-            activeTab === 'subjects'
+          className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[44px] flex items-center whitespace-nowrap ${activeTab === 'subjects'
               ? 'border-academic-primaryGreen text-academic-deepGreen bg-academic-paleGreen/50'
               : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-          }`}
+            }`}
         >
           <BookOpen className="w-3.5 h-3.5 mr-2" />
           Subjects ({subjects.length})
@@ -1091,11 +1088,10 @@ export const AcademicStructure: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('class_subjects')}
-          className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[44px] flex items-center whitespace-nowrap ${
-            activeTab === 'class_subjects'
+          className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[44px] flex items-center whitespace-nowrap ${activeTab === 'class_subjects'
               ? 'border-academic-primaryGreen text-academic-deepGreen bg-academic-paleGreen/50'
               : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-          }`}
+            }`}
         >
           <GraduationCap className="w-3.5 h-3.5 mr-2" />
           Class-Subject Allocations ({classSubjects.length})
@@ -1103,11 +1099,10 @@ export const AcademicStructure: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('enrollments')}
-          className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[44px] flex items-center whitespace-nowrap ${
-            activeTab === 'enrollments'
+          className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[44px] flex items-center whitespace-nowrap ${activeTab === 'enrollments'
               ? 'border-academic-primaryGreen text-academic-deepGreen bg-academic-paleGreen/50'
               : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-          }`}
+            }`}
         >
           <UserCheck className="w-3.5 h-3.5 mr-2" />
           Student Enrollments ({enrollments.length})
@@ -1115,11 +1110,10 @@ export const AcademicStructure: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('proctors')}
-          className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[44px] flex items-center whitespace-nowrap ${
-            activeTab === 'proctors'
+          className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[44px] flex items-center whitespace-nowrap ${activeTab === 'proctors'
               ? 'border-academic-primaryGreen text-academic-deepGreen bg-academic-paleGreen/50'
               : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-          }`}
+            }`}
         >
           <Shield className="w-3.5 h-3.5 mr-2" />
           Proctor Mentors ({proctors.filter(p => p.status === 'active' && p.roles?.includes('proctor')).length})
@@ -1191,11 +1185,10 @@ export const AcademicStructure: React.FC = () => {
                               {prog.code}
                             </span>
                             <h4 className="font-bold text-sm text-academic-deepGreen">{prog.name}</h4>
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              prog.active !== false 
-                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${prog.active !== false
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                                 : 'bg-gray-100 text-gray-700 border border-gray-300'
-                            }`}>
+                              }`}>
                               {prog.active !== false ? 'Active' : 'Inactive'}
                             </span>
                           </div>
@@ -1282,11 +1275,10 @@ export const AcademicStructure: React.FC = () => {
                                         {spec.code}
                                       </span>
                                       <span className="font-bold text-xs text-academic-deepGreen">{spec.name}</span>
-                                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                        spec.active !== false 
-                                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${spec.active !== false
+                                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                           : 'bg-gray-100 text-gray-600 border border-gray-200'
-                                      }`}>
+                                        }`}>
                                         {spec.active !== false ? 'Active' : 'Inactive'}
                                       </span>
                                     </div>
@@ -1323,11 +1315,10 @@ export const AcademicStructure: React.FC = () => {
 
                                       <button
                                         onClick={() => handleToggleSpecActive(spec)}
-                                        className={`px-2 py-1 rounded text-[11px] border font-medium transition-colors ${
-                                          spec.active !== false
+                                        className={`px-2 py-1 rounded text-[11px] border font-medium transition-colors ${spec.active !== false
                                             ? 'border-red-200 text-red-700 hover:bg-red-50'
                                             : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
-                                        }`}
+                                          }`}
                                       >
                                         {spec.active !== false ? 'Deactivate' : 'Activate'}
                                       </button>
@@ -1779,11 +1770,10 @@ export const AcademicStructure: React.FC = () => {
                         {cs.teacher_name || cs.teacher?.full_name || 'Unassigned'}
                       </td>
                       <td className="py-3 px-4">
-                        <span className={`px-2 py-0.5 rounded text-[11px] font-semibold border ${
-                          cs.active
+                        <span className={`px-2 py-0.5 rounded text-[11px] font-semibold border ${cs.active
                             ? 'bg-academic-lightGreen text-academic-deepGreen border-academic-primaryGreen/30'
                             : 'bg-red-50 text-red-700 border-red-200'
-                        }`}>
+                          }`}>
                           {cs.active ? 'Active' : 'Inactive'}
                         </span>
                       </td>
@@ -1824,11 +1814,10 @@ export const AcademicStructure: React.FC = () => {
               id="tab-security-stream"
               type="button"
               onClick={() => setEnrollmentStreamTab('security')}
-              className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[40px] flex items-center space-x-2 ${
-                enrollmentStreamTab === 'security'
+              className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[40px] flex items-center space-x-2 ${enrollmentStreamTab === 'security'
                   ? 'border-academic-primaryGreen text-academic-deepGreen bg-academic-paleGreen/50 font-bold'
                   : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-              }`}
+                }`}
             >
               <Shield className="w-3.5 h-3.5 text-academic-primaryGreen" />
               <span>Security Stream</span>
@@ -1841,11 +1830,10 @@ export const AcademicStructure: React.FC = () => {
               id="tab-ai-stream"
               type="button"
               onClick={() => setEnrollmentStreamTab('ai')}
-              className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[40px] flex items-center space-x-2 ${
-                enrollmentStreamTab === 'ai'
+              className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors min-h-[40px] flex items-center space-x-2 ${enrollmentStreamTab === 'ai'
                   ? 'border-academic-primaryGreen text-academic-deepGreen bg-academic-paleGreen/50 font-bold'
                   : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-              }`}
+                }`}
             >
               <Cpu className="w-3.5 h-3.5 text-academic-primaryGreen" />
               <span>AI Stream</span>
@@ -2305,13 +2293,12 @@ export const AcademicStructure: React.FC = () => {
                   {Array.from({ length: specParentProg.total_semesters || 4 }, (_, i) => i + 1).map((semNum) => {
                     const isChecked = specSemesters.includes(semNum);
                     return (
-                      <label 
-                        key={semNum} 
-                        className={`flex items-center space-x-1.5 p-1.5 rounded cursor-pointer text-xs font-semibold border ${
-                          isChecked 
-                            ? 'bg-academic-paleGreen border-academic-primaryGreen text-academic-deepGreen' 
+                      <label
+                        key={semNum}
+                        className={`flex items-center space-x-1.5 p-1.5 rounded cursor-pointer text-xs font-semibold border ${isChecked
+                            ? 'bg-academic-paleGreen border-academic-primaryGreen text-academic-deepGreen'
                             : 'bg-white border-academic-border/60 text-academic-muted hover:border-academic-primaryGreen/40'
-                        }`}
+                          }`}
                       >
                         <input
                           type="checkbox"
@@ -2383,22 +2370,20 @@ export const AcademicStructure: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setSpecSubMode('create')}
-                className={`flex-1 py-1.5 font-semibold rounded text-center transition-all ${
-                  specSubMode === 'create'
+                className={`flex-1 py-1.5 font-semibold rounded text-center transition-all ${specSubMode === 'create'
                     ? 'bg-academic-deepGreen text-white shadow-2xs'
                     : 'text-academic-deepGreen hover:bg-academic-paleGreen/50'
-                }`}
+                  }`}
               >
                 Create New Subject
               </button>
               <button
                 type="button"
                 onClick={() => setSpecSubMode('link')}
-                className={`flex-1 py-1.5 font-semibold rounded text-center transition-all ${
-                  specSubMode === 'link'
+                className={`flex-1 py-1.5 font-semibold rounded text-center transition-all ${specSubMode === 'link'
                     ? 'bg-academic-deepGreen text-white shadow-2xs'
                     : 'text-academic-deepGreen hover:bg-academic-paleGreen/50'
-                }`}
+                  }`}
               >
                 Link Existing Subject
               </button>
@@ -2567,8 +2552,8 @@ export const AcademicStructure: React.FC = () => {
 
               <div className="flex justify-end space-x-2 pt-2">
                 <button type="button" onClick={() => setShowClassModal(false)} className="btn-secondary text-xs">Cancel</button>
-                <button 
-                  type="submit" 
+                <button
+                  type="submit"
                   className="btn-primary text-xs"
                 >
                   Create Class
@@ -2701,8 +2686,8 @@ export const AcademicStructure: React.FC = () => {
 
               <div className="flex justify-end space-x-2 pt-2">
                 <button type="button" onClick={() => setShowSubjectModal(false)} className="btn-secondary text-xs">Cancel</button>
-                <button 
-                  type="submit" 
+                <button
+                  type="submit"
                   disabled={!subCode.trim() || !subName.trim()}
                   className="btn-primary text-xs disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -2720,7 +2705,7 @@ export const AcademicStructure: React.FC = () => {
           <div className="card-surface max-w-sm w-full">
             <div className="flex justify-between items-center mb-3">
               <h3 className="text-sm font-bold text-academic-deepGreen">Allocate Subject to Class</h3>
-              <button 
+              <button
                 onClick={() => setShowClassSubjectModal(false)}
                 className="text-academic-muted hover:text-academic-deepGreen"
               >
@@ -2739,9 +2724,9 @@ export const AcademicStructure: React.FC = () => {
                   </ul>
                 </div>
                 <div className="flex justify-end">
-                  <button 
-                    type="button" 
-                    onClick={() => setShowClassSubjectModal(false)} 
+                  <button
+                    type="button"
+                    onClick={() => setShowClassSubjectModal(false)}
                     className="btn-secondary text-xs"
                   >
                     Close
@@ -2802,15 +2787,15 @@ export const AcademicStructure: React.FC = () => {
                 </div>
 
                 <div className="flex justify-end space-x-2 pt-2">
-                  <button 
-                    type="button" 
-                    onClick={() => setShowClassSubjectModal(false)} 
+                  <button
+                    type="button"
+                    onClick={() => setShowClassSubjectModal(false)}
                     className="btn-secondary text-xs"
                   >
                     Cancel
                   </button>
-                  <button 
-                    type="submit" 
+                  <button
+                    type="submit"
                     disabled={!allocClassId || !allocSubjectId || !allocTeacherId || allocSubmitting}
                     className="btn-primary text-xs disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -2850,13 +2835,13 @@ export const AcademicStructure: React.FC = () => {
                   </span>
                 </p>
               </div>
-              <button 
+              <button
                 id="btn-close-enroll-modal"
                 onClick={() => {
                   setShowEnrollModal(false);
                   setSelectedStudentIds([]);
                   setStreamEnrollSearch('');
-                }} 
+                }}
                 className="text-academic-muted hover:text-academic-deepGreen p-1 rounded"
               >
                 <X className="w-5 h-5" />
@@ -2896,7 +2881,7 @@ export const AcademicStructure: React.FC = () => {
                     onClick={() => {
                       const eligibleIds = students
                         .filter(s => {
-                          const matches = !streamEnrollSearch.trim() || 
+                          const matches = !streamEnrollSearch.trim() ||
                             s.full_name?.toLowerCase().includes(streamEnrollSearch.toLowerCase()) ||
                             s.usn?.toLowerCase().includes(streamEnrollSearch.toLowerCase()) ||
                             s.email?.toLowerCase().includes(streamEnrollSearch.toLowerCase());
@@ -2990,13 +2975,12 @@ export const AcademicStructure: React.FC = () => {
                   return (
                     <div
                       key={s.id}
-                      className={`py-2.5 px-3 flex items-center justify-between text-xs rounded transition-colors ${
-                        isCurrentStream 
-                          ? 'bg-academic-paleGreen/20 opacity-75' 
-                          : isChecked 
-                            ? 'bg-academic-paleGreen/40' 
+                      className={`py-2.5 px-3 flex items-center justify-between text-xs rounded transition-colors ${isCurrentStream
+                          ? 'bg-academic-paleGreen/20 opacity-75'
+                          : isChecked
+                            ? 'bg-academic-paleGreen/40'
                             : 'hover:bg-academic-paleGreen/20'
-                      }`}
+                        }`}
                     >
                       <label className="flex items-center space-x-3 cursor-pointer flex-1 min-w-0 pr-2">
                         <input
@@ -3186,12 +3170,12 @@ export const AcademicStructure: React.FC = () => {
                   </span>
                 </div>
               </div>
-              <button 
+              <button
                 onClick={() => {
                   setShowAssignStudentsModal(false);
                   setSelectedProctorForAssign(null);
                   setSelectedStudentIdsForProctor([]);
-                }} 
+                }}
                 className="text-academic-muted hover:text-academic-deepGreen p-1"
               >
                 <X className="w-4 h-4" />
@@ -3336,13 +3320,12 @@ export const AcademicStructure: React.FC = () => {
                     return (
                       <div
                         key={s.id}
-                        className={`p-3 flex items-center justify-between text-xs transition-colors ${
-                          isAssignedToThis
+                        className={`p-3 flex items-center justify-between text-xs transition-colors ${isAssignedToThis
                             ? 'bg-emerald-50/40 opacity-75'
                             : isChecked
                               ? 'bg-academic-paleGreen/40'
                               : 'hover:bg-academic-paleGreen/20'
-                        }`}
+                          }`}
                       >
                         <label className="flex items-center space-x-3 cursor-pointer flex-1 min-w-0 pr-2">
                           <input
@@ -3807,7 +3790,7 @@ export const AcademicStructure: React.FC = () => {
             {isLoadingDependencies ? (
               <div className="py-6 flex flex-col items-center justify-center space-y-2">
                 <RefreshCw className="w-5 h-5 animate-spin text-academic-deepGreen" />
-                <p className="text-xs text-academic-muted">Checking database relationships and dependencies...</p>
+                <p className="text-xs text-academic-muted">Checking academic relationships and allocations...</p>
               </div>
             ) : deleteDependencies?.has_dependencies ? (
               <div className="space-y-3 text-xs">

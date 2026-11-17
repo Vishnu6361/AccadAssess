@@ -118,7 +118,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
       if (err?.code === 'TIMEOUT' || err?.isTimeout || err?.status === 504 || msg.includes('timed out')) {
         category = 'timeout';
-        msg = 'Request timed out while the backend server was waking up from sleep. The server is spinning up. Please click "Retry" below.';
+        msg = 'Request timed out while connecting to the server. Please click "Retry" below.';
       } else if (err?.status === 404 || msg.includes('not found') || err?.code === 'DOCUMENT_NOT_FOUND') {
         category = 'not_found';
         msg = 'Assignment document was not found in institutional storage.';

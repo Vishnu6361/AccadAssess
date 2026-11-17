@@ -137,7 +137,7 @@ export const AppContent: React.FC = () => {
           Restoring Institutional Session...
         </p>
         <p className="text-xs text-academic-muted max-w-sm">
-          Verifying Supabase authentication token and backend role authorization context.
+          Verifying your academic session and account access...
         </p>
       </div>
     );
@@ -265,7 +265,7 @@ export const AppContent: React.FC = () => {
 
           <div className="pt-2 flex justify-between items-center border-t border-academic-border">
             <span className="text-[11px] text-academic-muted">
-              Security Boundary: Express API + Supabase RBAC
+              Institutional Access Governance
             </span>
             <button
               onClick={logout}

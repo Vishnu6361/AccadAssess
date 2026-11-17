@@ -410,7 +410,7 @@ export const ResetPasswordView: React.FC<ResetPasswordViewProps> = ({
             <div className="pt-2.5 border-t border-academic-borderSubtle text-[11px] text-academic-muted leading-relaxed flex items-start space-x-2">
               <ShieldCheck className="w-4 h-4 text-academic-primaryGreen flex-shrink-0 mt-0.5" />
               <p>
-                Supabase Auth securely validates password changes. Your new password will take effect immediately across all institutional services.
+                Password updates are securely verified. Your new password will take effect immediately across all institutional services.
               </p>
             </div>
           </div>
