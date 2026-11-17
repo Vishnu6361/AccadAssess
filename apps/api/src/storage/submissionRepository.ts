@@ -358,7 +358,23 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
   }
 
   async listSubmissionsForAssessment(assessmentId: string): Promise<any[]> {
-    const list = this.inMemoryDb.submissions.filter(s => s.assessment_id === assessmentId);
+    const assessment = this.inMemoryDb.assessments.find(a => a.id === assessmentId);
+    let list = this.inMemoryDb.submissions.filter(s => s.assessment_id === assessmentId);
+    if (assessment) {
+      const cs = this.inMemoryDb.classSubjects.find(c => c.id === assessment.class_subject_id);
+      const sub = cs ? this.inMemoryDb.subjects.find(s => s.id === cs.subject_id) : null;
+      const subSpecId = (sub as any)?.specialization_id ||
+        (this.inMemoryDb as any).subject_specializations?.find((ss: any) => ss.subject_id === sub?.id)?.specialization_id ||
+        null;
+      if (subSpecId && cs) {
+        const validStudentIds = new Set(
+          this.inMemoryDb.enrollments
+            .filter(e => e.class_id === cs.class_id && e.status === 'active' && e.specialization_id === subSpecId)
+            .map(e => e.student_id)
+        );
+        list = list.filter(s => validStudentIds.has(s.student_id));
+      }
+    }
     return Promise.all(list.map(s => this.getFullSubmission(s.id)));
   }
 
@@ -644,8 +660,18 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
       const sub = cs ? this.inMemoryDb.subjects.find(s => s.id === cs.subject_id) : null;
       if (!cs || !cls) continue;
 
+      const subSpecId = (sub as any)?.specialization_id ||
+        (this.inMemoryDb as any).subject_specializations?.find((ss: any) => ss.subject_id === sub?.id)?.specialization_id ||
+        null;
+
       const enrolledStudents = this.inMemoryDb.enrollments
-        .filter(e => e.class_id === cs.class_id && e.status === 'active')
+        .filter(e => {
+          if (e.class_id !== cs.class_id || e.status !== 'active') return false;
+          if (subSpecId) {
+            return Boolean(e.specialization_id && e.specialization_id === subSpecId);
+          }
+          return true;
+        })
         .map(e => this.inMemoryDb.profiles.find(p => p.id === e.student_id))
         .filter(Boolean);
 
@@ -986,13 +1012,47 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
   }
 
   async listSubmissionsForAssessment(assessmentId: string): Promise<any[]> {
+    const { data: assessment } = await this.client
+      .from('assessments')
+      .select('class_subject_id, class_subject:class_subjects(class_id, subject_id, subject:subjects(specialization_id))')
+      .eq('id', assessmentId)
+      .maybeSingle();
+
     const { data: list, error } = await this.client
       .from('submissions')
       .select('*')
       .eq('assessment_id', assessmentId);
 
     if (error) throw new Error(`Failed to list submissions: ${error.message}`);
-    return Promise.all((list || []).map(s => this.getFullSubmission(s.id)));
+
+    let validSubmissions = list || [];
+    let subSpecId = (assessment as any)?.class_subject?.subject?.specialization_id || null;
+    const subjectId = (assessment as any)?.class_subject?.subject_id;
+    const classId = (assessment as any)?.class_subject?.class_id;
+
+    if (!subSpecId && subjectId) {
+      const { data: ssRec } = await this.client
+        .from('subject_specializations')
+        .select('specialization_id')
+        .eq('subject_id', subjectId)
+        .maybeSingle();
+      if (ssRec?.specialization_id) {
+        subSpecId = ssRec.specialization_id;
+      }
+    }
+
+    if (subSpecId && classId && validSubmissions.length > 0) {
+      const { data: validEnrollments } = await this.client
+        .from('enrollments')
+        .select('student_id')
+        .eq('class_id', classId)
+        .eq('status', 'active')
+        .eq('specialization_id', subSpecId);
+      const validStudentIds = new Set((validEnrollments || []).map(e => e.student_id));
+      validSubmissions = validSubmissions.filter(s => validStudentIds.has(s.student_id));
+    }
+
+    return Promise.all(validSubmissions.map(s => this.getFullSubmission(s.id)));
   }
 
   async getMenteeSubmissionsHierarchy(proctorId: string): Promise<MenteeHierarchyItem[]> {
@@ -1374,10 +1434,16 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
       .select(`
         id, class_id, subject_id,
         classes(id, programme, semester, section),
-        subjects(id, code, name)
+        subjects(id, code, name, specialization_id)
       `)
       .in('id', csIds);
     if (csErr) throw new Error(`Failed to query class subjects: ${csErr.message}`);
+
+    const subjectIds = Array.from(new Set((csRows || []).map(cs => cs.subject_id).filter(Boolean)));
+    const { data: subSpecs } = subjectIds.length > 0
+      ? await this.client.from('subject_specializations').select('subject_id, specialization_id').in('subject_id', subjectIds)
+      : { data: [] };
+    const subSpecMap = new Map<string, string>((subSpecs || []).map(ss => [ss.subject_id, ss.specialization_id]));
 
     const csMap = new Map<string, any>((csRows || []).map(cs => [cs.id, cs]));
     const classIds = Array.from(new Set((csRows || []).map(cs => cs.class_id).filter(Boolean)));
@@ -1439,9 +1505,15 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
       const cls = cs.classes;
       if (!cls) continue;
       const sub = cs.subjects;
+      const subSpecId = sub?.specialization_id || (sub?.id ? subSpecMap.get(sub.id) : null) || null;
 
       const classEnrs = enrollmentsByClass.get(cls.id) || [];
       for (const enr of classEnrs) {
+        if (subSpecId) {
+          if (!enr.specialization_id || enr.specialization_id !== subSpecId) {
+            continue;
+          }
+        }
         const student = enr.profiles;
         if (!student) continue;
 

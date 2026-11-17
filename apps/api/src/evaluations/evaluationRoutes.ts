@@ -41,17 +41,30 @@ router.get('/teacher/assignments-overview', requireRoles(['subject_teacher', 'ho
         let isPublished = false;
 
         if (isLiveSupabaseConfigured && Boolean(supabaseAdmin)) {
-          // 1. Get class_id from class_subjects
+          // 1. Get class_id and subject details from class_subjects
           const { data: cs } = await getAdminClient().from('class_subjects')
-            .select('class_id')
+            .select('class_id, subject_id, subject:subjects(specialization_id)')
             .eq('id', ass.class_subject_id)
             .maybeSingle();
 
           if (cs) {
-            const { count } = await getAdminClient().from('enrollments')
+            let subSpecId = (cs as any)?.subject?.specialization_id || null;
+            if (!subSpecId && cs.subject_id) {
+              const { data: ss } = await getAdminClient().from('subject_specializations')
+                .select('specialization_id')
+                .eq('subject_id', cs.subject_id)
+                .maybeSingle();
+              if (ss?.specialization_id) subSpecId = ss.specialization_id;
+            }
+
+            let enrQuery = getAdminClient().from('enrollments')
               .select('id', { count: 'exact', head: true })
               .eq('class_id', cs.class_id)
               .eq('status', 'active');
+            if (subSpecId) {
+              enrQuery = enrQuery.eq('specialization_id', subSpecId);
+            }
+            const { count } = await enrQuery;
             enrolledCount = count || 0;
           }
 
@@ -63,8 +76,16 @@ router.get('/teacher/assignments-overview', requireRoles(['subject_teacher', 'ho
           isPublished = Boolean(pubRec);
         } else {
           const cs = db.classSubjects.find(c => c.id === ass.class_subject_id);
+          const sub = cs ? db.subjects.find(s => s.id === cs.subject_id) : null;
+          const subSpecId = (sub as any)?.specialization_id ||
+            db.subject_specializations?.find(ss => ss.subject_id === sub?.id)?.specialization_id ||
+            null;
           if (cs) {
-            enrolledCount = db.enrollments.filter(e => e.class_id === cs.class_id && e.status === 'active').length;
+            enrolledCount = db.enrollments.filter(e => {
+              if (e.class_id !== cs.class_id || e.status !== 'active') return false;
+              if (subSpecId) return e.specialization_id === subSpecId;
+              return true;
+            }).length;
           }
           isPublished = db.resultPublications.some(rp => rp.assessment_id === ass.id);
         }
@@ -136,15 +157,30 @@ router.get('/assessment/:assessmentId/ledger', requireRoles(['subject_teacher', 
 
     if (isLiveSupabaseConfigured && Boolean(supabaseAdmin)) {
       const { data: cs } = await getAdminClient().from('class_subjects')
-        .select('class_id')
+        .select('class_id, subject_id, subject:subjects(specialization_id)')
         .eq('id', assessment.class_subject_id)
         .maybeSingle();
 
       if (cs) {
-        const { data: enrollments } = await getAdminClient().from('enrollments')
-          .select('student_id, profiles(id, full_name, email, usn)')
+        let subSpecId = (cs as any)?.subject?.specialization_id || null;
+        if (!subSpecId && cs.subject_id) {
+          const { data: ss } = await getAdminClient().from('subject_specializations')
+            .select('specialization_id')
+            .eq('subject_id', cs.subject_id)
+            .maybeSingle();
+          if (ss?.specialization_id) subSpecId = ss.specialization_id;
+        }
+
+        let enrQuery = getAdminClient().from('enrollments')
+          .select('student_id, specialization_id, profiles(id, full_name, email, usn)')
           .eq('class_id', cs.class_id)
           .eq('status', 'active');
+
+        if (subSpecId) {
+          enrQuery = enrQuery.eq('specialization_id', subSpecId);
+        }
+
+        const { data: enrollments } = await enrQuery;
 
         enrolledStudents = (enrollments || []).map(e => (e as any).profiles).filter(Boolean);
       }
@@ -156,9 +192,17 @@ router.get('/assessment/:assessmentId/ledger', requireRoles(['subject_teacher', 
       isPublished = Boolean(pubRec);
     } else {
       const cs = db.classSubjects.find(c => c.id === assessment.class_subject_id);
+      const sub = cs ? db.subjects.find(s => s.id === cs.subject_id) : null;
+      const subSpecId = (sub as any)?.specialization_id ||
+        db.subject_specializations?.find(ss => ss.subject_id === sub?.id)?.specialization_id ||
+        null;
       if (cs) {
         enrolledStudents = db.enrollments
-          .filter(e => e.class_id === cs.class_id && e.status === 'active')
+          .filter(e => {
+            if (e.class_id !== cs.class_id || e.status !== 'active') return false;
+            if (subSpecId) return e.specialization_id === subSpecId;
+            return true;
+          })
           .map(e => db.profiles.find(p => p.id === e.student_id))
           .filter(Boolean);
       }
