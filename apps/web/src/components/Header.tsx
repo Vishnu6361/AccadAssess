@@ -1,7 +1,6 @@
 import React from 'react';
 import {
   Building2, 
-  Bell, 
   UserCircle, 
   Menu, 
   LogOut, 
@@ -132,15 +131,6 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           )
         )}
-
-        {/* Notifications indicator */}
-        <button 
-          className="p-2 rounded-md hover:bg-academic-paleGreen text-academic-muted hover:text-academic-deepGreen relative min-h-[44px] min-w-[44px] flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-academic-primaryGreen"
-          aria-label="View notifications"
-        >
-          <Bell className="w-5 h-5" />
-          <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-academic-primaryGreen rounded-full" />
-        </button>
 
         {/* Account profile badge */}
         <div className="flex items-center space-x-2 border-l border-academic-border pl-2 sm:pl-3">
