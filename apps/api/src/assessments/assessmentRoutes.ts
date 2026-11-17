@@ -193,6 +193,24 @@ router.get('/teacher/class-subjects', requireRoles(['subject_teacher', 'hod']), 
   }
 });
 
+/**
+ * Returns the next automatic sequential formative assessment title and numbering
+ * for a specific class-subject allocation (e.g. Formative Assessment 2, FA2).
+ */
+router.get('/next-sequence', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
+  try {
+    const classSubjectId = req.query.class_subject_id as string;
+    if (!classSubjectId) {
+      return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'class_subject_id query parameter is required' } });
+    }
+    const repo = getAssessmentRepository();
+    const nextSeq = await repo.getNextAssessmentSequence(classSubjectId);
+    return res.status(200).json(nextSeq);
+  } catch (err: any) {
+    return res.status(500).json({ error: { code: 'DATABASE_ERROR', message: err.message } });
+  }
+});
+
 router.get('/:id', async (req: Request, res: Response) => {
   const user = req.userContext!;
   const repo = getAssessmentRepository();
@@ -492,6 +510,11 @@ router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, 
       });
     }
   }
+
+  // 2.1 Enforce Automatic Sequential Formative Assessment Naming
+  // Guarantees sequential Formative Assessment 1, 2, 3... without manual number entry
+  const nextSeqInfo = await repo.getNextAssessmentSequence(body.class_subject_id);
+  body.title = nextSeqInfo.title;
 
   // 3. Execution logic
   const executeCreation = async () => {

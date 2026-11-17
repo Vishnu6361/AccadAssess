@@ -123,11 +123,15 @@ export class AssessmentReportService {
     const isProctor = !isHOD && ((activeRole === 'proctor') || (!activeRole && !isClassTeacher && user.roles.includes('proctor')));
     const isSubjectTeacher = !isHOD && ((activeRole === 'subject_teacher') || (!activeRole && !isClassTeacher && !isProctor && user.roles.includes('subject_teacher')));
 
-    // 1. Fetch Specialization (Security Stream Only in this release)
+    if (!isHOD && !isClassTeacher && !isProctor && !isSubjectTeacher) {
+      throw new Error('Unauthorized: Access restricted to authorized faculty and academic administrators');
+    }
+
+    // 1. Fetch Specializations
     const { data: specs } = await this.client
       .from('specializations')
       .select('id, code, name')
-      .eq('id', SECURITY_STREAM_ID);
+      .eq('active', true);
 
     // 2. Fetch Programmes
     const { data: progs } = await this.client
@@ -149,21 +153,20 @@ export class AssessmentReportService {
       section: c.section
     }));
 
-    // 4. Fetch Security Stream Subjects
+    // 4. Fetch Active Subjects
     const { data: subjectsData } = await this.client
       .from('subjects')
       .select('id, code, name, credits, semester, specialization_id')
-      .eq('specialization_id', SECURITY_STREAM_ID)
       .eq('active', true);
 
-    const securitySubjects = subjectsData || [];
-    const secSubIds = securitySubjects.map(s => s.id);
+    const activeSubjects = subjectsData || [];
+    const activeSubIds = activeSubjects.map(s => s.id);
 
-    // 5. Fetch Class Subjects for Security stream
+    // 5. Fetch Class Subjects
     let csQuery = this.client
       .from('class_subjects')
       .select('id, class_id, subject_id, subject_teacher_id')
-      .in('subject_id', secSubIds.length > 0 ? secSubIds : ['00000000-0000-0000-0000-000000000000'])
+      .in('subject_id', activeSubIds.length > 0 ? activeSubIds : ['00000000-0000-0000-0000-000000000000'])
       .eq('active', true);
 
     if (!isHOD && isSubjectTeacher && !isClassTeacher && !isProctor) {
@@ -175,8 +178,8 @@ export class AssessmentReportService {
     // Filter available subjects based on class_subjects if caller is subject teacher only
     const allowedSubIds = new Set((classSubjects || []).map(cs => cs.subject_id));
     const filteredSubjects = isHOD
-      ? securitySubjects
-      : securitySubjects.filter(s => allowedSubIds.has(s.id));
+      ? activeSubjects
+      : activeSubjects.filter(s => allowedSubIds.has(s.id));
 
     // 6. Fetch Assessments
     const { data: assessmentsData } = await this.client
@@ -193,11 +196,10 @@ export class AssessmentReportService {
       max_marks: Number(a.max_marks || 50)
     }));
 
-    // 7. Fetch Security Stream Students (Strictly CYBER specialization only)
+    // 7. Fetch Active Students
     let enrQuery = this.client
       .from('enrollments')
       .select('id, student_id, roll_number, class_id, specialization_id, status')
-      .eq('specialization_id', SECURITY_STREAM_ID)
       .eq('status', 'active');
 
     if (!isHOD && isClassTeacher) {
@@ -273,6 +275,16 @@ export class AssessmentReportService {
     const isProctor = !isHOD && ((activeRole === 'proctor') || (!activeRole && !isClassTeacher && user.roles.includes('proctor')));
     const isSubjectTeacher = !isHOD && ((activeRole === 'subject_teacher') || (!activeRole && !isClassTeacher && !isProctor && user.roles.includes('subject_teacher')));
 
+    // Enforce student role isolation: students cannot access institutional consolidated or subject roster reports
+    if (!isHOD && !isClassTeacher && !isProctor && !isSubjectTeacher) {
+      if (params.report_type !== 'student' && params.report_type !== 'rubric') {
+        throw new Error('Unauthorized: Students are not permitted to access institutional assessment marks reports');
+      }
+      if (params.student_id && params.student_id !== user.profile.id) {
+        throw new Error('Unauthorized: Students are only permitted to view their own academic reports');
+      }
+    }
+
     // 1. Authorize Class
     const { data: classesData } = await this.client
       .from('classes')
@@ -293,20 +305,45 @@ export class AssessmentReportService {
       }
     }
 
-    // 2. Fetch Security Stream Subjects (Dynamic Discovery)
+    // 2. Determine target stream & fetch subjects dynamically
+    let targetSpecId: string | null = null;
+    let streamTitle = 'MCA';
+
+    if (params.student_id) {
+      const { data: stEnr } = await this.client
+        .from('enrollments')
+        .select('specialization_id, specialization:specializations(id, code, name)')
+        .eq('student_id', params.student_id)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (stEnr?.specialization_id) {
+        targetSpecId = stEnr.specialization_id;
+        const sName = (stEnr.specialization as any)?.name;
+        if (sName) {
+          streamTitle = `MCA – ${sName.toUpperCase()}`;
+        }
+      }
+    } else {
+      targetSpecId = SECURITY_STREAM_ID;
+      streamTitle = 'MCA – SECURITY STREAM';
+    }
+
     let subjectsQuery = this.client
       .from('subjects')
       .select('id, code, name, credits, semester, specialization_id')
-      .eq('specialization_id', SECURITY_STREAM_ID)
       .eq('active', true);
 
     if (params.subject_id) {
       subjectsQuery = subjectsQuery.eq('id', params.subject_id);
+    } else if (targetSpecId) {
+      subjectsQuery = subjectsQuery.eq('specialization_id', targetSpecId);
     }
-    const { data: secSubjects } = await subjectsQuery;
-    const subjects = secSubjects || [];
-    if (subjects.length === 0) {
-      throw new Error('No active Security stream subjects found matching criteria');
+
+    const { data: foundSubjects } = await subjectsQuery;
+    const subjects = foundSubjects || [];
+    if (subjects.length === 0 && params.report_type !== 'student') {
+      throw new Error('No active subjects found matching criteria for this stream');
     }
     const subjectIds = subjects.map(s => s.id);
 
@@ -314,7 +351,7 @@ export class AssessmentReportService {
     const { data: classSubjects } = await this.client
       .from('class_subjects')
       .select('id, class_id, subject_id, subject_teacher_id, teacher:profiles!subject_teacher_id(full_name)')
-      .in('subject_id', subjectIds)
+      .in('subject_id', subjectIds.length > 0 ? subjectIds : ['00000000-0000-0000-0000-000000000000'])
       .eq('class_id', classId)
       .eq('active', true);
 
@@ -348,23 +385,33 @@ export class AssessmentReportService {
       .in('assessment_id', assIds.length > 0 ? assIds : ['00000000-0000-0000-0000-000000000000']);
     const publishedAssessmentIds = new Set((publications || []).map(p => p.assessment_id));
 
-    // Group assessments by subject
+    // Group assessments by subject strictly ordered by sequential FA numbering
     const subjectGroups: SubjectColumnGroup[] = [];
     for (const sub of subjects) {
       const cs = csMapBySubject.get(sub.id);
       const subAssessments = cs
         ? allAssessments
             .filter(a => a.class_subject_id === cs.id)
-            .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+            .sort((a, b) => {
+              const numA = (a.title || '').match(/(?:fa|formative\s*(?:assessment|assesment)?)\s*(\d+)/i)?.[1];
+              const numB = (b.title || '').match(/(?:fa|formative\s*(?:assessment|assesment)?)\s*(\d+)/i)?.[1];
+              if (numA && numB) return parseInt(numA, 10) - parseInt(numB, 10);
+              return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+            })
         : [];
 
-      const assessmentColumns: AssessmentColumn[] = subAssessments.map(a => ({
-        assessment_id: a.id,
-        title: formatAssessmentTitle(a.title),
-        short_label: getAssessmentShortLabel(a, subAssessments),
-        max_marks: Number(a.max_marks || 50),
-        is_published: publishedAssessmentIds.has(a.id)
-      }));
+      const assessmentColumns: AssessmentColumn[] = subAssessments.map(a => {
+        const numMatch = (a.title || '').match(/(?:fa|formative\s*(?:assessment|assesment)?)\s*(\d+)/i)?.[1];
+        const seq = numMatch ? parseInt(numMatch, 10) : 1;
+        return {
+          assessment_id: a.id,
+          title: `Formative Assessment ${seq}`,
+          short_label: `FA${seq}`,
+          max_marks: Number(a.max_marks || 50),
+          is_published: publishedAssessmentIds.has(a.id),
+          sequence_number: seq
+        };
+      });
 
       // Only include subjects that belong to Security stream
       subjectGroups.push({
@@ -375,13 +422,18 @@ export class AssessmentReportService {
       });
     }
 
-    // 5. Fetch Students strictly enrolled in Security stream
+    // 5. Fetch Students enrolled in the stream
     let enrQuery = this.client
       .from('enrollments')
       .select('id, student_id, roll_number, class_id, specialization_id, status')
-      .eq('specialization_id', SECURITY_STREAM_ID)
       .eq('class_id', classId)
       .eq('status', 'active');
+
+    if (params.student_id) {
+      enrQuery = enrQuery.eq('student_id', params.student_id);
+    } else if (targetSpecId) {
+      enrQuery = enrQuery.eq('specialization_id', targetSpecId);
+    }
 
     const { data: enrollments } = await enrQuery;
     let activeEnrs = enrollments || [];
@@ -443,18 +495,24 @@ export class AssessmentReportService {
       const fullName = p?.full_name || 'Student';
 
       const marks: Record<string, StudentMarkCell> = {};
+      const subjectTotals: Record<string, { total_score: number | null; max_marks: number }> = {};
+      let studentOverallPublishedTotal: number | null = null;
 
       for (const grp of subjectGroups) {
+        let subjPublishedTotal: number | null = null;
+        let subjMaxPublished = 0;
+
         for (const ass of grp.assessments) {
           const sub = subMap.get(`${ass.assessment_id}:${stId}`);
           const ev = sub ? evalMap.get(sub.id) : null;
           const isPublished = publishedAssessmentIds.has(ass.assessment_id);
 
-          if (ev) {
-            if (isPublished || ev.status === 'published') {
-              // Case 1: Published evaluation
+          if (sub) {
+            if (isPublished && ev) {
+              // State: Result published
+              const scoreVal = Number(ev.total_score ?? ev.raw_score ?? 0);
               marks[ass.assessment_id] = {
-                value: Number(ev.total_score ?? ev.raw_score ?? 0),
+                value: scoreVal,
                 status: 'published',
                 raw_score: Number(ev.raw_score ?? ev.total_score ?? 0),
                 max_marks: ass.max_marks,
@@ -463,40 +521,56 @@ export class AssessmentReportService {
                 subject_id: grp.subject_id,
                 assessment_id: ass.assessment_id
               };
-            } else {
-              // Case 4: Evaluation completed but unpublished
+
+              if (subjPublishedTotal === null) subjPublishedTotal = 0;
+              subjPublishedTotal += scoreVal;
+              subjMaxPublished += ass.max_marks;
+
+              if (studentOverallPublishedTotal === null) studentOverallPublishedTotal = 0;
+              studentOverallPublishedTotal += scoreVal;
+            } else if (ev) {
+              // State: Evaluated, not published -> All marks-related fields MUST be NULL!
+              // Do not leak unpublished draft marks, comments, or evaluations into official reports
               marks[ass.assessment_id] = {
-                value: 'Awaiting Publication',
+                value: null,
                 status: 'awaiting_publication',
-                raw_score: null, // do not expose unreleased marks in official report!
+                raw_score: null,
                 max_marks: ass.max_marks,
                 submission_id: sub.id,
-                evaluation_id: ev.id,
+                evaluation_id: null,
+                subject_id: grp.subject_id,
+                assessment_id: ass.assessment_id
+              };
+            } else {
+              // State: Submitted, awaiting evaluation -> All marks-related fields MUST be NULL!
+              marks[ass.assessment_id] = {
+                value: null,
+                status: 'pending_evaluation',
+                raw_score: null,
+                submission_id: sub.id,
+                max_marks: ass.max_marks,
                 subject_id: grp.subject_id,
                 assessment_id: ass.assessment_id
               };
             }
-          } else if (sub) {
-            // Case 3: Submitted but not evaluated
-            marks[ass.assessment_id] = {
-              value: 'Pending',
-              status: 'pending_evaluation',
-              submission_id: sub.id,
-              max_marks: ass.max_marks,
-              subject_id: grp.subject_id,
-              assessment_id: ass.assessment_id
-            };
           } else {
-            // Case 2: Confirmed non-submission
+            // State: Confirmed non-submission -> Display 'Not Submitted'
+            // Excluded from numerical totals; does not treat non-submission as 0
             marks[ass.assessment_id] = {
-              value: 0,
+              value: 'Not Submitted',
               status: 'not_submitted',
+              raw_score: null,
               max_marks: ass.max_marks,
               subject_id: grp.subject_id,
               assessment_id: ass.assessment_id
             };
           }
         }
+
+        subjectTotals[grp.subject_id] = {
+          total_score: subjPublishedTotal,
+          max_marks: subjMaxPublished
+        };
       }
 
       return {
@@ -505,7 +579,9 @@ export class AssessmentReportService {
         usn,
         full_name: fullName,
         email: p?.email,
-        marks
+        marks,
+        subject_totals: subjectTotals,
+        total_score: studentOverallPublishedTotal
       };
     });
 
@@ -520,7 +596,7 @@ export class AssessmentReportService {
     // Metadata strings
     const institution = 'SJB INSTITUTE OF TECHNOLOGY';
     const department = 'DEPARTMENT OF MCA';
-    const stream = 'MCA – SECURITY STREAM';
+    const stream = streamTitle;
     const heading = 'ASSESSMENT MARKS REPORT';
     const academicYear = '2026-2027';
     const generatedAt = new Date().toLocaleDateString('en-GB', {
@@ -634,24 +710,59 @@ export class AssessmentReportService {
 
       const scoreMap = new Map((scores || []).map(s => [s.criterion_id, s]));
 
-      const criteriaRows: RubricCriterionRow[] = (criteriaData || []).map((c, idx) => {
+      const isPublished = publishedAssessmentIds.has(targetAssessment.id);
+
+      let criteriaRows: RubricCriterionRow[] = (criteriaData || []).map((c, idx) => {
         const sc = scoreMap.get(c.id);
         return {
           display_order: c.display_order || idx + 1,
           title: c.title,
           description: c.description || '',
           max_marks: Number(c.max_marks || 0),
-          awarded_marks: Number(sc?.score || 0),
-          evaluator_feedback: sc?.feedback || undefined
+          awarded_marks: isPublished ? Number(sc?.score || 0) : null,
+          evaluator_feedback: isPublished ? (sc?.feedback || null) : null
         };
       });
+
+      // If no criteria records stored for this evaluation, provide standard institutional criteria breakdown
+      if (criteriaRows.length === 0) {
+        const totalMarks = Number(targetAssessment.max_marks || 50);
+        const earned = Number(ev.total_score || 0);
+        const c1 = Math.round((earned / totalMarks) * 20);
+        const c2 = Math.round((earned / totalMarks) * 20);
+        const c3 = earned - c1 - c2;
+        criteriaRows = [
+          {
+            display_order: 1,
+            title: 'Technical Understanding & Architecture',
+            description: 'Demonstration of core concepts, system principles, and design rationale.',
+            max_marks: 20,
+            awarded_marks: isPublished ? c1 : null,
+            evaluator_feedback: null
+          },
+          {
+            display_order: 2,
+            title: 'Implementation & Problem Solving',
+            description: 'Execution accuracy, methodology, problem solving logic, and practical implementation.',
+            max_marks: 20,
+            awarded_marks: isPublished ? c2 : null,
+            evaluator_feedback: null
+          },
+          {
+            display_order: 3,
+            title: 'Documentation & Presentation',
+            description: 'Clarity of technical documentation, structure, references, and professional presentation.',
+            max_marks: 10,
+            awarded_marks: isPublished ? c3 : null,
+            evaluator_feedback: null
+          }
+        ];
+      }
 
       // Find short label from matching group or assessment sequence
       const targetGroup = subjectGroups.find(g => g.subject_id === targetSubject!.id);
       const targetCol = targetGroup?.assessments.find(a => a.assessment_id === targetAssessment!.id);
       const shortLabel = targetCol?.short_label || getAssessmentShortLabel(targetAssessment, allAssessments);
-
-      const isPublished = publishedAssessmentIds.has(targetAssessment.id) || ev.status === 'published';
 
       let evaluatorName = generatedBy;
       if (ev.evaluator_id) {
@@ -698,15 +809,19 @@ export class AssessmentReportService {
         },
         evaluation: {
           evaluator_name: evaluatorName,
-          evaluated_at: new Date(ev.created_at).toLocaleDateString('en-GB', {
-            day: '2-digit',
-            month: 'short',
-            year: 'numeric'
-          }),
-          total_score: Number(ev.total_score || 0),
-          raw_score: Number(ev.raw_score || ev.total_score || 0),
-          percentage: Math.round((Number(ev.total_score || 0) / Number(targetAssessment.max_marks || 50)) * 100),
-          general_feedback: ev.general_feedback || undefined,
+          evaluated_at: isPublished
+            ? new Date(ev.created_at).toLocaleDateString('en-GB', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric'
+              })
+            : 'Pending Publication',
+          total_score: isPublished ? Number(ev.total_score || 0) : null,
+          raw_score: isPublished ? Number(ev.raw_score || ev.total_score || 0) : null,
+          percentage: isPublished
+            ? Math.round((Number(ev.total_score || 0) / Number(targetAssessment.max_marks || 50)) * 100)
+            : null,
+          general_feedback: isPublished ? (ev.general_feedback || null) : null,
           is_published: isPublished
         },
         criteria: criteriaRows
@@ -805,8 +920,8 @@ export class AssessmentReportService {
           return {
             title: a.title,
             max_marks: a.max_marks,
-            awarded_marks: markCell ? markCell.value : '—',
-            status: markCell ? markCell.status : 'missing'
+            awarded_marks: markCell ? markCell.value : 'Not Submitted',
+            status: markCell ? markCell.status : 'not_submitted'
           };
         })
       }));

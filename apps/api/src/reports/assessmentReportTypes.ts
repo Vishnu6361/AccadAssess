@@ -16,6 +16,7 @@ export interface AssessmentColumn {
   short_label: string;
   max_marks: number;
   is_published: boolean;
+  sequence_number?: number;
 }
 
 export interface SubjectColumnGroup {
@@ -26,7 +27,7 @@ export interface SubjectColumnGroup {
 }
 
 export interface StudentMarkCell {
-  value: number | string; // Numeric mark (e.g. 38), '0', 'Pending', 'Awaiting Publication', or 'N/A'
+  value: number | string | null; // Numeric mark (e.g. 38), 0, 'Not Submitted', or null (blank before publication)
   status: 'published' | 'not_submitted' | 'pending_evaluation' | 'awaiting_publication' | 'not_applicable' | 'missing';
   raw_score?: number | null;
   max_marks?: number;
@@ -43,6 +44,8 @@ export interface ConsolidatedStudentRow {
   full_name: string;
   email?: string;
   marks: Record<string, StudentMarkCell>; // Key is assessment_id
+  subject_totals?: Record<string, { total_score: number | null; max_marks: number }>; // Key is subject_id
+  total_score?: number | null;
 }
 
 export interface ConsolidatedReportData {
@@ -110,7 +113,7 @@ export interface StudentIndividualReportData {
     assessments: Array<{
       title: string;
       max_marks: number;
-      awarded_marks: number | string;
+      awarded_marks: number | string | null;
       status: string;
     }>;
   }>;
@@ -121,9 +124,9 @@ export interface RubricCriterionRow {
   title: string;
   description: string;
   max_marks: number;
-  awarded_marks: number;
+  awarded_marks: number | null;
   performance_level?: string;
-  evaluator_feedback?: string;
+  evaluator_feedback?: string | null;
 }
 
 export interface DetailedRubricReportData {
@@ -160,10 +163,10 @@ export interface DetailedRubricReportData {
   evaluation: {
     evaluator_name: string;
     evaluated_at: string;
-    total_score: number;
-    raw_score: number;
-    percentage: number;
-    general_feedback?: string;
+    total_score: number | null;
+    raw_score: number | null;
+    percentage: number | null;
+    general_feedback?: string | null;
     is_published: boolean;
   };
   criteria: RubricCriterionRow[];

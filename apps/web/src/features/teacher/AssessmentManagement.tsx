@@ -106,12 +106,24 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     return 'idem-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 10);
   });
 
+  const computeNextTitleForSubject = (csId: string) => {
+    const classAss = assessments.filter(a => a.class_subject_id === csId && (a.status as string) !== 'deletion_pending');
+    const numbers = classAss.map(a => {
+      const match = (a.title || '').match(/(?:fa|formative\s*(?:assessment|assesment)?)\s*(\d+)/i);
+      return match && match[1] ? parseInt(match[1], 10) : 0;
+    }).filter(n => n > 0);
+    const nextNum = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
+    return `Formative Assessment ${nextNum}`;
+  };
+
   const openCreateModal = () => {
     const nextKey = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
       : 'idem-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 10);
     setCreateIdempotencyKey(nextKey);
     setErrorMessage(null);
+    const nextTitle = computeNextTitleForSubject(formClassSubjectId);
+    setFormTitle(nextTitle);
     setShowCreateModal(true);
   };
   const [showPublishConfirmModal, setShowPublishConfirmModal] = useState(false);
@@ -1010,10 +1022,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     if (isSubmittingCreateRef.current) return;
     setErrorMessage(null);
 
-    if (!formTitle.trim()) {
-      setErrorMessage('Assessment title is required.');
-      return;
-    }
+    const effectiveTitle = formTitle.trim() || computeNextTitleForSubject(formClassSubjectId);
 
     if (!formDeadline) {
       setErrorMessage('Submission deadline is required.');
@@ -1055,7 +1064,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     try {
       const newAssessment = await assessmentApi.createAssessment({
         class_subject_id: formClassSubjectId,
-        title: formTitle.trim(),
+        title: effectiveTitle,
         instructions: formInstructions.trim() || 'Refer to the assignment document, questions, and evaluation rubric.',
         deadline_at: deadlineDate.toISOString(),
         max_marks: Number(formMaxMarks || 50),
@@ -2983,25 +2992,15 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
             <form onSubmit={handleCreateAssessment} className="space-y-4 text-xs">
               <div>
                 <label className="block font-semibold text-academic-deepGreen mb-1">
-                  Assignment Title *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Formative Assignment 1: Advanced Algorithms"
-                  value={formTitle}
-                  onChange={(e) => setFormTitle(e.target.value)}
-                  className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-academic-deepGreen mb-1">
                   Class & Subject Allocation *
                 </label>
                 <select
                   value={formClassSubjectId}
-                  onChange={(e) => setFormClassSubjectId(e.target.value)}
+                  onChange={(e) => {
+                    const newCsId = e.target.value;
+                    setFormClassSubjectId(newCsId);
+                    setFormTitle(computeNextTitleForSubject(newCsId));
+                  }}
                   className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen min-h-[44px]"
                 >
                   {availableClassSubjects.length > 0 ? (
@@ -3015,12 +3014,21 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                       <option value="c5100000-0000-0000-0000-000000000001">
                         MCA Semester 3 — MCA301 Analysis and Design of Algorithms
                       </option>
-                      <option value="c5100000-0000-0000-0000-000000000002">
-                        MCA Semester 3 — MCA302 Cloud Computing & Distributed Systems
-                      </option>
                     </>
                   )}
                 </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-academic-deepGreen mb-1">
+                  Assessment Title (Auto-generated)
+                </label>
+                <div className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface/60 text-academic-deepGreen font-semibold min-h-[44px] flex items-center justify-between">
+                  <span className="text-sm">{formTitle || computeNextTitleForSubject(formClassSubjectId)}</span>
+                  <span className="text-[11px] font-normal text-academic-primaryGreen bg-academic-primaryGreen/10 border border-academic-primaryGreen/20 px-2.5 py-0.5 rounded-full">
+                    Auto-numbered
+                  </span>
+                </div>
               </div>
 
               {/* Assignment PDF File Picker */}

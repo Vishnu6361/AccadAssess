@@ -409,16 +409,26 @@ export class InMemoryEvaluationRepository implements IEvaluationRepository {
   }
 
   async getProctorAcademicReport(proctorId: string, isHOD: boolean): Promise<any> {
-    const assignments = isHOD
+    const assignments = (isHOD
       ? this.inMemoryDb.proctorAssignments
-      : this.inMemoryDb.proctorAssignments.filter(pa => pa.proctor_id === proctorId);
+      : this.inMemoryDb.proctorAssignments.filter(pa => pa.proctor_id === proctorId)
+    ).filter(pa => !pa.valid_to || new Date(pa.valid_to) > new Date());
 
     const mentees = assignments.map(pa => {
       const student = this.inMemoryDb.profiles.find(p => p.id === pa.student_id);
       const enr = this.inMemoryDb.enrollments.find(e => e.student_id === pa.student_id && e.status === 'active');
       const cls = enr ? this.inMemoryDb.classes.find(c => c.id === enr.class_id) : null;
+      const studentSpecId = enr?.specialization_id;
+      const spec = studentSpecId ? (this.inMemoryDb as any).specializations?.find((s: any) => s.id === studentSpecId) : null;
 
-      const csList = cls ? this.inMemoryDb.classSubjects.filter(cs => cs.class_id === cls.id && cs.active) : [];
+      const csList = (cls ? this.inMemoryDb.classSubjects.filter(cs => cs.class_id === cls.id && cs.active) : []).filter(cs => {
+        const sub = this.inMemoryDb.subjects.find(s => s.id === cs.subject_id);
+        const subSpecId = (sub as any)?.specialization_id;
+        if (subSpecId) {
+          return Boolean(studentSpecId && subSpecId === studentSpecId);
+        }
+        return true;
+      });
 
       let totalResultsCount = 0;
       let totalScoreSum = 0;
@@ -485,6 +495,9 @@ export class InMemoryEvaluationRepository implements IEvaluationRepository {
         semester: cls?.semester || 1,
         section: cls?.section || 'A',
         class_id: cls?.id,
+        specialization_id: studentSpecId || null,
+        specialization_code: spec?.code || null,
+        specialization_name: spec?.name || null,
         enrolled_subjects_count: subjects.length,
         overall_results_count: totalResultsCount,
         overall_average_percentage: totalResultsCount > 0 ? Math.round((totalScoreSum / maxMarksSum) * 100) : null,
@@ -1284,7 +1297,8 @@ export class SupabaseEvaluationRepository implements IEvaluationRepository {
   async getProctorAcademicReport(proctorId: string, isHOD: boolean): Promise<any> {
     let paQuery = this.client
       .from('proctor_assignments')
-      .select('*, student:profiles!student_id(*), class:classes(*)');
+      .select('*, student:profiles!student_id(*), class:classes(*)')
+      .is('valid_to', null);
     if (!isHOD) {
       paQuery = paQuery.eq('proctor_id', proctorId);
     }
@@ -1299,7 +1313,7 @@ export class SupabaseEvaluationRepository implements IEvaluationRepository {
     // Enrollments
     const { data: enrollments } = await this.client
       .from('enrollments')
-      .select('*, class:classes(*)')
+      .select('*, class:classes(*), specialization:specializations(*)')
       .in('student_id', studentIds)
       .eq('status', 'active');
 
@@ -1354,8 +1368,17 @@ export class SupabaseEvaluationRepository implements IEvaluationRepository {
       const student = pa.student;
       const enr = (enrollments || []).find(e => e.student_id === pa.student_id);
       const cls = enr?.class || pa.class;
+      const studentSpecId = enr?.specialization_id;
+      const spec = (enr as any)?.specialization;
 
-      const csList = (classSubjects || []).filter(cs => cs.class_id === (cls?.id || pa.class_id));
+      const csList = (classSubjects || []).filter(cs => {
+        if (cs.class_id !== (cls?.id || pa.class_id)) return false;
+        const subSpecId = (cs.subject as any)?.specialization_id;
+        if (subSpecId) {
+          return Boolean(studentSpecId && subSpecId === studentSpecId);
+        }
+        return true;
+      });
 
       let totalResultsCount = 0;
       let totalScoreSum = 0;
@@ -1420,6 +1443,9 @@ export class SupabaseEvaluationRepository implements IEvaluationRepository {
         semester: cls?.semester || 1,
         section: cls?.section || 'A',
         class_id: cls?.id || pa.class_id,
+        specialization_id: studentSpecId || null,
+        specialization_code: spec?.code || null,
+        specialization_name: spec?.name || null,
         enrolled_subjects_count: subjects.length,
         overall_results_count: totalResultsCount,
         overall_average_percentage: totalResultsCount > 0 ? Math.round((totalScoreSum / maxMarksSum) * 100) : null,

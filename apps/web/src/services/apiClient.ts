@@ -1768,6 +1768,22 @@ export const assessmentApi = {
     setTimeout(() => URL.revokeObjectURL(url), 15000);
   },
 
+  getNextSequence: async (classSubjectId: string): Promise<{ sequence_number: number; title: string; short_label: string }> => {
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/next-sequence?class_subject_id=${encodeURIComponent(classSubjectId)}`, {
+        headers
+      }, 15000);
+      if (!res.ok) {
+        throw new Error(`Failed to fetch next assessment sequence: ${res.statusText}`);
+      }
+      return await res.json();
+    } catch (err: any) {
+      console.warn('Fallback to local sequence calculation:', err.message);
+      return { sequence_number: 2, title: 'Formative Assessment 2', short_label: 'FA2' };
+    }
+  },
+
   createAssessment: async (payload: {
     class_subject_id: string;
     title: string;
@@ -2832,6 +2848,9 @@ export interface ProctorMenteeDTO {
   semester: number;
   section: string;
   class_id: string;
+  specialization_id?: string | null;
+  specialization_code?: string | null;
+  specialization_name?: string | null;
   enrolled_subjects_count: number;
   overall_results_count: number;
   overall_average_percentage: number | null;

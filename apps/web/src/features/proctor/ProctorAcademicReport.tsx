@@ -229,7 +229,7 @@ export const ProctorAcademicReport: React.FC = () => {
                           {m.roll_number}
                         </p>
                         <p className="text-[10px] text-academic-muted mt-0.5">
-                          {m.programme} Sem {m.semester} Sec {m.section}
+                          {m.programme} Sem {m.semester} Sec {m.section} {m.specialization_code ? `• ${m.specialization_code}` : ''}
                         </p>
                       </div>
 
@@ -265,6 +265,11 @@ export const ProctorAcademicReport: React.FC = () => {
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-academic-primaryGreen text-white">
                         Mentee Profile
                       </span>
+                      {currentMentee.specialization_name && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800">
+                          {currentMentee.specialization_name}
+                        </span>
+                      )}
                       <span className="text-xs text-academic-muted font-mono font-semibold">
                         {currentMentee.roll_number}
                       </span>
@@ -307,8 +312,14 @@ export const ProctorAcademicReport: React.FC = () => {
                   </div>
 
                   {currentMentee.subjects.length === 0 ? (
-                    <div className="p-8 text-center text-academic-muted bg-academic-surface border border-academic-border rounded-xl">
-                      No active subject enrollments found for this mentee.
+                    <div className="p-8 text-center bg-academic-surface border border-academic-border rounded-xl">
+                      <BookOpen className="w-8 h-8 text-academic-muted/50 mx-auto mb-2" />
+                      <p className="text-sm font-semibold text-academic-deepGreen">
+                        No subjects assigned to this stream.
+                      </p>
+                      <p className="text-xs text-academic-muted mt-1">
+                        No assessments available.
+                      </p>
                     </div>
                   ) : (
                     <div className="space-y-4">

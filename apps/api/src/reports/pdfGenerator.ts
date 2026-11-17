@@ -98,6 +98,7 @@ async function generateConsolidatedPdf(data: ConsolidatedReportData): Promise<Bu
     short_label: string;
     max_marks: number;
     width: number;
+    is_total?: boolean;
   }
 
   const flattenedCols: FlattenedCol[] = [];
@@ -119,7 +120,8 @@ async function generateConsolidatedPdf(data: ConsolidatedReportData): Promise<Bu
         title: 'No Assessment',
         short_label: '—',
         max_marks: 0,
-        width: 0 // calculated below
+        width: 0, // calculated below
+        is_total: false
       });
       subjectSpans.push({
         subject_code: subj.subject_code,
@@ -137,13 +139,26 @@ async function generateConsolidatedPdf(data: ConsolidatedReportData): Promise<Bu
           title: a.title,
           short_label: a.short_label,
           max_marks: a.max_marks,
-          width: 0
+          width: 0,
+          is_total: false
         });
       }
+      // Subject Total column: FA1 | FA2 | ... | Total
+      flattenedCols.push({
+        subject_id: subj.subject_id,
+        subject_code: subj.subject_code,
+        subject_name: subj.subject_name,
+        assessment_id: `total_${subj.subject_id}`,
+        title: 'Total',
+        short_label: 'Total',
+        max_marks: subj.assessments.reduce((sum, a) => sum + (a.max_marks || 0), 0),
+        width: 0,
+        is_total: true
+      });
       subjectSpans.push({
         subject_code: subj.subject_code,
         subject_name: subj.subject_name,
-        colCount: subj.assessments.length,
+        colCount: subj.assessments.length + 1,
         width: 0
       });
     }
@@ -274,9 +289,9 @@ async function generateConsolidatedPdf(data: ConsolidatedReportData): Promise<Bu
         .fillAndStroke(COLORS.subHeaderBg, COLORS.headerBorder);
 
       doc.font('Helvetica-Bold').fontSize(8.5).fillColor(COLORS.primary);
-      const label = col.max_marks > 0
-        ? `${col.short_label} (Max: ${col.max_marks})`
-        : col.short_label;
+      const label = col.is_total
+        ? 'Total'
+        : (col.max_marks > 0 ? `${col.short_label} (Max: ${col.max_marks})` : col.short_label);
       doc.text(label, curX, tableHeaderY + headerRow1Height + 6, {
         width: col.width,
         align: 'center'
@@ -344,42 +359,51 @@ async function generateConsolidatedPdf(data: ConsolidatedReportData): Promise<Bu
     // 4. Assessment Mark Cells
     let cellX = nameX + nameWidth;
     for (const col of flattenedCols) {
-      const cell = st.marks[col.assessment_id];
-      const val = cell ? cell.value : '—';
-      const status = cell?.status;
-
-      let displayText = String(val);
+      let displayText = '';
       let textColor = COLORS.textDark;
       let isBold = false;
       let fontSize = 8.5;
 
-      if (typeof val === 'number') {
-        displayText = String(val);
-        isBold = true;
-        textColor = COLORS.textDark;
-      } else if (displayText === '0') {
-        displayText = '0';
-        textColor = COLORS.tagZero;
-      } else if (status === 'pending_evaluation' || displayText === 'Pending') {
-        displayText = 'Pending';
-        textColor = COLORS.tagPending;
-      } else if (status === 'awaiting_publication' || displayText === 'Awaiting Publication') {
-        displayText = 'Awaiting Publication';
-        textColor = COLORS.tagAwaiting;
-        fontSize = 7.5;
-      } else if (displayText === 'N/A') {
-        displayText = 'N/A';
-        textColor = COLORS.textMuted;
-      } else if (displayText === '—') {
-        displayText = '—';
-        textColor = COLORS.textMuted;
+      if (col.is_total) {
+        const subjTotal = st.subject_totals?.[col.subject_id];
+        if (subjTotal && typeof subjTotal.total_score === 'number') {
+          displayText = String(subjTotal.total_score);
+          isBold = true;
+          textColor = COLORS.primaryDark;
+        } else {
+          // No published marks: clean blank cell
+          displayText = '';
+        }
+      } else {
+        const cell = st.marks[col.assessment_id];
+        const val = cell ? cell.value : null;
+
+        if (val === null || val === undefined) {
+          displayText = '';
+        } else if (val === 'Not Submitted') {
+          displayText = 'Not Submitted';
+          textColor = COLORS.textMuted;
+          fontSize = 7;
+          isBold = false;
+        } else if (typeof val === 'number') {
+          displayText = String(val);
+          isBold = true;
+          textColor = COLORS.textDark;
+        } else if (val === '—') {
+          displayText = '—';
+          textColor = COLORS.textMuted;
+        } else {
+          displayText = String(val);
+        }
       }
 
-      doc.font(isBold ? 'Helvetica-Bold' : 'Helvetica').fontSize(fontSize).fillColor(textColor);
-      doc.text(displayText, cellX, curY + 6, {
-        width: col.width,
-        align: 'center'
-      });
+      if (displayText) {
+        doc.font(isBold ? 'Helvetica-Bold' : 'Helvetica').fontSize(fontSize).fillColor(textColor);
+        doc.text(displayText, cellX, curY + 6, {
+          width: col.width,
+          align: 'center'
+        });
+      }
 
       doc.strokeColor(COLORS.rowBorder);
       doc.moveTo(cellX + col.width, curY).lineTo(cellX + col.width, curY + rowHeight).stroke();
@@ -467,11 +491,12 @@ async function generateSubjectPdf(data: SubjectReportData): Promise<Buffer> {
 
   const slNoWidth = 45;
   const usnWidth = 110;
-  const nameWidth = 220;
-  const fixedWidth = slNoWidth + usnWidth + nameWidth; // 375 pt
-  const remainingWidth = usableWidth - fixedWidth; // 394.89 pt
+  const nameWidth = 200;
+  const fixedWidth = slNoWidth + usnWidth + nameWidth; // 355 pt
+  const remainingWidth = usableWidth - fixedWidth; // 414.89 pt
 
-  const colCount = Math.max(1, data.assessments.length);
+  const hasAssessments = data.assessments.length > 0;
+  const colCount = Math.max(1, data.assessments.length + (hasAssessments ? 1 : 0));
   const colWidth = Math.floor(remainingWidth / colCount);
 
   function drawSubjectHeader(isContinuation = false) {
@@ -520,6 +545,10 @@ async function generateSubjectPdf(data: SubjectReportData): Promise<Buffer> {
       doc.text(`${a.short_label} (Max: ${a.max_marks})`, curX, headerY + 6, { width: colWidth, align: 'center' });
       curX += colWidth;
     }
+    if (hasAssessments) {
+      doc.text('Total', curX, headerY + 6, { width: colWidth, align: 'center' });
+      curX += colWidth;
+    }
 
     doc.restore();
     return headerY + headerHeight;
@@ -551,34 +580,54 @@ async function generateSubjectPdf(data: SubjectReportData): Promise<Buffer> {
     doc.text(st.full_name, marginLeft + slNoWidth + usnWidth + 8, curY + 5, { width: nameWidth - 16, align: 'left', ellipsis: true });
 
     let cellX = marginLeft + fixedWidth;
+    let studentPublishedTotal: number | null = null;
+
     for (const a of data.assessments) {
       const cell = st.marks[a.assessment_id];
-      const val = cell ? cell.value : '—';
-      let displayText = String(val);
+      const val = cell ? cell.value : null;
+
+      let displayText = '';
       let textColor = COLORS.textDark;
       let isBold = false;
       let fontSize = 8.5;
 
-      if (typeof val === 'number') {
+      if (val === null || val === undefined) {
+        displayText = '';
+      } else if (val === 'Not Submitted') {
+        displayText = 'Not Submitted';
+        textColor = COLORS.textMuted;
+        fontSize = 7.5;
+        isBold = false;
+      } else if (typeof val === 'number') {
         displayText = String(val);
         isBold = true;
-      } else if (displayText === '0') {
-        displayText = '0';
-        textColor = COLORS.tagZero;
-      } else if (cell?.status === 'pending_evaluation' || displayText === 'Pending') {
-        displayText = 'Pending';
-        textColor = COLORS.tagPending;
-      } else if (cell?.status === 'awaiting_publication' || displayText === 'Awaiting Publication') {
-        displayText = 'Awaiting Publication';
-        textColor = COLORS.tagAwaiting;
-        fontSize = 8;
-      } else if (displayText === '—') {
+        textColor = COLORS.textDark;
+        if (studentPublishedTotal === null) studentPublishedTotal = 0;
+        studentPublishedTotal += val;
+      } else if (val === '—') {
         displayText = '—';
         textColor = COLORS.textMuted;
+      } else {
+        displayText = String(val);
       }
 
-      doc.font(isBold ? 'Helvetica-Bold' : 'Helvetica').fontSize(fontSize).fillColor(textColor);
-      doc.text(displayText, cellX, curY + 5, { width: colWidth, align: 'center' });
+      if (displayText) {
+        doc.font(isBold ? 'Helvetica-Bold' : 'Helvetica').fontSize(fontSize).fillColor(textColor);
+        doc.text(displayText, cellX, curY + 5, { width: colWidth, align: 'center' });
+      }
+
+      doc.strokeColor(COLORS.rowBorder);
+      doc.moveTo(cellX + colWidth, curY).lineTo(cellX + colWidth, curY + rowHeight).stroke();
+      cellX += colWidth;
+    }
+
+    if (hasAssessments) {
+      if (studentPublishedTotal !== null) {
+        doc.font('Helvetica-Bold').fontSize(8.5).fillColor(COLORS.primaryDark);
+        doc.text(String(studentPublishedTotal), cellX, curY + 5, { width: colWidth, align: 'center' });
+      }
+      doc.strokeColor(COLORS.rowBorder);
+      doc.moveTo(cellX + colWidth, curY).lineTo(cellX + colWidth, curY + rowHeight).stroke();
       cellX += colWidth;
     }
 
@@ -668,6 +717,15 @@ async function generateStudentPdf(data: StudentIndividualReportData): Promise<Bu
   let curY = profileY + 52;
 
   // Subjects & Assessments Tables
+  if (data.subjects.length === 0) {
+    doc.rect(marginLeft, curY, usableWidth, 60).fillAndStroke(COLORS.white, COLORS.rowBorder);
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(COLORS.primaryDark);
+    doc.text('No subjects assigned to this stream.', marginLeft, curY + 16, { width: usableWidth, align: 'center' });
+    doc.font('Helvetica').fontSize(9).fillColor(COLORS.textMuted);
+    doc.text('No assessments available.', marginLeft, curY + 34, { width: usableWidth, align: 'center' });
+    curY += 70;
+  }
+
   for (const sub of data.subjects) {
     doc.rect(marginLeft, curY, usableWidth, 22).fillAndStroke(COLORS.headerBg, COLORS.headerBorder);
     doc.font('Helvetica-Bold').fontSize(9.5).fillColor(COLORS.primaryDark);
@@ -689,8 +747,13 @@ async function generateStudentPdf(data: StudentIndividualReportData): Promise<Bu
       doc.text('No assessments recorded for this subject.', marginLeft + 8, curY + 5);
       curY += 20;
     } else {
+      let subjPubTotal: number | null = null;
+      let totalMaxMarks = 0;
+
       for (let j = 0; j < sub.assessments.length; j++) {
         const a = sub.assessments[j];
+        totalMaxMarks += Number(a.max_marks || 0);
+
         const bg = j % 2 === 1 ? COLORS.zebraBg : COLORS.white;
         doc.rect(marginLeft, curY, usableWidth, 20).fillAndStroke(bg, COLORS.rowBorder);
 
@@ -698,31 +761,48 @@ async function generateStudentPdf(data: StudentIndividualReportData): Promise<Bu
         doc.text(a.title, marginLeft + 8, curY + 5, { width: 280, ellipsis: true });
         doc.text(String(a.max_marks), marginLeft + 300, curY + 5, { width: 90, align: 'center' });
 
-        const isNum = typeof a.awarded_marks === 'number';
-        const isAwaiting = a.awarded_marks === 'Awaiting Publication' || a.status === 'awaiting_publication';
-        const isPending = a.awarded_marks === 'Pending' || a.status === 'pending_evaluation';
-        const isZero = a.awarded_marks === 0 || a.awarded_marks === '0';
-        const isMissing = a.awarded_marks === '—' || a.status === 'missing';
-
+        const val = a.awarded_marks;
+        let displayText = '';
         let textColor = COLORS.textDark;
+        let isBold = false;
         let fontSize = 8.5;
-        if (isNum) {
-          textColor = COLORS.primaryDark;
-        } else if (isAwaiting) {
-          textColor = COLORS.tagAwaiting;
-          fontSize = 7.5;
-        } else if (isPending) {
-          textColor = COLORS.tagPending;
-        } else if (isZero) {
-          textColor = COLORS.tagZero;
-        } else if (isMissing) {
+
+        if (val === null || val === undefined) {
+          displayText = '';
+        } else if (val === 'Not Submitted') {
+          displayText = 'Not Submitted';
           textColor = COLORS.textMuted;
+          fontSize = 8;
+        } else if (typeof val === 'number') {
+          displayText = String(val);
+          isBold = true;
+          textColor = COLORS.primaryDark;
+          if (subjPubTotal === null) subjPubTotal = 0;
+          subjPubTotal += val;
+        } else if (val === '—') {
+          displayText = '—';
+          textColor = COLORS.textMuted;
+        } else {
+          displayText = String(val);
         }
 
-        doc.font(isNum ? 'Helvetica-Bold' : 'Helvetica').fontSize(fontSize).fillColor(textColor);
-        doc.text(String(a.awarded_marks), marginLeft + 400, curY + 5, { width: 110, align: 'center' });
+        if (displayText) {
+          doc.font(isBold ? 'Helvetica-Bold' : 'Helvetica').fontSize(fontSize).fillColor(textColor);
+          doc.text(displayText, marginLeft + 400, curY + 5, { width: 110, align: 'center' });
+        }
         curY += 20;
       }
+
+      // Total row for this subject: Total (Published Marks)
+      doc.rect(marginLeft, curY, usableWidth, 20).fillAndStroke(COLORS.subHeaderBg, COLORS.headerBorder);
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(COLORS.primaryDark);
+      doc.text('Total (Published Marks)', marginLeft + 8, curY + 5, { width: 280 });
+      doc.text(String(totalMaxMarks), marginLeft + 300, curY + 5, { width: 90, align: 'center' });
+      const totalDisplay = subjPubTotal !== null ? String(subjPubTotal) : '';
+      if (totalDisplay) {
+        doc.text(totalDisplay, marginLeft + 400, curY + 5, { width: 110, align: 'center' });
+      }
+      curY += 20;
     }
     curY += 12; // Gap between subjects
   }
@@ -808,17 +888,18 @@ async function generateRubricPdf(data: DetailedRubricReportData): Promise<Buffer
     : data.assessment.title;
   doc.text(`Assessment: ${assessmentLabel}`, marginLeft + 10, metaY + 50);
 
+  const isPub = Boolean(data.evaluation.is_published);
+
   doc.font('Helvetica').fontSize(9).fillColor(COLORS.textDark);
   doc.text(`Evaluator: ${data.evaluation.evaluator_name}`, marginLeft + 300, metaY + 8);
-  doc.text(`Evaluation Date: ${data.evaluation.evaluated_at}`, marginLeft + 300, metaY + 22);
-  doc.font('Helvetica-Bold').fontSize(9.5).fillColor(COLORS.primary);
-  doc.text(
-    `Score: ${data.evaluation.total_score} / ${data.assessment.max_marks} (${data.evaluation.percentage}%)`,
-    marginLeft + 300,
-    metaY + 36
-  );
-  doc.font('Helvetica').fontSize(8.5).fillColor(COLORS.textMuted);
-  const pubLabel = data.evaluation.is_published ? 'Published' : 'Internal / Unpublished';
+  doc.text(`Evaluation Date: ${isPub ? data.evaluation.evaluated_at : 'Pending Publication'}`, marginLeft + 300, metaY + 22);
+  doc.font('Helvetica-Bold').fontSize(9.5).fillColor(isPub ? COLORS.primary : COLORS.textMuted);
+  const scoreDisplay = isPub && typeof data.evaluation.total_score === 'number'
+    ? `Score: ${data.evaluation.total_score} / ${data.assessment.max_marks} (${data.evaluation.percentage ?? 0}%)`
+    : `Score: — / ${data.assessment.max_marks} (Pending Publication)`;
+  doc.text(scoreDisplay, marginLeft + 300, metaY + 36);
+  doc.font('Helvetica').fontSize(8.5).fillColor(isPub ? COLORS.primary : COLORS.tagPending);
+  const pubLabel = isPub ? 'Published' : 'Unpublished (Results Pending)';
   doc.text(`Publication: ${pubLabel}`, marginLeft + 300, metaY + 50);
 
   // Rubric Breakdown Table
@@ -848,9 +929,12 @@ async function generateRubricPdf(data: DetailedRubricReportData): Promise<Buffer
     doc.font('Helvetica').fontSize(9).fillColor(COLORS.textDark);
     doc.text(String(c.max_marks), marginLeft + 350, curY + 14, { width: 60, align: 'center' });
 
-    // Awarded marks
-    doc.font('Helvetica-Bold').fontSize(10).fillColor(COLORS.primary);
-    doc.text(String(c.awarded_marks), marginLeft + 420, curY + 14, { width: 90, align: 'center' });
+    // Awarded marks: blank if unpublished
+    const awardedDisplay = isPub && c.awarded_marks !== null ? String(c.awarded_marks) : '';
+    if (awardedDisplay) {
+      doc.font('Helvetica-Bold').fontSize(10).fillColor(COLORS.primary);
+      doc.text(awardedDisplay, marginLeft + 420, curY + 14, { width: 90, align: 'center' });
+    }
 
     curY += rowH;
   }
@@ -860,14 +944,17 @@ async function generateRubricPdf(data: DetailedRubricReportData): Promise<Buffer
   doc.font('Helvetica-Bold').fontSize(9.5).fillColor(COLORS.primaryDark);
   doc.text('TOTAL ASSESSMENT MARKS', marginLeft + 8, curY + 7, { width: 330 });
   doc.text(String(data.assessment.max_marks), marginLeft + 350, curY + 7, { width: 60, align: 'center' });
-  doc.text(`${data.evaluation.total_score} / ${data.assessment.max_marks}`, marginLeft + 420, curY + 7, {
+  const totalSummary = isPub && typeof data.evaluation.total_score === 'number'
+    ? `${data.evaluation.total_score} / ${data.assessment.max_marks}`
+    : `— / ${data.assessment.max_marks}`;
+  doc.text(totalSummary, marginLeft + 420, curY + 7, {
     width: 90,
     align: 'center'
   });
   curY += 28;
 
-  // General Feedback if available
-  if (data.evaluation.general_feedback) {
+  // General Feedback if available AND published
+  if (isPub && data.evaluation.general_feedback) {
     doc.rect(marginLeft, curY, usableWidth, 36).fillAndStroke('#FFFDF8', COLORS.rowBorder);
     doc.font('Helvetica-Bold').fontSize(8.5).fillColor(COLORS.primaryDark);
     doc.text('Evaluator Remarks / General Feedback:', marginLeft + 8, curY + 6);

@@ -54,6 +54,7 @@ export interface IAssessmentRepository {
   listAssessmentStorageKeys(assessmentId: string): Promise<string[]>;
   deleteAssessmentPermanent(assessmentId: string, callerId: string): Promise<AssessmentDeletionCounts>;
   publishAssessment(id: string, publishedBy: string): Promise<Assessment>;
+  getNextAssessmentSequence(classSubjectId: string): Promise<{ sequence_number: number; title: string; short_label: string }>;
   createQuestion(assessmentId: string, data: any): Promise<Question>;
   updateQuestion(questionId: string, data: any): Promise<Question>;
   deleteQuestion?(questionId: string): Promise<void>;
@@ -203,11 +204,21 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
       }
       list = this.inMemoryDb.assessments.filter(a => allowedCSIds.has(a.class_subject_id));
     } else if (user.roles.includes('student')) {
-      const studentClasses = this.inMemoryDb.enrollments
-        .filter(e => e.student_id === user.profile.id && e.status === 'active')
-        .map(e => e.class_id);
+      const studentEnrollments = this.inMemoryDb.enrollments
+        .filter(e => e.student_id === user.profile.id && e.status === 'active');
+      const studentClasses = studentEnrollments.map(e => e.class_id);
+      const studentSpecIds = new Set(studentEnrollments.map(e => e.specialization_id).filter(Boolean));
+
       const studentCS = this.inMemoryDb.classSubjects
-        .filter(cs => studentClasses.includes(cs.class_id) && cs.active)
+        .filter(cs => {
+          if (!studentClasses.includes(cs.class_id) || !cs.active) return false;
+          const sub = this.inMemoryDb.subjects.find(s => s.id === cs.subject_id);
+          const subSpecId = (sub as any)?.specialization_id;
+          if (subSpecId) {
+            return studentSpecIds.has(subSpecId);
+          }
+          return true;
+        })
         .map(cs => cs.id);
       list = this.inMemoryDb.assessments.filter(a => a.status === 'published' && studentCS.includes(a.class_subject_id));
     } else {
@@ -223,10 +234,32 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
     return found || null;
   }
 
+  async getNextAssessmentSequence(classSubjectId: string): Promise<{ sequence_number: number; title: string; short_label: string }> {
+    const classAssessments = this.inMemoryDb.assessments.filter(
+      a => a.class_subject_id === classSubjectId && a.status !== 'deletion_pending'
+    );
+    const numbers = classAssessments.map(a => {
+      const match = (a.title || '').match(/(?:fa|formative\s*(?:assessment|assesment)?)\s*(\d+)/i);
+      return match && match[1] ? parseInt(match[1], 10) : 0;
+    }).filter(n => n > 0);
+
+    const nextSeq = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
+    return {
+      sequence_number: nextSeq,
+      title: `Formative Assessment ${nextSeq}`,
+      short_label: `FA${nextSeq}`
+    };
+  }
+
   async createAssessment(data: CreateAssessmentRequest, createdBy: string): Promise<Assessment> {
     if (data.idempotency_key) {
       const existing = this.inMemoryDb.assessments.find(a => a.created_by === createdBy && a.idempotency_key === data.idempotency_key);
       if (existing) return existing;
+    }
+
+    if (!data.title || data.title.trim().length === 0 || !data.title.match(/(?:fa|formative\s*(?:assessment|assesment)?)\s*\d+/i)) {
+      const seq = await this.getNextAssessmentSequence(data.class_subject_id);
+      data.title = seq.title;
     }
 
     const id = randomUUID();
@@ -805,9 +838,15 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
   async isEnrolledStudent(studentId: string, classSubjectId: string): Promise<boolean> {
     const cs = this.inMemoryDb.classSubjects.find(c => c.id === classSubjectId);
     if (!cs) return false;
-    return this.inMemoryDb.enrollments.some(
-      e => e.class_id === cs.class_id && e.student_id === studentId && e.status === 'active'
-    );
+    const sub = this.inMemoryDb.subjects.find(s => s.id === cs.subject_id);
+    const subSpecId = (sub as any)?.specialization_id;
+    return this.inMemoryDb.enrollments.some(e => {
+      if (e.class_id !== cs.class_id || e.student_id !== studentId || e.status !== 'active') return false;
+      if (subSpecId) {
+        return Boolean(e.specialization_id && e.specialization_id === subSpecId);
+      }
+      return true;
+    });
   }
 
   getMode(): 'supabase_postgresql' | 'in_memory_mock' {
@@ -1056,18 +1095,30 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
     } else if (user.roles.includes('student')) {
       const { data: enrollments } = await this.client
         .from('enrollments')
-        .select('class_id')
+        .select('class_id, specialization_id')
         .eq('student_id', user.profile.id)
         .eq('status', 'active');
       const classIds = (enrollments || []).map(e => e.class_id);
       if (classIds.length === 0) return [];
 
+      const studentSpecIds = new Set((enrollments || []).map(e => e.specialization_id).filter(Boolean));
+
       const { data: studentCS } = await this.client
         .from('class_subjects')
-        .select('id')
+        .select('id, class_id, subject:subjects(specialization_id)')
         .in('class_id', classIds)
         .eq('active', true);
-      const csIds = (studentCS || []).map(c => c.id);
+
+      const csIds = (studentCS || [])
+        .filter(cs => {
+          const subSpecId = (cs as any)?.subject?.specialization_id;
+          if (subSpecId) {
+            return studentSpecIds.has(subSpecId);
+          }
+          return true;
+        })
+        .map(c => c.id);
+
       if (csIds.length === 0) return [];
 
       query = query.eq('status', 'published').in('class_subject_id', csIds);
@@ -1099,12 +1150,41 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
     }
   }
 
+  async getNextAssessmentSequence(classSubjectId: string): Promise<{ sequence_number: number; title: string; short_label: string }> {
+    const { data: assessments, error } = await this.client
+      .from('assessments')
+      .select('id, title, status')
+      .eq('class_subject_id', classSubjectId)
+      .neq('status', 'deletion_pending');
+
+    if (error) {
+      throw new Error(`Failed to query assessment sequence: ${error.message}`);
+    }
+
+    const numbers = (assessments || []).map(a => {
+      const match = (a.title || '').match(/(?:fa|formative\s*(?:assessment|assesment)?)\s*(\d+)/i);
+      return match && match[1] ? parseInt(match[1], 10) : 0;
+    }).filter(n => n > 0);
+
+    const nextSeq = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
+    return {
+      sequence_number: nextSeq,
+      title: `Formative Assessment ${nextSeq}`,
+      short_label: `FA${nextSeq}`
+    };
+  }
+
   async createAssessment(data: CreateAssessmentRequest, createdBy: string): Promise<Assessment> {
     this.assertStagingProject();
 
     if (data.idempotency_key) {
       const existing = await this.getAssessmentByIdempotencyKey(createdBy, data.idempotency_key);
       if (existing) return existing;
+    }
+
+    if (!data.title || data.title.trim().length === 0 || !data.title.match(/(?:fa|formative\s*(?:assessment|assesment)?)\s*\d+/i)) {
+      const seq = await this.getNextAssessmentSequence(data.class_subject_id);
+      data.title = seq.title;
     }
 
     const id = randomUUID();
@@ -1610,6 +1690,13 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
       }
     }
 
+    if (!assessmentId) {
+      if (!data.title || data.title.trim().length === 0 || !data.title.match(/(?:fa|formative\s*(?:assessment|assesment)?)\s*\d+/i)) {
+        const seq = await this.getNextAssessmentSequence(data.class_subject_id);
+        data.title = seq.title;
+      }
+    }
+
     const { data: result, error } = await this.client.rpc('save_draft_assessment_atomic', {
       p_assessment_id: assessmentId || null,
       p_class_subject_id: data.class_subject_id,
@@ -1921,21 +2008,29 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
   async isEnrolledStudent(studentId: string, classSubjectId: string): Promise<boolean> {
     const { data: cs } = await this.client
       .from('class_subjects')
-      .select('class_id')
+      .select('class_id, subject:subjects(specialization_id)')
       .eq('id', classSubjectId)
       .maybeSingle();
 
     if (!cs) return false;
 
+    const subSpecId = (cs as any)?.subject?.specialization_id;
+
     const { data: en } = await this.client
       .from('enrollments')
-      .select('id')
+      .select('id, specialization_id')
       .eq('class_id', cs.class_id)
       .eq('student_id', studentId)
       .eq('status', 'active')
       .maybeSingle();
 
-    return Boolean(en);
+    if (!en) return false;
+
+    if (subSpecId) {
+      return Boolean(en.specialization_id && en.specialization_id === subSpecId);
+    }
+
+    return true;
   }
 
   getMode(): 'supabase_postgresql' | 'in_memory_mock' {
