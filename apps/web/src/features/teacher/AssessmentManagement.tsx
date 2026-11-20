@@ -29,19 +29,22 @@ import {
   ChevronUp,
   ChevronDown,
   Save,
-  Send
+  Send,
+  HelpCircle,
+  Check,
+  Users
 } from 'lucide-react';
 import { StatusBadge } from '../../components/StatusBadge';
 
 const PdfViewer = React.lazy(() => import('../../components/PdfViewer').then(m => ({ default: m.PdfViewer })));
 import { assessmentApi, AssessmentDTO, submissionApi, SubmissionDTO, authApi } from '../../services/apiClient';
-import { formatClassName } from '@smartfa/contracts';
+import { formatClassName, AssessmentType, QuizQuestion, QuizOption } from '@smartfa/contracts';
 import { ProctorMenteeReport } from '../proctor/ProctorMenteeReport';
 import { AssessmentMarksReportModal } from '../reports/AssessmentMarksReportModal';
 
 interface AssessmentManagementProps {
   activeRole: string;
-  initialTab?: 'questions' | 'rubric' | 'submissions' | 'submissions_report' | 'late_reports';
+  initialTab?: 'file_based' | 'questions' | 'quiz' | 'rubric' | 'submissions' | 'submissions_report' | 'late_reports';
 }
 
 export interface ManualQuestionItem {
@@ -90,8 +93,10 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
   };
 
   // Tab & View States
-  const [activeTab, setActiveTab] = useState<'questions' | 'rubric' | 'submissions' | 'submissions_report'>(
-    activeRole === 'proctor' || initialTab === 'late_reports' || initialTab === 'submissions_report' ? 'submissions_report' : (initialTab || 'questions')
+  const [activeTab, setActiveTab] = useState<'file_based' | 'questions' | 'quiz' | 'rubric' | 'submissions' | 'submissions_report'>(
+    activeRole === 'proctor' || (initialTab as string) === 'late_reports' || initialTab === 'submissions_report'
+      ? 'submissions_report'
+      : ((initialTab as any) || 'file_based')
   );
 
   // Modal States
@@ -127,6 +132,12 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     setShowCreateModal(true);
   };
   const [showPublishConfirmModal, setShowPublishConfirmModal] = useState(false);
+  const [publishAudience, setPublishAudience] = useState<'all' | 'selected'>('all');
+  const [eligibleStudents, setEligibleStudents] = useState<any[]>([]);
+  const [loadingEligibleStudents, setLoadingEligibleStudents] = useState<boolean>(false);
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [studentSearchQuery, setStudentSearchQuery] = useState<string>('');
+  const [isPublishing, setIsPublishing] = useState<boolean>(false);
 
   // Edit Assessment State
   const [editingAssessment, setEditingAssessment] = useState<AssessmentDTO | null>(null);
@@ -170,20 +181,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
   const [formExtensionDeadline, setFormExtensionDeadline] = useState<string>('');
   const [formLatePenaltyMode, setFormLatePenaltyMode] = useState<'none' | 'fixed'>('none');
   const [formLatePenaltyMarks, setFormLatePenaltyMarks] = useState<number>(5);
-  const [formPdfFileName, setFormPdfFileName] = useState<string | null>(null);
-  const [formPdfFileSize, setFormPdfFileSize] = useState<number | null>(null);
-  const [formPdfBase64, setFormPdfBase64] = useState<string | null>(null);
-  const [formPdfError, setFormPdfError] = useState<string | null>(null);
-
-  // Question & Rubric Builders for Create Form
-  const [formQuestions, setFormQuestions] = useState<ManualQuestionItem[]>([]);
-  const [formRubricCriteria, setFormRubricCriteria] = useState<RubricCriterionItem[]>(DEFAULT_RUBRIC_CRITERIA);
-  const [newFormQPrompt, setNewFormQPrompt] = useState('');
-  const [editingFormQIndex, setEditingFormQIndex] = useState<number | null>(null);
-  const [editingFormQPrompt, setEditingFormQPrompt] = useState<string>('');
-  const [newFormCritTitle, setNewFormCritTitle] = useState('');
-  const [newFormCritDesc, setNewFormCritDesc] = useState('');
-  const [newFormCritMarks, setNewFormCritMarks] = useState<number>(10);
+  const [formAssessmentTypes, setFormAssessmentTypes] = useState<AssessmentType[]>(['file_based']);
 
   // Selected Assessment - Draft Questions & Rubric Live State
   const [draftQuestions, setDraftQuestions] = useState<ManualQuestionItem[]>([]);
@@ -199,15 +197,44 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
   const [isSavingQuestions, setIsSavingQuestions] = useState(false);
   const [isSavingRubric, setIsSavingRubric] = useState(false);
 
+  // Selected Assessment - Draft Quiz Live State
+  const [draftQuizQuestions, setDraftQuizQuestions] = useState<QuizQuestion[]>([]);
+  const [isSavingQuiz, setIsSavingQuiz] = useState<boolean>(false);
+  const [newQuizPrompt, setNewQuizPrompt] = useState<string>('');
+  const [newQuizOptions, setNewQuizOptions] = useState<[string, string, string, string]>(['', '', '', '']);
+  const [newQuizCorrectIndex, setNewQuizCorrectIndex] = useState<number>(0);
+  const [newQuizMarks, setNewQuizMarks] = useState<number>(1);
+  const [newQuizExplanation, setNewQuizExplanation] = useState<string>('');
+  const [editingQuizQId, setEditingQuizQId] = useState<string | null>(null);
+  const [editingQuizPrompt, setEditingQuizPrompt] = useState<string>('');
+  const [editingQuizOptions, setEditingQuizOptions] = useState<[string, string, string, string]>(['', '', '', '']);
+  const [editingQuizCorrectIndex, setEditingQuizCorrectIndex] = useState<number>(0);
+  const [editingQuizMarks, setEditingQuizMarks] = useState<number>(1);
+  const [editingQuizExplanation, setEditingQuizExplanation] = useState<string>('');
+
+  // Selected Assessment - Draft Instruction File Live State
+  const [draftInstructionFile, setDraftInstructionFile] = useState<{
+    file: File;
+    name: string;
+    size: number;
+    base64: string;
+    mime_type: string;
+  } | null>(null);
+  const [draftInstructionError, setDraftInstructionError] = useState<string | null>(null);
+  const [isSavingInstructionFile, setIsSavingInstructionFile] = useState<boolean>(false);
+  const [draftMaxFiles, setDraftMaxFiles] = useState<number>(1);
+
   // Student Multi-file Answer Submission State
   const [studentAnswerFiles, setStudentAnswerFiles] = useState<Array<{ file: File; name: string; size: number; base64: string }>>([]);
   const [isSubmittingAnswers, setIsSubmittingAnswers] = useState<boolean>(false);
 
   // Student Manual Question Answers & Draft State
   const [studentAnswers, setStudentAnswers] = useState<Record<string, string>>({});
+  const [studentQuizAnswers, setStudentQuizAnswers] = useState<Record<string, string>>({});
   const [draftSaveStatus, setDraftSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'unsaved'>('idle');
   const [draftLastSavedTime, setDraftLastSavedTime] = useState<Date | null>(null);
   const [unansweredQuestionIds, setUnansweredQuestionIds] = useState<string[]>([]);
+  const [unansweredQuizQuestionIds, setUnansweredQuizQuestionIds] = useState<string[]>([]);
   const [isConfirmSubmitOpen, setIsConfirmSubmitOpen] = useState<boolean>(false);
   const [removeExistingUploadedFile, setRemoveExistingUploadedFile] = useState<boolean>(false);
   const autosaveTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -375,13 +402,24 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
       // ignore draft fetch failure, fallback to submission or local storage
     }
 
-    if (currentSub?.active_version?.answers && currentSub.active_version.answers.length > 0) {
-      const map: Record<string, string> = {};
-      currentSub.active_version.answers.forEach((a: any) => {
-        if (a.question_id) map[a.question_id] = a.answer_text;
-        if (a.question_order) map[`q-${a.question_order}`] = a.answer_text;
-      });
-      setStudentAnswers(map);
+    if (currentSub?.active_version) {
+      if (currentSub.active_version.answers && currentSub.active_version.answers.length > 0) {
+        const map: Record<string, string> = {};
+        currentSub.active_version.answers.forEach((a: any) => {
+          if (a.question_id) map[a.question_id] = a.answer_text;
+          if (a.question_order) map[`q-${a.question_order}`] = a.answer_text;
+        });
+        setStudentAnswers(map);
+      }
+      if (currentSub.active_version.quiz_answers && currentSub.active_version.quiz_answers.length > 0) {
+        const qMap: Record<string, string> = {};
+        currentSub.active_version.quiz_answers.forEach((qa: any) => {
+          if (qa.quiz_question_id && qa.selected_option_id) {
+            qMap[qa.quiz_question_id] = qa.selected_option_id;
+          }
+        });
+        setStudentQuizAnswers(qMap);
+      }
       setDraftSaveStatus('saved');
       if (currentSub.active_version.uploaded_at) {
         setDraftLastSavedTime(new Date(currentSub.active_version.uploaded_at));
@@ -395,15 +433,25 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
         const parsed = JSON.parse(cached);
         if (parsed && typeof parsed === 'object') {
           setStudentAnswers(parsed);
-          setDraftSaveStatus('unsaved');
-          return;
         }
+      }
+      const cachedQuiz = localStorage.getItem(`acadassess_quiz_answers_${assessmentId}`);
+      if (cachedQuiz) {
+        const parsedQuiz = JSON.parse(cachedQuiz);
+        if (parsedQuiz && typeof parsedQuiz === 'object') {
+          setStudentQuizAnswers(parsedQuiz);
+        }
+      }
+      if (cached || cachedQuiz) {
+        setDraftSaveStatus('unsaved');
+        return;
       }
     } catch {
       // ignore
     }
 
     setStudentAnswers({});
+    setStudentQuizAnswers({});
     setDraftSaveStatus('idle');
   }, [isStudent]);
 
@@ -440,10 +488,14 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
         setAssessments(prev => prev.map(a => a.id === full.id ? { ...a, ...full } : a));
         setDraftQuestions(full.questions || []);
         setDraftRubricCriteria(full.rubric?.criteria || []);
+        setDraftQuizQuestions(full.quiz_questions || []);
+        if (full.max_files) {
+          setDraftMaxFiles(full.max_files);
+        }
       }
     } catch (err: any) {
       console.error('Failed to load full assessment details:', err);
-      setDetailsError(err.message || 'Failed to load assignment questions and rubric.');
+      setDetailsError(err.message || 'Failed to load assignment details.');
     } finally {
       setIsLoadingDetails(false);
     }
@@ -464,9 +516,18 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
         } else {
           setDraftRubricCriteria([]);
         }
+        if (Array.isArray(existing.quiz_questions) && existing.quiz_questions.length > 0) {
+          setDraftQuizQuestions(existing.quiz_questions);
+        } else {
+          setDraftQuizQuestions([]);
+        }
+        if (existing.max_files) {
+          setDraftMaxFiles(existing.max_files);
+        }
       } else {
         setDraftQuestions([]);
         setDraftRubricCriteria([]);
+        setDraftQuizQuestions([]);
       }
 
       // 2. Fetch authoritative details, submissions and student answers
@@ -476,15 +537,21 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     } else {
       setDraftQuestions([]);
       setDraftRubricCriteria([]);
+      setDraftQuizQuestions([]);
       setDetailsError(null);
       setStudentAnswers({});
+      setStudentQuizAnswers({});
       setDraftSaveStatus('idle');
       setUnansweredQuestionIds([]);
+      setUnansweredQuizQuestionIds([]);
       setRemoveExistingUploadedFile(false);
     }
   }, [selectedAssessmentId, loadAssessmentDetails, loadStudentAnswers]);
 
-  const saveDraftAnswers = async (answersToSave: Record<string, string>) => {
+  const saveDraftAnswers = async (
+    answersToSave: Record<string, string>,
+    quizAnswersToSave: Record<string, string> = studentQuizAnswers
+  ) => {
     if (!selectedAssessmentId) return;
     setDraftSaveStatus('saving');
     try {
@@ -493,15 +560,65 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
         question_order: idx + 1,
         answer_text: val
       }));
+      const formattedQuiz = Object.entries(quizAnswersToSave).map(([qid, oid]) => ({
+        quiz_question_id: qid,
+        selected_option_id: oid
+      }));
+
       await submissionApi.saveDraft({
         assessment_id: selectedAssessmentId,
-        answers: formatted
+        answers: formatted,
+        quiz_answers: formattedQuiz,
+        section_statuses: {
+          manual_questions: formatted.length > 0 ? 'draft' : 'pending',
+          quiz: formattedQuiz.length > 0 ? 'draft' : 'pending'
+        }
       });
       setDraftSaveStatus('saved');
       setDraftLastSavedTime(new Date());
     } catch (err: any) {
       console.warn('Failed to save draft:', err);
       setDraftSaveStatus('error');
+    }
+  };
+
+  const handleSelectQuizOption = (questionId: string, optionId: string) => {
+    const updated = { ...studentQuizAnswers, [questionId]: optionId };
+    setStudentQuizAnswers(updated);
+    setUnansweredQuizQuestionIds(prev => prev.filter(id => id !== questionId));
+    setDraftSaveStatus('unsaved');
+
+    if (selectedAssessmentId) {
+      try {
+        localStorage.setItem(`acadassess_quiz_answers_${selectedAssessmentId}`, JSON.stringify(updated));
+      } catch {}
+
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+      }
+      autosaveTimerRef.current = setTimeout(() => {
+        saveDraftAnswers(studentAnswers, updated);
+      }, 1500);
+    }
+  };
+
+  const handleClearQuizOption = (questionId: string) => {
+    const updated = { ...studentQuizAnswers };
+    delete updated[questionId];
+    setStudentQuizAnswers(updated);
+    setDraftSaveStatus('unsaved');
+
+    if (selectedAssessmentId) {
+      try {
+        localStorage.setItem(`acadassess_quiz_answers_${selectedAssessmentId}`, JSON.stringify(updated));
+      } catch {}
+
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+      }
+      autosaveTimerRef.current = setTimeout(() => {
+        saveDraftAnswers(studentAnswers, updated);
+      }, 1500);
     }
   };
 
@@ -551,45 +668,6 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     }
   }, [activeTab, reportAssessmentFilter]);
 
-  // Handle Assignment PDF File Selection in Create Modal
-  const handleAssignmentPdfSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormPdfError(null);
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
-      setFormPdfError('Only PDF files (.pdf) are accepted for the assignment document.');
-      return;
-    }
-
-    if (file.size > 20 * 1024 * 1024) {
-      setFormPdfError(`File size (${(file.size / (1024 * 1024)).toFixed(2)} MB) exceeds 20.00 MB limit.`);
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const resultStr = reader.result as string;
-      const base64 = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
-      try {
-        const binaryHeader = atob(base64.substring(0, 16));
-        if (!binaryHeader.startsWith('%PDF-')) {
-          setFormPdfError('Invalid PDF file signature. The file is not a valid PDF.');
-          return;
-        }
-      } catch {
-        setFormPdfError('Failed to read file signature.');
-        return;
-      }
-      setFormPdfFileName(file.name);
-      setFormPdfFileSize(file.size);
-      setFormPdfBase64(base64);
-    };
-    reader.onerror = () => {
-      setFormPdfError('Failed to read file from disk.');
-    };
-    reader.readAsDataURL(file);
-  };
 
   // Handle Document-Based Assessment Creation
   const formatIsoForInput = (iso?: string | null): string => {
@@ -800,87 +878,10 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     }
   };
 
-  // Form Rubric Sum and Draft Rubric Sum
-  const formRubricSum = useMemo(() => {
-    return formRubricCriteria.reduce((sum, c) => sum + Number(c.max_marks || c.max_score || 0), 0);
-  }, [formRubricCriteria]);
-
+  // Draft Rubric Sum
   const draftRubricSum = useMemo(() => {
     return draftRubricCriteria.reduce((sum, c) => sum + Number(c.max_marks || c.max_score || 0), 0);
   }, [draftRubricCriteria]);
-
-  // Form Question Handlers
-  const handleAddFormQuestion = () => {
-    if (!newFormQPrompt.trim()) return;
-    setFormQuestions(prev => [
-      ...prev,
-      {
-        prompt: newFormQPrompt.trim(),
-        display_order: prev.length + 1
-      }
-    ]);
-    setNewFormQPrompt('');
-  };
-
-  const handleRemoveFormQuestion = (index: number) => {
-    setFormQuestions(prev => prev.filter((_, i) => i !== index).map((q, idx) => ({ ...q, display_order: idx + 1 })));
-    if (editingFormQIndex === index) {
-      setEditingFormQIndex(null);
-      setEditingFormQPrompt('');
-    }
-  };
-
-  const handleMoveFormQuestion = (index: number, direction: 'up' | 'down') => {
-    setFormQuestions(prev => {
-      const targetIndex = direction === 'up' ? index - 1 : index + 1;
-      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
-      const copy = [...prev];
-      const temp = copy[index];
-      copy[index] = copy[targetIndex];
-      copy[targetIndex] = temp;
-      return copy.map((q, idx) => ({ ...q, display_order: idx + 1 }));
-    });
-  };
-
-  const handleStartEditFormQuestion = (index: number) => {
-    setEditingFormQIndex(index);
-    setEditingFormQPrompt(formQuestions[index].prompt);
-  };
-
-  const handleSaveEditFormQuestion = () => {
-    if (editingFormQIndex === null || !editingFormQPrompt.trim()) return;
-    setFormQuestions(prev => prev.map((q, idx) =>
-      idx === editingFormQIndex ? { ...q, prompt: editingFormQPrompt.trim() } : q
-    ));
-    setEditingFormQIndex(null);
-    setEditingFormQPrompt('');
-  };
-
-  // Form Rubric Handlers
-  const handleAddFormCriterion = () => {
-    if (!newFormCritTitle.trim()) return;
-    setFormRubricCriteria(prev => [
-      ...prev,
-      {
-        title: newFormCritTitle.trim(),
-        criterion_title: newFormCritTitle.trim(),
-        description: newFormCritDesc.trim(),
-        display_order: prev.length + 1,
-        max_marks: Number(newFormCritMarks || 10)
-      }
-    ]);
-    setNewFormCritTitle('');
-    setNewFormCritDesc('');
-    setNewFormCritMarks(10);
-  };
-
-  const handleRemoveFormCriterion = (index: number) => {
-    setFormRubricCriteria(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleResetFormRubric = () => {
-    setFormRubricCriteria(DEFAULT_RUBRIC_CRITERIA);
-  };
 
   // Live Draft Assessment Update Handlers
   const handleSaveDraftQuestions = async (updatedQuestions: ManualQuestionItem[]) => {
@@ -1017,6 +1018,252 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     await handleSaveDraftRubric(DEFAULT_RUBRIC_CRITERIA);
   };
 
+  // Draft Quiz Question Handlers
+  const handleSaveDraftQuizQuestions = async (updatedQuizQuestions: QuizQuestion[]) => {
+    if (!selectedAssessment) return;
+    setIsSavingQuiz(true);
+    setErrorMessage(null);
+    try {
+      const payload = updatedQuizQuestions.map((q, idx) => ({
+        id: q.id,
+        display_order: idx + 1,
+        question_text: q.question_text || (q as any).prompt,
+        marks: q.marks,
+        options: q.options,
+        correct_option_id: q.correct_option_id,
+        explanation: q.explanation || null
+      }));
+      await assessmentApi.updateAssessment(selectedAssessment.id, {
+        quiz_questions: payload
+      });
+      setActionMessage('Quiz questions saved successfully.');
+      const full = await assessmentApi.getAssessment(selectedAssessment.id);
+      if (full) {
+        setAssessments(prev => prev.map(a => a.id === full.id ? { ...a, ...full } : a));
+        setDraftQuizQuestions(full.quiz_questions || []);
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to update quiz questions.');
+    } finally {
+      setIsSavingQuiz(false);
+    }
+  };
+
+  const handleAddDraftQuizQuestion = async () => {
+    if (!newQuizPrompt.trim()) {
+      setErrorMessage('Please enter the quiz question prompt.');
+      return;
+    }
+    for (let i = 0; i < 4; i++) {
+      if (!newQuizOptions[i].trim()) {
+        setErrorMessage(`Please provide text for Option ${String.fromCharCode(65 + i)}.`);
+        return;
+      }
+    }
+
+    const optIds = ['opt-a', 'opt-b', 'opt-c', 'opt-d'].map((prefix, idx) => 
+      `${prefix}-${Date.now()}-${idx}`
+    );
+    const options: QuizOption[] = [
+      { id: optIds[0], text: newQuizOptions[0].trim() },
+      { id: optIds[1], text: newQuizOptions[1].trim() },
+      { id: optIds[2], text: newQuizOptions[2].trim() },
+      { id: optIds[3], text: newQuizOptions[3].trim() }
+    ];
+
+    const newQuestion: QuizQuestion = {
+      id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `qq-${Date.now()}`,
+      assessment_id: selectedAssessment?.id || '',
+      display_order: draftQuizQuestions.length + 1,
+      question_text: newQuizPrompt.trim(),
+      marks: Math.max(1, Number(newQuizMarks) || 1),
+      options,
+      correct_option_id: optIds[newQuizCorrectIndex] || optIds[0],
+      explanation: newQuizExplanation.trim() || null
+    };
+
+    const updated = [...draftQuizQuestions, newQuestion];
+    setDraftQuizQuestions(updated);
+    setNewQuizPrompt('');
+    setNewQuizOptions(['', '', '', '']);
+    setNewQuizCorrectIndex(0);
+    setNewQuizMarks(1);
+    setNewQuizExplanation('');
+    await handleSaveDraftQuizQuestions(updated);
+  };
+
+  const handleRemoveDraftQuizQuestion = async (index: number) => {
+    const updated = draftQuizQuestions.filter((_, i) => i !== index).map((q, idx) => ({ ...q, display_order: idx + 1 }));
+    setDraftQuizQuestions(updated);
+    if (editingQuizQId) {
+      setEditingQuizQId(null);
+      setEditingQuizPrompt('');
+    }
+    await handleSaveDraftQuizQuestions(updated);
+  };
+
+  const handleMoveDraftQuizQuestion = async (index: number, direction: 'up' | 'down') => {
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= draftQuizQuestions.length) return;
+    const copy = [...draftQuizQuestions];
+    const temp = copy[index];
+    copy[index] = copy[targetIndex];
+    copy[targetIndex] = temp;
+    const updated = copy.map((q, idx) => ({ ...q, display_order: idx + 1 }));
+    setDraftQuizQuestions(updated);
+    await handleSaveDraftQuizQuestions(updated);
+  };
+
+  const handleStartEditDraftQuizQuestion = (q: QuizQuestion) => {
+    setEditingQuizQId(q.id);
+    setEditingQuizPrompt(q.question_text || (q as any).prompt || '');
+    const opts: [string, string, string, string] = [
+      q.options[0]?.text || '',
+      q.options[1]?.text || '',
+      q.options[2]?.text || '',
+      q.options[3]?.text || ''
+    ];
+    setEditingQuizOptions(opts);
+    const cIdx = q.options.findIndex(o => o.id === q.correct_option_id);
+    setEditingQuizCorrectIndex(cIdx >= 0 ? cIdx : 0);
+    setEditingQuizMarks(q.marks || 1);
+    setEditingQuizExplanation(q.explanation || '');
+  };
+
+  const handleSaveEditDraftQuizQuestion = async (index: number) => {
+    if (!editingQuizPrompt.trim()) return;
+    for (let i = 0; i < 4; i++) {
+      if (!editingQuizOptions[i].trim()) {
+        setErrorMessage(`Please provide text for Option ${String.fromCharCode(65 + i)}.`);
+        return;
+      }
+    }
+    const currentQ = draftQuizQuestions[index];
+    if (!currentQ) return;
+
+    const optIds = currentQ.options && currentQ.options.length === 4
+      ? currentQ.options.map(o => o.id)
+      : ['opt-a', 'opt-b', 'opt-c', 'opt-d'].map((prefix, idx) => `${prefix}-${Date.now()}-${idx}`);
+
+    const options: QuizOption[] = [
+      { id: optIds[0], text: editingQuizOptions[0].trim() },
+      { id: optIds[1], text: editingQuizOptions[1].trim() },
+      { id: optIds[2], text: editingQuizOptions[2].trim() },
+      { id: optIds[3], text: editingQuizOptions[3].trim() }
+    ];
+
+    const updated = draftQuizQuestions.map((q, idx) =>
+      idx === index
+        ? {
+            ...q,
+            question_text: editingQuizPrompt.trim(),
+            options,
+            correct_option_id: optIds[editingQuizCorrectIndex] || optIds[0],
+            marks: Math.max(1, Number(editingQuizMarks) || 1),
+            explanation: editingQuizExplanation.trim() || null
+          }
+        : q
+    );
+    setDraftQuizQuestions(updated);
+    setEditingQuizQId(null);
+    setEditingQuizPrompt('');
+    await handleSaveDraftQuizQuestions(updated);
+  };
+
+  // Draft Instruction File Handlers
+  const handleInstructionFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setDraftInstructionError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const allowedExts = ['.pdf', '.ppt', '.pptx', '.doc', '.docx'];
+    const ext = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
+    if (!allowedExts.includes(ext)) {
+      setDraftInstructionError('Only PDF (.pdf), PowerPoint (.ppt, .pptx), and Word (.doc, .docx) files are supported.');
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setDraftInstructionError(`File size (${(file.size / (1024 * 1024)).toFixed(2)} MB) exceeds 20.00 MB limit.`);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const resultStr = reader.result as string;
+      const base64 = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
+      let mime = file.type;
+      if (!mime) {
+        if (ext === '.pdf') mime = 'application/pdf';
+        else if (ext === '.ppt') mime = 'application/vnd.ms-powerpoint';
+        else if (ext === '.pptx') mime = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+        else if (ext === '.doc') mime = 'application/msword';
+        else if (ext === '.docx') mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      }
+      setDraftInstructionFile({
+        file,
+        name: file.name,
+        size: file.size,
+        base64,
+        mime_type: mime || 'application/octet-stream'
+      });
+    };
+    reader.onerror = () => setDraftInstructionError('Failed to read file.');
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveInstructionFile = async () => {
+    if (!selectedAssessment) return;
+    setIsSavingInstructionFile(true);
+    setErrorMessage(null);
+    try {
+      await assessmentApi.updateAssessment(selectedAssessment.id, {
+        document_base64: draftInstructionFile ? draftInstructionFile.base64 : undefined,
+        document_filename: draftInstructionFile ? draftInstructionFile.name : undefined,
+        max_files: draftMaxFiles,
+        instruction_files: draftInstructionFile ? [{
+          file_name: draftInstructionFile.name,
+          original_name: draftInstructionFile.name,
+          file_size_bytes: draftInstructionFile.size,
+          mime_type: draftInstructionFile.mime_type,
+          file_base64: draftInstructionFile.base64
+        }] : undefined
+      });
+      setDraftInstructionFile(null);
+      setActionMessage('File-based instruction settings updated successfully.');
+      const full = await assessmentApi.getAssessment(selectedAssessment.id);
+      if (full) {
+        setAssessments(prev => prev.map(a => a.id === full.id ? { ...a, ...full } : a));
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to save instruction file.');
+    } finally {
+      setIsSavingInstructionFile(false);
+    }
+  };
+
+  const handleRemoveInstructionFile = async () => {
+    if (!selectedAssessment) return;
+    setIsSavingInstructionFile(true);
+    setErrorMessage(null);
+    try {
+      await assessmentApi.updateAssessment(selectedAssessment.id, {
+        document_base64: '',
+        document_filename: '',
+        instruction_files: []
+      });
+      setDraftInstructionFile(null);
+      setActionMessage('Instruction file removed.');
+      const full = await assessmentApi.getAssessment(selectedAssessment.id);
+      if (full) {
+        setAssessments(prev => prev.map(a => a.id === full.id ? { ...a, ...full } : a));
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to remove instruction file.');
+    } finally {
+      setIsSavingInstructionFile(false);
+    }
+  };
+
   const handleCreateAssessment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmittingCreateRef.current) return;
@@ -1047,53 +1294,48 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
       }
     }
 
-    if (!formPdfBase64 && formQuestions.length === 0) {
-      setErrorMessage('Please provide either an Assignment PDF document, at least one manual question, or both.');
-      return;
-    }
-
-    if (formRubricCriteria.length === 0) {
-      setErrorMessage('Assignment-level rubric is required. Add criteria or use the default template.');
+    if (formAssessmentTypes.length === 0) {
+      setErrorMessage('Please select at least one assessment type (File-Based, Manual Questions, or Quiz).');
       return;
     }
 
     isSubmittingCreateRef.current = true;
     setIsCreating(true);
-    setCreationStage(formPdfBase64 ? 'Uploading assignment document...' : 'Preparing assignment details...');
+    setCreationStage('Creating draft assessment...');
 
     try {
+      const hasRubricType = formAssessmentTypes.includes('file_based') || formAssessmentTypes.includes('manual_questions');
+      const rubricPayload = hasRubricType
+        ? {
+            title: 'Assignment Evaluation Rubric',
+            criteria: DEFAULT_RUBRIC_CRITERIA.map((c, idx) => ({
+              id: c.id,
+              title: (c.title || c.criterion_title || '').trim(),
+              criterion_title: (c.criterion_title || c.title || '').trim(),
+              description: c.description?.trim() || '',
+              display_order: idx + 1,
+              max_marks: Number(c.max_marks || (c as any).max_score || 10)
+            }))
+          }
+        : undefined;
+
       const newAssessment = await assessmentApi.createAssessment({
         class_subject_id: formClassSubjectId,
         title: effectiveTitle,
-        instructions: formInstructions.trim() || 'Refer to the assignment document, questions, and evaluation rubric.',
+        instructions: formInstructions.trim() || 'Follow the instructions provided for the assessment sections below.',
         deadline_at: deadlineDate.toISOString(),
         max_marks: Number(formMaxMarks || 50),
         idempotency_key: createIdempotencyKey,
-        document_base64: formPdfBase64 || undefined,
-        document_filename: formPdfFileName || undefined,
+        assessment_types: formAssessmentTypes,
         max_files: Number(formMaxFiles || 1),
         allow_late: formAllowLate,
         extension_deadline_at: formAllowLate && formExtensionDeadline ? new Date(formExtensionDeadline).toISOString() : undefined,
         late_penalty_mode: formAllowLate ? formLatePenaltyMode : 'none',
         late_penalty_marks: formAllowLate && formLatePenaltyMode === 'fixed' ? Number(formLatePenaltyMarks || 5) : 0,
-        questions: formQuestions.map((q, idx) => ({
-          prompt: q.prompt.trim(),
-          display_order: idx + 1
-        })),
-        rubric: {
-          title: 'Assignment Evaluation Rubric',
-          criteria: formRubricCriteria.map((c, idx) => ({
-            id: c.id,
-            title: (c.title || c.criterion_title || '').trim(),
-            criterion_title: (c.criterion_title || c.title || '').trim(),
-            description: c.description?.trim() || '',
-            display_order: c.display_order || (idx + 1),
-            max_marks: Number(c.max_marks || (c as any).max_score || 10)
-          }))
-        }
+        rubric: rubricPayload
       });
 
-      setCreationStage('Finalizing assignment...');
+      setCreationStage('Configuring assessment workspace...');
       setActionMessage(`Assessment "${newAssessment.title}" created successfully in draft status.`);
       setShowCreateModal(false);
       setFormTitle('');
@@ -1105,24 +1347,25 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
       setFormLatePenaltyMarks(5);
       setFormMaxFiles(1);
       setFormMaxMarks(50);
-      setFormPdfBase64(null);
-      setFormPdfFileName(null);
-      setFormPdfFileSize(null);
-      setFormPdfError(null);
-      setFormQuestions([]);
-      setFormRubricCriteria(DEFAULT_RUBRIC_CRITERIA);
+      setFormAssessmentTypes(['file_based']);
 
-      // Generate a fresh idempotency key for the next assignment creation intent
+      // Generate fresh idempotency key
       const nextKey = (typeof crypto !== 'undefined' && crypto.randomUUID)
         ? crypto.randomUUID()
         : 'idem-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 10);
       setCreateIdempotencyKey(nextKey);
 
-      // Optimistically insert into state and select immediately for responsive feedback
+      // Select newly created assessment and switch to its primary content tab
       setAssessments(prev => [newAssessment, ...prev.filter(a => a.id !== newAssessment.id)]);
       setSelectedAssessmentId(newAssessment.id);
+      if (formAssessmentTypes.includes('file_based')) {
+        setActiveTab('file_based');
+      } else if (formAssessmentTypes.includes('manual_questions')) {
+        setActiveTab('questions');
+      } else {
+        setActiveTab('quiz');
+      }
 
-      // Background refresh
       loadAssessments().catch(console.error);
     } catch (err: any) {
       // NOTE: Form state and createIdempotencyKey are preserved so that user can retry safely
@@ -1146,15 +1389,15 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
       return;
     }
 
-    const allowedExts = ['.pdf', '.ppt', '.pptx'];
+    const allowedExts = ['.pdf', '.ppt', '.pptx', '.doc', '.docx'];
     for (const f of newFiles) {
       const ext = f.name.toLowerCase().substring(f.name.lastIndexOf('.'));
       if (!allowedExts.includes(ext)) {
-        setErrorMessage(`Invalid file format: ${f.name}. Only PDF (.pdf), PowerPoint (.ppt), and PowerPoint XML (.pptx) are accepted.`);
+        setErrorMessage(`Invalid file format: ${f.name}. Only PDF (.pdf), PowerPoint (.ppt, .pptx), and Word (.doc, .docx) are accepted.`);
         return;
       }
-      if (f.size > 10 * 1024 * 1024) {
-        setErrorMessage(`File ${f.name} (${(f.size / (1024 * 1024)).toFixed(2)} MB) exceeds 10 MB limit.`);
+      if (f.size > 20 * 1024 * 1024) {
+        setErrorMessage(`File ${f.name} (${(f.size / (1024 * 1024)).toFixed(2)} MB) exceeds 20.00 MB limit.`);
         return;
       }
     }
@@ -1173,8 +1416,8 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     })).then(processed => {
       const currentTotal = studentAnswerFiles.reduce((sum, f) => sum + f.size, 0);
       const newTotal = processed.reduce((sum, f) => sum + f.size, 0);
-      if (currentTotal + newTotal > 25 * 1024 * 1024) {
-        setErrorMessage('Total submission size cannot exceed 25.00 MB.');
+      if (currentTotal + newTotal > 20 * 1024 * 1024) {
+        setErrorMessage('Total submission size cannot exceed 20.00 MB.');
         return;
       }
       setStudentAnswerFiles(prev => [...prev, ...processed]);
@@ -1191,8 +1434,26 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     if (!selectedAssessment) return;
     setErrorMessage(null);
 
-    // 1. If manual questions exist, validate that every question has an answer
-    if (draftQuestions.length > 0) {
+    const types = selectedAssessment.assessment_types && selectedAssessment.assessment_types.length > 0
+      ? selectedAssessment.assessment_types
+      : (selectedAssessment.document_storage_key ? ['file_based', 'manual_questions'] : ['manual_questions']);
+
+    // 1. File-Based Validation: at least 1 file uploaded or retained from existing version
+    if (types.includes('file_based')) {
+      const activeSub = assessmentSubmissions[0];
+      const hasExistingFiles = Boolean(
+        activeSub && 
+        !removeExistingUploadedFile && 
+        ((activeSub.active_version?.files && activeSub.active_version.files.length > 0) || activeSub.active_version?.storage_path || activeSub.active_version?.original_name)
+      );
+      if (studentAnswerFiles.length === 0 && !hasExistingFiles) {
+        setErrorMessage('File-Based Assessment requires at least one answer file (PDF, PPT, PPTX, DOC, DOCX) to be uploaded.');
+        return;
+      }
+    }
+
+    // 2. Manual Questions Validation: all questions must be answered
+    if (types.includes('manual_questions') && draftQuestions.length > 0) {
       const missingKeys: string[] = [];
       for (let i = 0; i < draftQuestions.length; i++) {
         const q = draftQuestions[i];
@@ -1210,21 +1471,27 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
         );
         return;
       }
-    } else {
-      // 2. No manual questions: file upload is mandatory
-      const activeSub = assessmentSubmissions[0];
-      const hasExistingFiles = Boolean(
-        activeSub && 
-        !removeExistingUploadedFile && 
-        ((activeSub.active_version?.files && activeSub.active_version.files.length > 0) || activeSub.active_version?.storage_path)
-      );
-      if (studentAnswerFiles.length === 0 && !hasExistingFiles) {
-        setErrorMessage('This assignment does not contain manual questions. You must select at least one answer file to submit.');
+    }
+
+    // 3. Quiz Validation: all quiz questions must have an option selected
+    if (types.includes('quiz') && draftQuizQuestions.length > 0) {
+      const missingQuizIds: string[] = [];
+      for (const qq of draftQuizQuestions) {
+        if (!studentQuizAnswers[qq.id]) {
+          missingQuizIds.push(qq.id);
+        }
+      }
+      if (missingQuizIds.length > 0) {
+        setUnansweredQuizQuestionIds(missingQuizIds);
+        setErrorMessage(
+          `Please answer all ${draftQuizQuestions.length} quiz questions before submitting (${missingQuizIds.length} question(s) remaining).`
+        );
         return;
       }
     }
 
     setUnansweredQuestionIds([]);
+    setUnansweredQuizQuestionIds([]);
     setIsConfirmSubmitOpen(true);
   };
 
@@ -1243,17 +1510,39 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
         };
       });
 
+      const formattedQuizAnswers = Object.entries(studentQuizAnswers).map(([qid, oid]) => ({
+        quiz_question_id: qid,
+        selected_option_id: oid
+      }));
+
       const activeSub = assessmentSubmissions[0];
       const keepFiles = Boolean(
         activeSub && 
         !removeExistingUploadedFile && 
         studentAnswerFiles.length === 0 &&
-        ((activeSub.active_version?.files && activeSub.active_version.files.length > 0) || activeSub.active_version?.storage_path)
+        ((activeSub.active_version?.files && activeSub.active_version.files.length > 0) || activeSub.active_version?.storage_path || activeSub.active_version?.original_name)
       );
+
+      const sectionStatuses: Record<string, string> = {};
+      const types = selectedAssessment.assessment_types && selectedAssessment.assessment_types.length > 0
+        ? selectedAssessment.assessment_types
+        : (selectedAssessment.document_storage_key ? ['file_based', 'manual_questions'] : ['manual_questions']);
+
+      if (types.includes('file_based')) {
+        sectionStatuses['file_based'] = (studentAnswerFiles.length > 0 || keepFiles) ? 'completed' : 'pending';
+      }
+      if (types.includes('manual_questions')) {
+        sectionStatuses['manual_questions'] = formattedAnswers.length === draftQuestions.length ? 'completed' : 'pending';
+      }
+      if (types.includes('quiz')) {
+        sectionStatuses['quiz'] = formattedQuizAnswers.length === draftQuizQuestions.length ? 'completed' : 'pending';
+      }
 
       const receipt = await submissionApi.uploadSubmission({
         assessment_id: selectedAssessment.id,
         answers: formattedAnswers,
+        quiz_answers: formattedQuizAnswers,
+        section_statuses: sectionStatuses,
         files: studentAnswerFiles.map(f => ({
           file_name: f.name,
           file_base64: f.base64
@@ -1268,6 +1557,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
 
       try {
         localStorage.removeItem(`acadassess_answers_${selectedAssessment.id}`);
+        localStorage.removeItem(`acadassess_quiz_answers_${selectedAssessment.id}`);
       } catch {}
 
       setStudentAnswerFiles([]);
@@ -1285,48 +1575,111 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
     }
   };
 
+  // Open Publish Modal & Load Eligible Students
+  const handleOpenPublishModal = async () => {
+    if (!selectedAssessment) return;
+    setPublishAudience('all');
+    setSelectedStudentIds([]);
+    setStudentSearchQuery('');
+    setShowPublishConfirmModal(true);
+    setLoadingEligibleStudents(true);
+    try {
+      const students = await assessmentApi.getEligibleStudents(selectedAssessment.id);
+      setEligibleStudents(students);
+    } catch (err: any) {
+      console.error('Failed to load eligible students for publication:', err);
+      setEligibleStudents([]);
+    } finally {
+      setLoadingEligibleStudents(false);
+    }
+  };
+
   // Publish Assessment
   const handlePublishAssessment = async () => {
     if (!selectedAssessment) return;
+    if (publishAudience === 'selected' && selectedStudentIds.length === 0) {
+      setErrorMessage('Please select at least one student when publishing to specific students.');
+      return;
+    }
     setErrorMessage(null);
+    setIsPublishing(true);
 
     try {
-      const published = await assessmentApi.publishAssessment(selectedAssessment.id);
-      setActionMessage(`Assessment "${published.title}" has been published and locked. It is now open for student submissions.`);
+      const published = await assessmentApi.publishAssessment(selectedAssessment.id, {
+        audience: publishAudience,
+        student_ids: publishAudience === 'selected' ? selectedStudentIds : undefined
+      });
+      const audienceMsg = publishAudience === 'selected'
+        ? `published to ${selectedStudentIds.length} selected student(s)`
+        : 'published to all eligible students';
+      setActionMessage(`Assessment "${published.title}" has been ${audienceMsg} and locked. It is now open for student submissions.`);
       setShowPublishConfirmModal(false);
       await loadAssessments();
     } catch (err: any) {
       setErrorMessage(err.message || 'Publication check failed.');
       setShowPublishConfirmModal(false);
+    } finally {
+      setIsPublishing(false);
     }
   };
 
-  // Publication checklist: Supports PDF, manual questions, or both, plus assignment-level rubric summing to 50
+  // Publication checklist: Supports all 7 combinations of File-Based, Manual Questions, and Quiz
   const publicationChecklist = () => {
     if (!selectedAssessment) return { valid: false, errors: [] };
     const errors: string[] = [];
 
-    // 1. Content check: Assessment must have PDF, manual questions, or both
-    const hasDoc = Boolean(selectedAssessment.document_storage_key || selectedAssessment.document_filename);
-    const questions = selectedAssessment.questions || [];
-    const hasQuestions = Array.isArray(questions) && questions.length > 0;
+    const types = selectedAssessment.assessment_types && selectedAssessment.assessment_types.length > 0
+      ? selectedAssessment.assessment_types
+      : (selectedAssessment.document_storage_key ? ['file_based', 'manual_questions'] : ['manual_questions']);
 
-    if (!hasDoc && !hasQuestions) {
-      errors.push('Assessment must include an assignment document (PDF), manual questions, or both.');
-    }
-
-    // 2. Assignment-Level Rubric check: must exist and criteria total exactly 50
-    const criteria = selectedAssessment.rubric?.criteria || [];
-    if (criteria.length === 0) {
-      errors.push('Assessment requires an assignment-level rubric with at least one criterion.');
-    } else {
-      const sum = criteria.reduce((acc: number, c: any) => acc + Number(c.max_marks || c.max_score || 0), 0);
-      if (Math.abs(sum - 50) > 0.001) {
-        errors.push(`Rubric criteria total (${sum} marks) must equal exactly 50 marks before publishing.`);
+    // 1. File-Based validation
+    if (types.includes('file_based')) {
+      const hasDoc = Boolean(
+        selectedAssessment.document_storage_key || 
+        selectedAssessment.document_filename ||
+        (selectedAssessment.instruction_files && selectedAssessment.instruction_files.length > 0)
+      );
+      if (!hasDoc) {
+        errors.push('File-Based Assessment requires an instruction file (PDF, PPT, PPTX, DOC, DOCX) to be uploaded.');
       }
     }
 
-    // 3. Submission deadline must be in the future
+    // 2. Manual Questions validation
+    if (types.includes('manual_questions')) {
+      const questions = draftQuestions.length > 0 ? draftQuestions : (selectedAssessment.questions || []);
+      if (!questions || questions.length === 0) {
+        errors.push('Manual Question-Based Assessment requires at least one question.');
+      }
+    }
+
+    // 3. Quiz validation
+    if (types.includes('quiz')) {
+      const quizzes = draftQuizQuestions.length > 0 ? draftQuizQuestions : (selectedAssessment.quiz_questions || []);
+      if (!quizzes || quizzes.length === 0) {
+        errors.push('Quiz-Based Assessment requires at least one MCQ question.');
+      } else {
+        const incompleteQuizIndex = quizzes.findIndex(q => !q.options || q.options.length !== 4 || !q.correct_option_id);
+        if (incompleteQuizIndex !== -1) {
+          errors.push(`Quiz Question ${incompleteQuizIndex + 1} must have exactly 4 options and 1 correct answer selected.`);
+        }
+      }
+    }
+
+    // 4. Rubric validation: required for file_based or manual_questions, NOT required for quiz-only
+    const requiresRubric = types.includes('file_based') || types.includes('manual_questions');
+    if (requiresRubric) {
+      const criteria = draftRubricCriteria.length > 0 ? draftRubricCriteria : (selectedAssessment.rubric?.criteria || []);
+      if (criteria.length === 0) {
+        errors.push('Assessment requires an assignment-level evaluation rubric summing to 50 marks.');
+      } else {
+        const sum = criteria.reduce((acc: number, c: any) => acc + Number(c.max_marks || c.max_score || 0), 0);
+        if (Math.abs(sum - 50) > 0.001) {
+          errors.push(`Rubric criteria total (${sum} marks) must equal exactly 50 marks before publishing.`);
+        }
+      }
+    }
+
+    // 5. Submission deadline must be in the future
     const isFuture = new Date(selectedAssessment.deadline_at).getTime() > Date.now();
     if (!isFuture) {
       errors.push('Submission deadline must be in the future.');
@@ -1807,152 +2160,216 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
           </div>
 
           {/* Assessment Summary Card */}
-          <div className="card-surface space-y-4">
-            <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-              <div>
-                <div className="flex items-center space-x-2">
-                  <h2 className="text-xl font-bold text-academic-deepGreen">
-                    {selectedAssessment.title}
-                  </h2>
-                  {selectedAssessment.document_storage_key && (
-                    <span className="text-[10px] font-bold text-academic-primaryGreen bg-academic-lightGreen px-2 py-0.5 rounded border border-academic-primaryGreen/30">
-                      Document-Based
-                    </span>
+          {(() => {
+            const selectedTypes: AssessmentType[] = selectedAssessment.assessment_types && selectedAssessment.assessment_types.length > 0
+              ? selectedAssessment.assessment_types
+              : (selectedAssessment.document_storage_key ? ['file_based', 'manual_questions'] : ['manual_questions']);
+            const hasInstructionFile = Boolean(selectedAssessment.document_storage_key || selectedAssessment.document_filename || (selectedAssessment.instruction_files && selectedAssessment.instruction_files.length > 0));
+
+            return (
+              <>
+                <div className="card-surface space-y-4">
+                  <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-xl font-bold text-academic-deepGreen">
+                          {selectedAssessment.title}
+                        </h2>
+                        {selectedTypes.map(t => (
+                          <span key={t} className="text-[10px] font-bold text-academic-primaryGreen bg-academic-lightGreen px-2 py-0.5 rounded border border-academic-primaryGreen/30 capitalize">
+                            {t === 'file_based' ? '📁 File-Based' : t === 'manual_questions' ? '✍️ Manual Questions' : '🧩 Quiz (MCQ)'}
+                          </span>
+                        ))}
+                      </div>
+                      <p className="text-xs text-academic-muted mt-1">
+                        Class: <span className="font-semibold text-academic-deepGreen">{selectedAssessment.class_details || 'MCA'}</span> • 
+                        Subject: <span className="font-semibold text-academic-deepGreen">{selectedAssessment.subject_details || 'Subject'}</span>
+                      </p>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      {hasInstructionFile && (
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadDocument(selectedAssessment.id, selectedAssessment.document_filename || (selectedAssessment.instruction_files && selectedAssessment.instruction_files[0]?.file_name))}
+                          disabled={downloadingDocId === selectedAssessment.id}
+                          className="btn-secondary text-xs flex items-center min-h-[44px]"
+                          title="Download instruction document"
+                        >
+                          {downloadingDocId === selectedAssessment.id ? (
+                            <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-academic-primaryGreen" />
+                          ) : (
+                            <Download className="w-4 h-4 mr-1.5 text-academic-primaryGreen" />
+                          )}
+                          <span>Instruction File</span>
+                        </button>
+                      )}
+
+                      {isTeacher && selectedAssessment.status === 'draft' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setActionMessage('Draft settings are saved automatically as you edit.')}
+                            className="btn-secondary text-xs flex items-center min-h-[44px]"
+                          >
+                            <Save className="w-4 h-4 mr-1.5 text-academic-primaryGreen" />
+                            <span>Save Draft</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleOpenPublishModal}
+                            className="btn-primary text-xs flex items-center min-h-[44px]"
+                          >
+                            <CheckCircle2 className="w-4 h-4 mr-1.5" />
+                            <span>Publish Assessment</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Instructions Banner */}
+                  <div className="p-3 bg-academic-paleGreen/60 rounded-md border border-academic-border text-xs text-academic-deepGreen space-y-1">
+                    <span className="font-semibold block">Instructions:</span>
+                    <p className="leading-relaxed">{selectedAssessment.instructions}</p>
+                  </div>
+
+                  {/* Deadlines & Late Policy Info Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-1">
+                    <div className="p-3 rounded border border-academic-border bg-academic-surface space-y-1">
+                      <div className="flex items-center space-x-1.5 text-academic-muted">
+                        <Calendar className="w-4 h-4 text-academic-primaryGreen" />
+                        <span className="font-semibold text-academic-deepGreen">Original Deadline</span>
+                      </div>
+                      <p className="font-mono text-academic-deepGreen text-[11px]">
+                        {new Date(selectedAssessment.deadline_at).toLocaleString()}
+                      </p>
+                    </div>
+
+                    <div className="p-3 rounded border border-academic-border bg-academic-surface space-y-1">
+                      <div className="flex items-center space-x-1.5 text-academic-muted">
+                        <Clock className="w-4 h-4 text-academic-primaryGreen" />
+                        <span className="font-semibold text-academic-deepGreen">Late Policy</span>
+                      </div>
+                      <p className="text-[11px] text-academic-deepGreen">
+                        {selectedAssessment.allow_late ? (
+                          <>
+                            <span className="font-bold text-[#A63214]">Extension until: </span>
+                            {selectedAssessment.extension_deadline_at ? new Date(selectedAssessment.extension_deadline_at).toLocaleString() : '—'}
+                            <span className="block text-[10px] text-academic-muted mt-0.5">
+                              {selectedAssessment.late_penalty_mode === 'fixed'
+                                ? `Fixed penalty: -${selectedAssessment.late_penalty_marks || 0} Marks`
+                                : 'No automatic deduction (Teacher discretion)'}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-academic-muted font-medium">Late submissions not permitted</span>
+                        )}
+                      </p>
+                    </div>
+
+                    <div className="p-3 rounded border border-academic-border bg-academic-surface space-y-1">
+                      <div className="flex items-center space-x-1.5 text-academic-muted">
+                        <Paperclip className="w-4 h-4 text-academic-primaryGreen" />
+                        <span className="font-semibold text-academic-deepGreen">Submission Rules</span>
+                      </div>
+                      <p className="text-[11px] text-academic-deepGreen">
+                        Max Answer Files: <span className="font-bold">{selectedAssessment.max_files || 1} file(s)</span> (PDF, PPT, PPTX, DOC, DOCX)
+                      </p>
+                      <p className="text-[10px] text-academic-muted">
+                        Total Marks: {selectedAssessment.max_marks || 50} Marks
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Assessment Detail Tab Switcher */}
+                <div className="flex flex-wrap border-b border-academic-border gap-2">
+                  {selectedTypes.includes('file_based') && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('file_based')}
+                      className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors flex items-center space-x-1.5 ${
+                        activeTab === 'file_based'
+                          ? 'border-academic-primaryGreen text-academic-deepGreen'
+                          : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+                      }`}
+                    >
+                      <FileText className="w-3.5 h-3.5 mr-1" />
+                      <span>File-Based Instructions</span>
+                      {hasInstructionFile && (
+                        <span className="w-2 h-2 rounded-full bg-academic-primaryGreen" title="File uploaded" />
+                      )}
+                    </button>
                   )}
-                </div>
-                <p className="text-xs text-academic-muted mt-1">
-                  Class: <span className="font-semibold text-academic-deepGreen">{selectedAssessment.class_details || 'MCA'}</span> • 
-                  Subject: <span className="font-semibold text-academic-deepGreen">{selectedAssessment.subject_details || 'Subject'}</span>
-                </p>
-              </div>
 
-              <div className="flex items-center space-x-2">
-                {selectedAssessment.document_storage_key && (
-                  <button
-                    type="button"
-                    onClick={() => handleDownloadDocument(selectedAssessment.id, selectedAssessment.document_filename)}
-                    disabled={downloadingDocId === selectedAssessment.id}
-                    className="btn-secondary text-xs flex items-center min-h-[44px]"
-                    title="Download PDF for offline access"
-                  >
-                    {downloadingDocId === selectedAssessment.id ? (
-                      <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-academic-primaryGreen" />
-                    ) : (
-                      <Download className="w-4 h-4 mr-1.5 text-academic-primaryGreen" />
-                    )}
-                    <span>Assignment PDF</span>
-                  </button>
-                )}
+                  {selectedTypes.includes('manual_questions') && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('questions')}
+                      className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors flex items-center space-x-1.5 ${
+                        activeTab === 'questions'
+                          ? 'border-academic-primaryGreen text-academic-deepGreen'
+                          : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+                      }`}
+                    >
+                      <Pencil className="w-3.5 h-3.5 mr-1" />
+                      <span>Manual Questions ({draftQuestions.length})</span>
+                    </button>
+                  )}
 
-                {isTeacher && selectedAssessment.status === 'draft' && (
-                  <button
-                    onClick={() => setShowPublishConfirmModal(true)}
-                    className="btn-primary text-xs flex items-center self-start min-h-[44px]"
-                  >
-                    <CheckCircle2 className="w-4 h-4 mr-1.5" />
-                    <span>Publish Assessment</span>
-                  </button>
-                )}
-              </div>
-            </div>
+                  {selectedTypes.includes('quiz') && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('quiz')}
+                      className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors flex items-center space-x-1.5 ${
+                        activeTab === 'quiz'
+                          ? 'border-academic-primaryGreen text-academic-deepGreen'
+                          : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+                      }`}
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                      <span>Quiz (MCQ) ({draftQuizQuestions.length})</span>
+                    </button>
+                  )}
 
-            {/* Instructions Banner */}
-            <div className="p-3 bg-academic-paleGreen/60 rounded-md border border-academic-border text-xs text-academic-deepGreen space-y-1">
-              <span className="font-semibold block">Instructions:</span>
-              <p className="leading-relaxed">{selectedAssessment.instructions}</p>
-            </div>
-
-            {/* Deadlines & Late Policy Info Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-1">
-              <div className="p-3 rounded border border-academic-border bg-academic-surface space-y-1">
-                <div className="flex items-center space-x-1.5 text-academic-muted">
-                  <Calendar className="w-4 h-4 text-academic-primaryGreen" />
-                  <span className="font-semibold text-academic-deepGreen">Original Deadline</span>
-                </div>
-                <p className="font-mono text-academic-deepGreen text-[11px]">
-                  {new Date(selectedAssessment.deadline_at).toLocaleString()}
-                </p>
-              </div>
-
-              <div className="p-3 rounded border border-academic-border bg-academic-surface space-y-1">
-                <div className="flex items-center space-x-1.5 text-academic-muted">
-                  <Clock className="w-4 h-4 text-academic-primaryGreen" />
-                  <span className="font-semibold text-academic-deepGreen">Late Policy</span>
-                </div>
-                <p className="text-[11px] text-academic-deepGreen">
-                  {selectedAssessment.allow_late ? (
-                    <>
-                      <span className="font-bold text-[#A63214]">Extension until: </span>
-                      {selectedAssessment.extension_deadline_at ? new Date(selectedAssessment.extension_deadline_at).toLocaleString() : '—'}
-                      <span className="block text-[10px] text-academic-muted mt-0.5">
-                        {selectedAssessment.late_penalty_mode === 'fixed'
-                          ? `Fixed penalty: -${selectedAssessment.late_penalty_marks || 0} Marks`
-                          : 'No automatic deduction (Teacher discretion)'}
+                  {(selectedTypes.includes('file_based') || selectedTypes.includes('manual_questions')) && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('rubric')}
+                      className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors flex items-center space-x-1.5 ${
+                        activeTab === 'rubric'
+                          ? 'border-academic-primaryGreen text-academic-deepGreen'
+                          : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+                      }`}
+                    >
+                      <Layers className="w-3.5 h-3.5 mr-1" />
+                      <span>Assignment Rubric</span>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                        Math.abs(draftRubricSum - 50) < 0.001
+                          ? 'bg-academic-lightGreen text-academic-primaryGreen'
+                          : 'bg-[#FDF6E2] text-[#A63214]'
+                      }`}>
+                        {draftRubricSum}/50
                       </span>
-                    </>
-                  ) : (
-                    <span className="text-academic-muted font-medium">Late submissions not permitted</span>
+                    </button>
                   )}
-                </p>
-              </div>
 
-              <div className="p-3 rounded border border-academic-border bg-academic-surface space-y-1">
-                <div className="flex items-center space-x-1.5 text-academic-muted">
-                  <Paperclip className="w-4 h-4 text-academic-primaryGreen" />
-                  <span className="font-semibold text-academic-deepGreen">Submission Rules</span>
+                  {isTeacher && selectedAssessment.status === 'published' && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('submissions')}
+                      className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors flex items-center space-x-1.5 ${
+                        activeTab === 'submissions'
+                          ? 'border-academic-primaryGreen text-academic-deepGreen'
+                          : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
+                      }`}
+                    >
+                      <FileCheck2 className="w-3.5 h-3.5 mr-1" />
+                      <span>Student Submissions ({assessmentSubmissions.length})</span>
+                    </button>
+                  )}
                 </div>
-                <p className="text-[11px] text-academic-deepGreen">
-                  Max Files: <span className="font-bold">{selectedAssessment.max_files || 1} file(s)</span> (PDF, PPT, PPTX)
-                </p>
-                <p className="text-[10px] text-academic-muted">
-                  Total Marks: {selectedAssessment.max_marks || 50} Marks
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Assessment Detail Tab Switcher */}
-          <div className="flex border-b border-academic-border gap-2">
-            <button
-              onClick={() => setActiveTab('questions')}
-              className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors ${
-                activeTab === 'questions'
-                  ? 'border-academic-primaryGreen text-academic-deepGreen'
-                  : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-              }`}
-            >
-              Document & Questions
-            </button>
-            <button
-              onClick={() => setActiveTab('rubric')}
-              className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors flex items-center space-x-1.5 ${
-                activeTab === 'rubric'
-                  ? 'border-academic-primaryGreen text-academic-deepGreen'
-                  : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-              }`}
-            >
-              <span>Assignment Rubric</span>
-              <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                Math.abs(draftRubricSum - 50) < 0.001
-                  ? 'bg-academic-lightGreen text-academic-primaryGreen'
-                  : 'bg-[#FDF6E2] text-[#A63214]'
-              }`}>
-                {draftRubricSum}/50
-              </span>
-            </button>
-            {isTeacher && selectedAssessment.status === 'published' && (
-              <button
-                onClick={() => setActiveTab('submissions')}
-                className={`px-4 py-2.5 text-xs font-semibold border-b-2 min-h-[44px] transition-colors ${
-                  activeTab === 'submissions'
-                    ? 'border-academic-primaryGreen text-academic-deepGreen'
-                    : 'border-transparent text-academic-muted hover:text-academic-deepGreen'
-                }`}
-              >
-                Student Submissions ({assessmentSubmissions.length})
-              </button>
-            )}
-          </div>
 
           {/* Teacher Submissions View */}
           {isTeacher && selectedAssessment.status === 'published' && activeTab === 'submissions' ? (
@@ -2259,61 +2676,1028 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                 </div>
               )}
             </div>
-          ) : (
-            /* Document-Based Assessment Details / Questions View */
-            <div className="space-y-4">
-              {/* Document Banner */}
-              {selectedAssessment.document_storage_key ? (
+          ) : isStudent && selectedAssessment.status === 'published' ? (
+            /* Student Assessment Multi-Type Answering Workspace */
+            <div className="space-y-6">
+              {/* SECTION 1: File-Based Assessment (if applicable) */}
+              {selectedTypes.includes('file_based') && (
                 <div className="card-surface p-5 border border-academic-border space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-academic-border">
-                    <div className="space-y-1">
+                    <div>
                       <span className="text-xs font-bold uppercase tracking-wider text-academic-primaryGreen">
-                        Authoritative Assignment Document
+                        Section 1: File-Based Assignment Instructions & Document Submission
                       </span>
-                      <h4 className="text-base font-bold text-academic-deepGreen flex items-center">
+                      <h3 className="text-base font-bold text-academic-deepGreen flex items-center mt-1">
                         <FileText className="w-4 h-4 mr-2 text-academic-primaryGreen" />
-                        {selectedAssessment.document_filename || 'Assignment Document.pdf'}
-                      </h4>
-                      {selectedAssessment.document_size_bytes && (
-                        <p className="text-[11px] text-academic-muted font-mono">
-                          Size: {(selectedAssessment.document_size_bytes / 1024).toFixed(1)} KB • PDF Format
+                        Teacher Instructions & Question Brief
+                      </h3>
+                    </div>
+                  </div>
+
+                  {/* Teacher Instruction Document Download & Preview */}
+                  {hasInstructionFile ? (
+                    <div className="p-4 rounded-lg bg-academic-paleGreen/30 border border-academic-border space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-center space-x-3">
+                          <div className="p-2.5 rounded bg-academic-lightGreen text-academic-primaryGreen">
+                            <FileText className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <p className="font-bold text-academic-deepGreen text-sm">
+                              {selectedAssessment.document_filename || (selectedAssessment.instruction_files && selectedAssessment.instruction_files[0]?.file_name) || 'Assignment-Brief.pdf'}
+                            </p>
+                            <p className="text-[11px] text-academic-muted font-mono mt-0.5">
+                              {selectedAssessment.document_size_bytes ? `${(selectedAssessment.document_size_bytes / 1024).toFixed(1)} KB &bull; ` : ''}Authoritative Instruction File
+                            </p>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadDocument(selectedAssessment.id, selectedAssessment.document_filename || (selectedAssessment.instruction_files && selectedAssessment.instruction_files[0]?.file_name))}
+                          disabled={downloadingDocId === selectedAssessment.id}
+                          className="btn-secondary text-xs inline-flex items-center min-h-[40px]"
+                        >
+                          {downloadingDocId === selectedAssessment.id ? (
+                            <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-academic-primaryGreen" />
+                          ) : (
+                            <Download className="w-4 h-4 mr-1.5 text-academic-primaryGreen" />
+                          )}
+                          <span>Download Instructions</span>
+                        </button>
+                      </div>
+
+                      {/* Embedded PDF Viewer if PDF */}
+                      {(selectedAssessment.document_filename?.toLowerCase().endsWith('.pdf') || !selectedAssessment.document_filename) && selectedAssessment.document_storage_key && (
+                        <div className="pt-2">
+                          <React.Suspense fallback={<div className="flex items-center justify-center p-6"><Loader2 className="w-5 h-5 animate-spin text-academic-primaryGreen" /><span className="ml-2 text-xs text-academic-muted">Loading PDF Preview...</span></div>}>
+                            <PdfViewer assessmentId={selectedAssessment.id} filename={selectedAssessment.document_filename} />
+                          </React.Suspense>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+
+                  {/* Student Answer Files Staging & Upload */}
+                  <div className="space-y-3 pt-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <label className="block font-bold text-academic-deepGreen text-xs">
+                          Student Answer Files (PDF, PPT, PPTX, DOC, DOCX) *
+                        </label>
+                        <p className="text-[11px] text-academic-muted mt-0.5">
+                          You may upload up to {selectedAssessment.max_files || 1} answer file(s) (20.00 MB individual limit, 20.00 MB total limit).
                         </p>
+                      </div>
+                      <span className="text-xs font-mono font-bold text-academic-deepGreen">
+                        {studentAnswerFiles.length} of max {selectedAssessment.max_files || 1} files
+                      </span>
+                    </div>
+
+                    {/* Staged New Answer Files */}
+                    {studentAnswerFiles.length > 0 && (
+                      <div className="space-y-1.5 p-3 rounded bg-academic-paleGreen/20 border border-academic-border">
+                        {studentAnswerFiles.map((sf, idx) => (
+                          <div key={idx} className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between text-xs">
+                            <div className="flex items-center space-x-2">
+                              <Paperclip className="w-3.5 h-3.5 text-academic-primaryGreen" />
+                              <span className="font-medium text-academic-deepGreen">{sf.name}</span>
+                              <span className="text-[11px] font-mono text-academic-muted">
+                                ({(sf.size / 1024).toFixed(1)} KB)
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveStudentAnswerFile(idx)}
+                              className="text-academic-muted hover:text-red-700 p-1"
+                              title="Remove file"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* File Dropzone / Selector */}
+                    {studentAnswerFiles.length < (selectedAssessment.max_files || 1) && (
+                      <label className="btn-secondary text-xs flex items-center justify-center cursor-pointer min-h-[44px] border-dashed border-2">
+                        <Upload className="w-3.5 h-3.5 mr-2 text-academic-primaryGreen" />
+                        <span>Select Answer File (PDF, PPT, PPTX, DOC, DOCX)</span>
+                        <input
+                          type="file"
+                          accept=".pdf,.ppt,.pptx,.doc,.docx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                          className="hidden"
+                          onChange={handleSelectStudentAnswerFiles}
+                          disabled={isSubmittingAnswers}
+                        />
+                      </label>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* SECTION 2: Manual Questions (if applicable) */}
+              {selectedTypes.includes('manual_questions') && (
+                <div className="card-surface p-5 border border-academic-border space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-academic-border">
+                    <div>
+                      <span className="text-xs font-bold uppercase tracking-wider text-academic-primaryGreen">
+                        {selectedTypes.includes('file_based') ? 'Section 2: Manual Question Answers' : 'Section 1: Manual Question Answers'}
+                      </span>
+                      <h3 className="text-base font-bold text-academic-deepGreen flex items-center mt-1">
+                        <Pencil className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                        Manual Questions ({draftQuestions.length})
+                      </h3>
+                      <p className="text-xs text-academic-muted mt-0.5">
+                        Provide comprehensive written answers for each question below.
+                      </p>
+                    </div>
+
+                    {/* Draft Autosave Status Indicator */}
+                    <div className="flex items-center space-x-2">
+                      {draftSaveStatus === 'saving' ? (
+                        <span className="inline-flex items-center text-xs text-academic-primaryGreen font-medium">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                          Autosaving draft...
+                        </span>
+                      ) : draftSaveStatus === 'saved' ? (
+                        <span className="inline-flex items-center text-xs text-academic-primaryGreen font-medium">
+                          <CheckCircle2 className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+                          Draft saved {draftLastSavedTime ? `(${draftLastSavedTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})` : ''}
+                        </span>
+                      ) : draftSaveStatus === 'unsaved' ? (
+                        <span className="inline-flex items-center text-xs text-amber-700 font-medium">
+                          <Clock className="w-3.5 h-3.5 mr-1.5" />
+                          Unsaved changes (autosaving...)
+                        </span>
+                      ) : draftSaveStatus === 'error' ? (
+                        <span className="inline-flex items-center text-xs text-red-700 font-medium">
+                          <AlertCircle className="w-3.5 h-3.5 mr-1.5" />
+                          Save error (cached locally)
+                        </span>
+                      ) : (
+                        <span className="text-academic-muted text-xs">
+                          Autosave enabled
+                        </span>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={handleSaveDraftManual}
+                        disabled={draftSaveStatus === 'saving'}
+                        className="btn-secondary text-[11px] py-1 px-2.5 inline-flex items-center"
+                        title="Explicitly save draft to server"
+                      >
+                        <Save className="w-3 h-3 mr-1 text-academic-primaryGreen" />
+                        <span>Save Draft</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Question Answering List */}
+                  <div className="space-y-4">
+                    {draftQuestions.map((q, idx) => {
+                      const qKey = q.id || `q-${q.display_order || idx + 1}`;
+                      const isUnanswered = unansweredQuestionIds.includes(qKey);
+                      const answerText = studentAnswers[qKey] || (q.id ? studentAnswers[q.id] : undefined) || studentAnswers[`q-${q.display_order || idx + 1}`] || '';
+                      const wordCount = answerText.trim() ? answerText.trim().split(/\s+/).length : 0;
+                      const charCount = answerText.length;
+
+                      return (
+                        <div
+                          key={q.id || idx}
+                          className={`p-4 rounded-lg border bg-academic-surface space-y-3 ${
+                            isUnanswered ? 'border-red-400 bg-red-50/10' : 'border-academic-border'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center space-x-2">
+                              <span className="px-2 py-0.5 rounded bg-academic-deepGreen text-white text-[11px] font-bold font-mono">
+                                Question {q.display_order || idx + 1} of {draftQuestions.length}
+                              </span>
+                            </div>
+                            <span className="text-[11px] font-mono text-academic-muted">
+                              {wordCount} {wordCount === 1 ? 'word' : 'words'} &bull; {charCount} chars
+                            </span>
+                          </div>
+
+                          <p className="text-xs text-academic-deepGreen font-medium leading-relaxed whitespace-pre-wrap">
+                            {q.prompt}
+                          </p>
+
+                          <div>
+                            <textarea
+                              rows={5}
+                              value={answerText}
+                              onChange={(e) => handleAnswerChange(qKey, e.target.value)}
+                              placeholder={`Type your detailed answer for Question ${q.display_order || idx + 1} here...`}
+                              className={`w-full p-3 rounded-lg border text-xs focus:outline-none transition-colors ${
+                                isUnanswered
+                                  ? 'border-red-500 bg-red-50/20 text-academic-deepGreen focus:border-red-600'
+                                  : 'border-academic-border bg-academic-surface text-academic-deepGreen focus:border-academic-primaryGreen'
+                              }`}
+                            />
+                            {isUnanswered && (
+                              <p className="text-[11px] text-red-600 font-semibold flex items-center mt-1">
+                                <AlertCircle className="w-3.5 h-3.5 mr-1 flex-shrink-0" />
+                                Please provide an answer for Question {q.display_order || idx + 1} before submitting.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* SECTION 3: Quiz (MCQ) (if applicable) */}
+              {selectedTypes.includes('quiz') && (
+                <div className="card-surface p-5 border border-academic-border space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-academic-border">
+                    <div>
+                      <span className="text-xs font-bold uppercase tracking-wider text-academic-primaryGreen">
+                        {selectedTypes.includes('file_based') && selectedTypes.includes('manual_questions')
+                          ? 'Section 3: Multiple Choice Quiz'
+                          : selectedTypes.includes('file_based') || selectedTypes.includes('manual_questions')
+                          ? 'Section 2: Multiple Choice Quiz'
+                          : 'Section 1: Multiple Choice Quiz'}
+                      </span>
+                      <h3 className="text-base font-bold text-academic-deepGreen flex items-center mt-1">
+                        <CheckCircle2 className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                        Quiz (MCQ) &bull; {draftQuizQuestions.length} Questions
+                      </h3>
+                      <p className="text-xs text-academic-muted mt-0.5">
+                        Select exactly one option per question. Answers are autosaved as you make selections.
+                      </p>
+                    </div>
+
+                    {/* Progress Indicator */}
+                    <div className="text-right">
+                      <span className="text-xs font-bold text-academic-deepGreen">
+                        {Object.keys(studentQuizAnswers).length} of {draftQuizQuestions.length} answered
+                      </span>
+                      <div className="w-36 h-2 bg-academic-paleGreen rounded-full overflow-hidden mt-1 border border-academic-border">
+                        <div
+                          className="h-full bg-academic-primaryGreen transition-all duration-300"
+                          style={{
+                            width: `${draftQuizQuestions.length > 0 ? (Object.keys(studentQuizAnswers).length / draftQuizQuestions.length) * 100 : 0}%`
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* MCQ Questions List */}
+                  <div className="space-y-4">
+                    {draftQuizQuestions.map((q, idx) => {
+                      const selectedOptId = studentQuizAnswers[q.id];
+                      const isUnanswered = unansweredQuizQuestionIds.includes(q.id);
+
+                      return (
+                        <div
+                          key={q.id || idx}
+                          className={`p-4 rounded-lg border bg-academic-surface space-y-3 ${
+                            isUnanswered ? 'border-red-400 bg-red-50/10' : 'border-academic-border'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center space-x-2">
+                              <span className="px-2 py-0.5 rounded bg-academic-deepGreen text-white text-[11px] font-bold font-mono">
+                                Question {idx + 1} of {draftQuizQuestions.length}
+                              </span>
+                              <span className="px-2 py-0.5 rounded bg-academic-lightGreen text-academic-primaryGreen text-[10px] font-bold border border-academic-primaryGreen/20">
+                                {q.marks || 1} {q.marks === 1 ? 'Mark' : 'Marks'}
+                              </span>
+                            </div>
+
+                            {selectedOptId && (
+                              <button
+                                type="button"
+                                onClick={() => handleClearQuizOption(q.id)}
+                                className="text-[11px] text-academic-muted hover:text-red-700 underline font-medium"
+                              >
+                                Clear selection
+                              </button>
+                            )}
+                          </div>
+
+                          <p className="text-xs font-semibold text-academic-deepGreen leading-relaxed">
+                            {q.question_text || (q as any).prompt}
+                          </p>
+
+                          {/* 4 Options Radio Group */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                            {q.options && q.options.map((opt, optIdx) => {
+                              const letter = String.fromCharCode(65 + optIdx);
+                              const isChecked = selectedOptId === opt.id;
+
+                              return (
+                                <label
+                                  key={opt.id || optIdx}
+                                  onClick={() => handleSelectQuizOption(q.id, opt.id)}
+                                  className={`p-3 rounded-lg border cursor-pointer transition-all flex items-center space-x-2.5 ${
+                                    isChecked
+                                      ? 'border-academic-primaryGreen bg-academic-lightGreen/50 ring-1 ring-academic-primaryGreen text-academic-deepGreen font-semibold'
+                                      : 'border-academic-border bg-academic-surface hover:bg-academic-paleGreen/20 text-academic-deepGreen'
+                                  }`}
+                                >
+                                  <input
+                                    type="radio"
+                                    name={`student-quiz-${q.id}`}
+                                    checked={isChecked}
+                                    onChange={() => handleSelectQuizOption(q.id, opt.id)}
+                                    className="text-academic-primaryGreen focus:ring-academic-primaryGreen"
+                                  />
+                                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
+                                    isChecked ? 'bg-academic-primaryGreen text-white' : 'bg-academic-paleGreen text-academic-deepGreen'
+                                  }`}>
+                                    {letter}
+                                  </span>
+                                  <span className="text-xs leading-snug">{opt.text}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+
+                          {isUnanswered && (
+                            <p className="text-[11px] text-red-600 font-semibold flex items-center mt-1">
+                              <AlertCircle className="w-3.5 h-3.5 mr-1 flex-shrink-0" />
+                              Please select an answer for Question {idx + 1} before submitting.
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* FINAL SUBMISSION PANEL */}
+              {(() => {
+                const sub = assessmentSubmissions[0];
+                const now = Date.now();
+                const origDeadline = new Date(selectedAssessment.deadline_at).getTime();
+                const extDeadline = selectedAssessment.allow_late && selectedAssessment.extension_deadline_at
+                  ? new Date(selectedAssessment.extension_deadline_at).getTime()
+                  : origDeadline;
+                const isOriginalDeadlinePassed = now > origDeadline;
+                const isExtensionPassed = now > extDeadline;
+                const isEditingLocked = sub ? isOriginalDeadlinePassed : isExtensionPassed;
+                const isInExtensionWindow = !sub && isOriginalDeadlinePassed && !isExtensionPassed;
+
+                const hasExistingFiles = Boolean(
+                  sub &&
+                  !removeExistingUploadedFile &&
+                  ((sub.active_version?.files && sub.active_version.files.length > 0) || sub.active_version?.original_name)
+                );
+
+                return (
+                  <div className="card-surface p-5 border border-academic-border space-y-4">
+                    <div className="flex items-center justify-between pb-3 border-b border-academic-border">
+                      <div>
+                        <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
+                          <FileCheck2 className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                          Final Assessment Submission
+                        </h3>
+                        <p className="text-xs text-academic-muted mt-0.5">
+                          Review all completed sections and submit your assessment.
+                        </p>
+                      </div>
+
+                      {sub ? (
+                        <span className="inline-flex items-center text-xs font-semibold text-academic-primaryGreen bg-academic-lightGreen px-2.5 py-1 rounded border border-academic-primaryGreen/30">
+                          <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                          Submitted (v{sub.active_version?.version || 1})
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center text-xs font-medium text-academic-muted bg-academic-paleGreen px-2.5 py-1 rounded border border-academic-border">
+                          <Clock className="w-3.5 h-3.5 mr-1" />
+                          Pending Submission
+                        </span>
                       )}
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleDownloadDocument(selectedAssessment.id, selectedAssessment.document_filename)}
-                      disabled={downloadingDocId === selectedAssessment.id}
-                      className="btn-secondary text-xs inline-flex items-center self-start sm:self-auto min-h-[44px]"
-                      title="Download PDF for offline access"
-                    >
-                      {downloadingDocId === selectedAssessment.id ? (
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin text-academic-primaryGreen" />
-                      ) : (
-                        <Download className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                    {/* Readiness Checklist */}
+                    <div className="p-3 rounded-lg bg-academic-paleGreen/30 border border-academic-border space-y-2 text-xs">
+                      <span className="font-bold text-academic-deepGreen block">Submission Readiness Checklist:</span>
+                      {selectedTypes.includes('file_based') && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-academic-muted">File-Based Assessment:</span>
+                          {(studentAnswerFiles.length > 0 || hasExistingFiles) ? (
+                            <span className="font-bold text-academic-primaryGreen flex items-center">
+                              <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                              {studentAnswerFiles.length > 0 ? `${studentAnswerFiles.length} file(s) attached` : 'Retained from previous version'}
+                            </span>
+                          ) : (
+                            <span className="font-bold text-[#A63214] flex items-center">
+                              <AlertCircle className="w-3.5 h-3.5 mr-1" />
+                              Required (No file attached)
+                            </span>
+                          )}
+                        </div>
                       )}
-                      <span>Download PDF</span>
-                    </button>
+
+                      {selectedTypes.includes('manual_questions') && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-academic-muted">Manual Questions:</span>
+                          {draftQuestions.length > 0 && draftQuestions.every(q => Boolean(studentAnswers[q.id || `q-${q.display_order}`]?.trim())) ? (
+                            <span className="font-bold text-academic-primaryGreen flex items-center">
+                              <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                              All {draftQuestions.length} answered
+                            </span>
+                          ) : (
+                            <span className="font-bold text-[#A63214] flex items-center">
+                              <AlertCircle className="w-3.5 h-3.5 mr-1" />
+                              Incomplete ({draftQuestions.filter(q => !studentAnswers[q.id || `q-${q.display_order}`]?.trim()).length} remaining)
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {selectedTypes.includes('quiz') && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-academic-muted">Quiz (MCQ):</span>
+                          {draftQuizQuestions.length > 0 && Object.keys(studentQuizAnswers).length === draftQuizQuestions.length ? (
+                            <span className="font-bold text-academic-primaryGreen flex items-center">
+                              <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                              All {draftQuizQuestions.length} answered
+                            </span>
+                          ) : (
+                            <span className="font-bold text-[#A63214] flex items-center">
+                              <AlertCircle className="w-3.5 h-3.5 mr-1" />
+                              Incomplete ({draftQuizQuestions.length - Object.keys(studentQuizAnswers).length} remaining)
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Deadline Notice */}
+                    {isEditingLocked ? (
+                      <div className="p-3 bg-[#FDF6E2] border border-[#D9BD71] rounded text-xs text-[#6D5200] flex items-center space-x-2">
+                        <Lock className="w-4 h-4 text-[#B28704] flex-shrink-0" />
+                        <span>
+                          {sub 
+                            ? `Submissions locked. The original deadline (${new Date(selectedAssessment.deadline_at).toLocaleString()}) has passed. Resubmissions are disabled.`
+                            : `Submissions closed. The deadline for this assignment has passed.`
+                          }
+                        </span>
+                      </div>
+                    ) : isInExtensionWindow ? (
+                      <div className="p-3 bg-[#FDF6E2] border border-[#D9BD71] rounded text-xs text-[#6D5200] flex items-center space-x-2">
+                        <AlertTriangle className="w-4 h-4 text-[#B28704] flex-shrink-0" />
+                        <span>
+                          <strong>Late Extension Window Active:</strong> Original deadline has passed. Submitting now records a formal LATE timestamp.
+                        </span>
+                      </div>
+                    ) : null}
+
+                    {/* Submit Button */}
+                    {!isEditingLocked && (
+                      <div className="flex justify-end pt-2">
+                        <button
+                          type="button"
+                          onClick={handleValidateAndOpenSubmitConfirm}
+                          disabled={isSubmittingAnswers}
+                          className="btn-primary text-xs flex items-center min-h-[44px] px-6 font-semibold"
+                        >
+                          <CheckCircle2 className="w-4 h-4 mr-2" />
+                          <span>
+                            {sub 
+                              ? `Save Changes & Resubmit Assignment (v${(sub.active_version?.version || 1) + 1})`
+                              : isInExtensionWindow 
+                              ? 'Submit Late Assignment' 
+                              : 'Submit Assignment'
+                            }
+                          </span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          ) : activeTab === 'file_based' ? (
+            /* TEACHER / STAFF: File-Based Instructions Configuration */
+            <div className="space-y-4">
+              <div className="card-surface p-5 border border-academic-border space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-academic-border">
+                  <div>
+                    <span className="text-xs font-bold uppercase tracking-wider text-academic-primaryGreen">
+                      File-Based Assessment Configuration
+                    </span>
+                    <h4 className="text-base font-bold text-academic-deepGreen flex items-center mt-1">
+                      <FileText className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                      Teacher Instruction Document
+                    </h4>
+                    <p className="text-xs text-academic-muted mt-0.5">
+                      Supported formats: PDF (.pdf), PowerPoint (.ppt, .pptx), Word (.doc, .docx). Max 25 MB.
+                    </p>
                   </div>
 
-                  <p className="text-xs text-academic-muted leading-relaxed">
-                    This PDF contains all authoritative questions, instructions, and grading rubrics. You can read the assignment directly below or download a copy for offline access.
-                  </p>
-
-                  {/* Embedded PDF Viewer */}
-                  <div className="pt-2">
-                    <React.Suspense fallback={<div className="flex items-center justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-academic-primaryGreen" /><span className="ml-2 text-sm text-academic-muted">Loading PDF Viewer...</span></div>}>
-                      <PdfViewer
-                        assessmentId={selectedAssessment.id}
-                        filename={selectedAssessment.document_filename}
-                      />
-                    </React.Suspense>
-                  </div>
+                  {selectedAssessment.status === 'published' ? (
+                    <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-bold bg-academic-paleGreen text-academic-deepGreen border border-academic-border">
+                      <Lock className="w-3.5 h-3.5 mr-1 text-academic-deepGreen" />
+                      File Frozen (Published)
+                    </span>
+                  ) : null}
                 </div>
-              ) : null}
 
-              {/* Manual Questions Section (Shown alongside PDF or as standalone question set) */}
+                {/* Instruction File Card */}
+                {hasInstructionFile ? (
+                  <div className="p-4 rounded-lg bg-academic-paleGreen/30 border border-academic-border space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-center space-x-3">
+                        <div className="p-2.5 rounded bg-academic-lightGreen text-academic-primaryGreen">
+                          <FileText className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <p className="font-bold text-academic-deepGreen text-sm">
+                            {selectedAssessment.document_filename || (selectedAssessment.instruction_files && selectedAssessment.instruction_files[0]?.file_name) || 'Instruction-Document.pdf'}
+                          </p>
+                          <p className="text-[11px] text-academic-muted font-mono mt-0.5">
+                            {selectedAssessment.document_size_bytes
+                              ? `${(selectedAssessment.document_size_bytes / 1024).toFixed(1)} KB &bull; `
+                              : ''}Uploaded Instruction File
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadDocument(selectedAssessment.id, selectedAssessment.document_filename || (selectedAssessment.instruction_files && selectedAssessment.instruction_files[0]?.file_name))}
+                          disabled={downloadingDocId === selectedAssessment.id}
+                          className="btn-secondary text-xs inline-flex items-center min-h-[40px]"
+                        >
+                          {downloadingDocId === selectedAssessment.id ? (
+                            <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-academic-primaryGreen" />
+                          ) : (
+                            <Download className="w-4 h-4 mr-1.5 text-academic-primaryGreen" />
+                          )}
+                          <span>Download File</span>
+                        </button>
+
+                        {selectedAssessment.status === 'draft' && isTeacher && (
+                          <button
+                            type="button"
+                            onClick={handleRemoveInstructionFile}
+                            disabled={isSavingInstructionFile}
+                            className="p-2 rounded text-academic-muted hover:text-red-700 hover:bg-red-50 border border-transparent hover:border-red-200 transition-colors"
+                            title="Remove instruction file"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Embedded PDF Viewer if PDF */}
+                    {(selectedAssessment.document_filename?.toLowerCase().endsWith('.pdf') || !selectedAssessment.document_filename) && selectedAssessment.document_storage_key && (
+                      <div className="pt-2">
+                        <React.Suspense fallback={<div className="flex items-center justify-center p-6"><Loader2 className="w-5 h-5 animate-spin text-academic-primaryGreen" /><span className="ml-2 text-xs text-academic-muted">Loading preview...</span></div>}>
+                          <PdfViewer assessmentId={selectedAssessment.id} filename={selectedAssessment.document_filename} />
+                        </React.Suspense>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-6 border-2 border-dashed border-academic-border rounded-lg text-center bg-academic-paleGreen/10 space-y-2">
+                    <FileText className="w-10 h-10 text-academic-muted/40 mx-auto" />
+                    <p className="text-xs font-semibold text-academic-deepGreen">
+                      No instruction file uploaded yet
+                    </p>
+                    <p className="text-[11px] text-academic-muted max-w-md mx-auto">
+                      An instruction document (PDF, PowerPoint, Word) is required before publishing a File-Based Assessment.
+                    </p>
+                  </div>
+                )}
+
+                {/* Upload or Replace Instruction File (Draft Mode) */}
+                {selectedAssessment.status === 'draft' && isTeacher && (
+                  <div className="p-4 rounded-lg bg-academic-paleGreen/20 border border-academic-border space-y-3">
+                    <span className="font-bold text-academic-deepGreen text-xs block">
+                      {hasInstructionFile ? 'Replace Instruction Document' : 'Upload Instruction Document'}
+                    </span>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <label className="btn-secondary text-xs flex items-center cursor-pointer min-h-[40px] self-start">
+                        <Upload className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+                        <span>{draftInstructionFile ? 'Change Chosen File' : 'Choose Instruction File'}</span>
+                        <input
+                          type="file"
+                          accept=".pdf,.ppt,.pptx,.doc,.docx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                          className="hidden"
+                          onChange={handleInstructionFileSelect}
+                        />
+                      </label>
+                      <span className="text-[11px] text-academic-muted">
+                        PDF, PPT, PPTX, DOC, DOCX up to 20 MB
+                      </span>
+                    </div>
+
+                    {draftInstructionFile && (
+                      <div className="p-2.5 rounded bg-academic-surface border border-academic-border flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          <FileText className="w-4 h-4 text-academic-primaryGreen" />
+                          <span className="font-semibold text-academic-deepGreen text-xs">{draftInstructionFile.name}</span>
+                          <span className="text-[11px] font-mono text-academic-muted">
+                            ({(draftInstructionFile.size / 1024).toFixed(1)} KB)
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleSaveInstructionFile}
+                          disabled={isSavingInstructionFile}
+                          className="btn-primary text-xs py-1 px-3"
+                        >
+                          {isSavingInstructionFile ? 'Saving...' : 'Save File'}
+                        </button>
+                      </div>
+                    )}
+
+                    {draftInstructionError && (
+                      <p className="text-[11px] font-semibold text-red-600">{draftInstructionError}</p>
+                    )}
+
+                    {/* Max Files Setting for Student Submissions */}
+                    <div className="pt-3 border-t border-academic-border/60">
+                      <label className="block font-semibold text-academic-deepGreen text-xs mb-1">
+                        Max Answer Files Allowed per Student Submission (1 to 10)
+                      </label>
+                      <div className="flex items-center space-x-3 max-w-xs">
+                        <input
+                          type="number"
+                          min="1"
+                          max="10"
+                          value={draftMaxFiles}
+                          onChange={(e) => setDraftMaxFiles(Math.max(1, Math.min(10, Number(e.target.value))))}
+                          className="px-3 py-1.5 border border-academic-border rounded bg-academic-surface text-academic-deepGreen text-xs focus:outline-none focus:border-academic-primaryGreen w-24"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleSaveInstructionFile}
+                          disabled={isSavingInstructionFile}
+                          className="btn-secondary text-xs py-1.5 px-3"
+                        >
+                          Update Limit
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-academic-muted mt-0.5">
+                        Specifies how many answer files (PDF, PPT, PPTX, DOC, DOCX) students can upload.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : activeTab === 'quiz' ? (
+            /* TEACHER / STAFF: Quiz (MCQ) Configuration and Builder */
+            <div className="space-y-4">
+              <div className="card-surface p-5 border border-academic-border space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-academic-border">
+                  <div>
+                    <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
+                      <CheckCircle2 className="w-4 h-4 mr-2 text-academic-primaryGreen" />
+                      Quiz (Multiple Choice Questions)
+                    </h3>
+                    <p className="text-xs text-academic-muted mt-0.5">
+                      Auto-scored upon submission. Total: {draftQuizQuestions.length} Questions &bull; {draftQuizQuestions.reduce((s, q) => s + (q.marks || 1), 0)} Marks
+                    </p>
+                  </div>
+                  {selectedAssessment.status === 'published' ? (
+                    <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-bold bg-academic-paleGreen text-academic-deepGreen border border-academic-border">
+                      <Lock className="w-3.5 h-3.5 mr-1 text-academic-deepGreen" />
+                      Quiz Frozen (Published)
+                    </span>
+                  ) : null}
+                </div>
+
+                {/* Auto-Scoring & Marks Advisory Banner */}
+                <div className="p-3 bg-academic-paleGreen/40 border border-academic-border rounded-lg text-xs text-academic-deepGreen flex items-start space-x-2">
+                  <HelpCircle className="w-4 h-4 text-academic-primaryGreen flex-shrink-0 mt-0.5" />
+                  <p className="leading-relaxed">
+                    <strong>Auto-Scoring Policy:</strong> The system automatically grades student MCQ answers on submission. The auto-calculated quiz score is displayed to the subject teacher during evaluation as reference, but the teacher confirms and enters the authoritative final overall assessment mark.
+                  </p>
+                </div>
+
+                {/* Quiz Questions List */}
+                {draftQuizQuestions.length === 0 ? (
+                  <div className="text-center py-8 text-academic-muted text-xs card-surface border border-dashed border-academic-border rounded-lg">
+                    No MCQ quiz questions added yet. Use the question builder below to add questions with 4 options and 1 correct answer.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {draftQuizQuestions.map((q, idx) => {
+                      const isEditingThis = editingQuizQId === q.id;
+
+                      return (
+                        <div key={q.id || idx} className="p-4 rounded-lg border border-academic-border bg-academic-surface space-y-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center space-x-2">
+                              <span className="px-2 py-0.5 rounded bg-academic-deepGreen text-white text-[11px] font-bold font-mono">
+                                Q{idx + 1}
+                              </span>
+                              <span className="px-2 py-0.5 rounded bg-academic-lightGreen text-academic-primaryGreen text-[10px] font-bold border border-academic-primaryGreen/20">
+                                {q.marks || 1} {q.marks === 1 ? 'Mark' : 'Marks'}
+                              </span>
+                            </div>
+
+                            {selectedAssessment.status === 'draft' && isTeacher && (
+                              <div className="flex items-center space-x-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleMoveDraftQuizQuestion(idx, 'up')}
+                                  disabled={isSavingQuiz || idx === 0}
+                                  className={`p-1 rounded text-academic-muted hover:text-academic-deepGreen ${idx === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                                  title="Move Up"
+                                >
+                                  <ChevronUp className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleMoveDraftQuizQuestion(idx, 'down')}
+                                  disabled={isSavingQuiz || idx === draftQuizQuestions.length - 1}
+                                  className={`p-1 rounded text-academic-muted hover:text-academic-deepGreen ${idx === draftQuizQuestions.length - 1 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                                  title="Move Down"
+                                >
+                                  <ChevronDown className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditDraftQuizQuestion(q)}
+                                  disabled={isSavingQuiz}
+                                  className="p-1 rounded text-academic-muted hover:text-academic-primaryGreen"
+                                  title="Edit Question"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveDraftQuizQuestion(idx)}
+                                  disabled={isSavingQuiz}
+                                  className="p-1 rounded text-academic-muted hover:text-red-700"
+                                  title="Delete Question"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          {isEditingThis ? (
+                            /* Edit Form */
+                            <div className="space-y-3 pt-1 border-t border-academic-border/60">
+                              <div>
+                                <label className="block text-xs font-semibold text-academic-deepGreen mb-1">Question Prompt</label>
+                                <textarea
+                                  rows={2}
+                                  value={editingQuizPrompt}
+                                  onChange={(e) => setEditingQuizPrompt(e.target.value)}
+                                  className="w-full px-2.5 py-1.5 border border-academic-primaryGreen rounded bg-academic-surface text-academic-deepGreen text-xs focus:outline-none"
+                                />
+                              </div>
+
+                              <div className="space-y-2">
+                                <label className="block text-xs font-semibold text-academic-deepGreen">
+                                  Options (Select the single correct answer):
+                                </label>
+                                {[0, 1, 2, 3].map((optIdx) => {
+                                  const letter = String.fromCharCode(65 + optIdx);
+                                  const isCorrect = editingQuizCorrectIndex === optIdx;
+
+                                  return (
+                                    <div key={optIdx} className={`p-2 rounded border flex items-center space-x-2 ${isCorrect ? 'border-academic-primaryGreen bg-academic-lightGreen/30' : 'border-academic-border bg-academic-surface'}`}>
+                                      <input
+                                        type="radio"
+                                        name={`edit-correct-${q.id}`}
+                                        checked={isCorrect}
+                                        onChange={() => setEditingQuizCorrectIndex(optIdx)}
+                                        className="text-academic-primaryGreen focus:ring-academic-primaryGreen"
+                                      />
+                                      <span className="font-bold text-academic-deepGreen text-xs w-4">{letter}.</span>
+                                      <input
+                                        type="text"
+                                        value={editingQuizOptions[optIdx]}
+                                        onChange={(e) => {
+                                          const nextOpts = [...editingQuizOptions] as [string, string, string, string];
+                                          nextOpts[optIdx] = e.target.value;
+                                          setEditingQuizOptions(nextOpts);
+                                        }}
+                                        className="flex-1 px-2 py-1 text-xs border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen"
+                                        placeholder={`Option ${letter} text`}
+                                      />
+                                      {isCorrect && (
+                                        <span className="text-[10px] font-bold text-academic-primaryGreen">✓ Correct</span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                  <label className="block text-xs font-semibold text-academic-deepGreen mb-1">Marks</label>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    max="20"
+                                    value={editingQuizMarks}
+                                    onChange={(e) => setEditingQuizMarks(Math.max(1, Number(e.target.value)))}
+                                    className="w-full px-2.5 py-1.5 border border-academic-border rounded bg-academic-surface text-academic-deepGreen text-xs"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-semibold text-academic-deepGreen mb-1">Explanation (Optional)</label>
+                                  <input
+                                    type="text"
+                                    value={editingQuizExplanation}
+                                    onChange={(e) => setEditingQuizExplanation(e.target.value)}
+                                    placeholder="Why this answer is correct..."
+                                    className="w-full px-2.5 py-1.5 border border-academic-border rounded bg-academic-surface text-academic-deepGreen text-xs"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="flex items-center justify-end space-x-2 pt-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingQuizQId(null);
+                                    setEditingQuizPrompt('');
+                                  }}
+                                  className="px-2.5 py-1 text-xs text-academic-muted hover:text-academic-deepGreen"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSaveEditDraftQuizQuestion(idx)}
+                                  disabled={isSavingQuiz}
+                                  className="btn-primary text-xs py-1 px-3"
+                                >
+                                  Save Changes
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            /* Display View */
+                            <div className="space-y-2">
+                              <p className="text-xs font-semibold text-academic-deepGreen leading-relaxed">
+                                {q.question_text || (q as any).prompt}
+                              </p>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                                {q.options && q.options.map((opt, optIdx) => {
+                                  const letter = String.fromCharCode(65 + optIdx);
+                                  const isCorrect = opt.id === q.correct_option_id;
+
+                                  return (
+                                    <div
+                                      key={opt.id || optIdx}
+                                      className={`p-2 rounded border text-xs flex items-center justify-between ${
+                                        isCorrect
+                                          ? 'bg-academic-lightGreen/50 border-academic-primaryGreen text-academic-deepGreen font-semibold'
+                                          : 'bg-academic-surface border-academic-border text-academic-muted'
+                                      }`}
+                                    >
+                                      <div className="flex items-center space-x-2">
+                                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                                          isCorrect ? 'bg-academic-primaryGreen text-white' : 'bg-academic-paleGreen text-academic-deepGreen'
+                                        }`}>
+                                          {letter}
+                                        </span>
+                                        <span>{opt.text}</span>
+                                      </div>
+                                      {isCorrect && (
+                                        <span className="text-[10px] font-bold text-academic-primaryGreen flex items-center">
+                                          <Check className="w-3 h-3 mr-0.5" />
+                                          Correct
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              {q.explanation && (
+                                <div className="p-2 rounded bg-academic-paleGreen/30 text-[11px] text-academic-deepGreen border border-academic-border/60">
+                                  <span className="font-bold">Explanation:</span> {q.explanation}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Add MCQ Question Builder in Draft Mode */}
+                {selectedAssessment.status === 'draft' && isTeacher && (
+                  <div className="p-4 rounded-lg bg-academic-paleGreen/30 border border-academic-border space-y-3">
+                    <h4 className="text-xs font-bold text-academic-deepGreen flex items-center">
+                      <PlusCircle className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+                      Add MCQ Quiz Question
+                    </h4>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-academic-deepGreen mb-1">
+                        Question Prompt *
+                      </label>
+                      <textarea
+                        rows={2}
+                        placeholder="Enter the quiz question prompt or problem..."
+                        value={newQuizPrompt}
+                        onChange={(e) => setNewQuizPrompt(e.target.value)}
+                        className="w-full px-3 py-2 border border-academic-border rounded bg-academic-surface text-academic-deepGreen text-xs focus:outline-none focus:border-academic-primaryGreen"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="block text-[11px] font-semibold text-academic-deepGreen">
+                        Exactly 4 Answer Options * (Select the single radio button for the correct option)
+                      </label>
+                      {[0, 1, 2, 3].map((optIdx) => {
+                        const letter = String.fromCharCode(65 + optIdx);
+                        const isCorrect = newQuizCorrectIndex === optIdx;
+
+                        return (
+                          <div key={optIdx} className={`p-2 rounded border flex items-center space-x-2 ${isCorrect ? 'border-academic-primaryGreen bg-academic-lightGreen/30' : 'border-academic-border bg-academic-surface'}`}>
+                            <input
+                              type="radio"
+                              name="new-quiz-correct-option"
+                              checked={isCorrect}
+                              onChange={() => setNewQuizCorrectIndex(optIdx)}
+                              className="text-academic-primaryGreen focus:ring-academic-primaryGreen cursor-pointer"
+                            />
+                            <span className="font-bold text-academic-deepGreen text-xs w-4">{letter}.</span>
+                            <input
+                              type="text"
+                              value={newQuizOptions[optIdx]}
+                              onChange={(e) => {
+                                const next = [...newQuizOptions] as [string, string, string, string];
+                                next[optIdx] = e.target.value;
+                                setNewQuizOptions(next);
+                              }}
+                              placeholder={`Enter text for Option ${letter}...`}
+                              className="flex-1 px-2.5 py-1 text-xs border border-academic-border rounded bg-academic-surface text-academic-deepGreen focus:outline-none focus:border-academic-primaryGreen"
+                            />
+                            {isCorrect && (
+                              <span className="text-[10px] font-bold text-academic-primaryGreen">✓ Correct Answer</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-academic-deepGreen mb-1">
+                          Marks for this Question *
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="20"
+                          value={newQuizMarks}
+                          onChange={(e) => setNewQuizMarks(Math.max(1, Number(e.target.value)))}
+                          className="w-full px-3 py-1.5 border border-academic-border rounded bg-academic-surface text-academic-deepGreen text-xs focus:outline-none focus:border-academic-primaryGreen"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-academic-deepGreen mb-1">
+                          Explanation / Guidance (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Explanatory note shown after evaluation..."
+                          value={newQuizExplanation}
+                          onChange={(e) => setNewQuizExplanation(e.target.value)}
+                          className="w-full px-3 py-1.5 border border-academic-border rounded bg-academic-surface text-academic-deepGreen text-xs focus:outline-none focus:border-academic-primaryGreen"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={handleAddDraftQuizQuestion}
+                        disabled={isSavingQuiz || !newQuizPrompt.trim()}
+                        className="btn-primary text-xs flex items-center min-h-[38px] px-4"
+                      >
+                        <PlusCircle className="w-3.5 h-3.5 mr-1.5" />
+                        <span>{isSavingQuiz ? 'Saving...' : 'Add Quiz Question'}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* TEACHER / STAFF: Manual Questions Configuration and Builder */
+            <div className="space-y-4">
               <div className="card-surface p-5 border border-academic-border space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-academic-border">
                   <div>
@@ -2322,7 +3706,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                       Manual Questions ({draftQuestions.length})
                     </h3>
                     <p className="text-xs text-academic-muted mt-0.5">
-                      Teacher-authored questions for this assignment.
+                      Teacher-authored questions for this assignment. Evaluated using assignment rubric.
                     </p>
                   </div>
                   {selectedAssessment.status === 'published' ? (
@@ -2332,52 +3716,6 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                     </span>
                   ) : null}
                 </div>
-
-                {/* Student Draft Status Bar */}
-                {isStudent && selectedAssessment.status === 'published' && draftQuestions.length > 0 && (
-                  <div className="p-3 bg-academic-paleGreen/30 border border-academic-border rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                    <div className="flex items-center space-x-2">
-                      {draftSaveStatus === 'saving' ? (
-                        <span className="inline-flex items-center text-academic-primaryGreen font-medium">
-                          <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
-                          Saving draft answers...
-                        </span>
-                      ) : draftSaveStatus === 'saved' ? (
-                        <span className="inline-flex items-center text-academic-primaryGreen font-medium">
-                          <CheckCircle2 className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
-                          Draft saved {draftLastSavedTime ? `(${draftLastSavedTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})` : ''}
-                        </span>
-                      ) : draftSaveStatus === 'unsaved' ? (
-                        <span className="inline-flex items-center text-amber-700 font-medium">
-                          <Clock className="w-3.5 h-3.5 mr-1.5" />
-                          Unsaved changes (autosaving...)
-                        </span>
-                      ) : draftSaveStatus === 'error' ? (
-                        <span className="inline-flex items-center text-red-700 font-medium">
-                          <AlertCircle className="w-3.5 h-3.5 mr-1.5" />
-                          Draft save error (cached locally)
-                        </span>
-                      ) : (
-                        <span className="text-academic-muted">
-                          Auto-save active &bull; Type answers below
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center space-x-2">
-                      <button
-                        type="button"
-                        onClick={handleSaveDraftManual}
-                        disabled={draftSaveStatus === 'saving'}
-                        className="btn-secondary text-[11px] py-1 px-2.5 inline-flex items-center"
-                        title="Explicitly save draft answers to server"
-                      >
-                        <Save className="w-3 h-3 mr-1 text-academic-primaryGreen" />
-                        <span>Save Draft</span>
-                      </button>
-                    </div>
-                  </div>
-                )}
 
                 {/* Question List */}
                 {isLoadingDetails && draftQuestions.length === 0 ? (
@@ -2401,28 +3739,14 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                     </button>
                   </div>
                 ) : draftQuestions.length === 0 ? (
-                  <div className="text-center py-6 text-academic-muted text-xs">
-                    No manual questions added. {selectedAssessment.document_storage_key ? 'Students refer to the uploaded Assignment PDF document.' : 'Add manual questions below or upload an assignment PDF document.'}
+                  <div className="text-center py-6 text-academic-muted text-xs card-surface border border-dashed border-academic-border rounded-lg">
+                    No manual questions added yet. Use the question builder below to add questions.
                   </div>
                 ) : (
                   <div className="space-y-3">
                     {draftQuestions.map((q, idx) => {
-                      const qKey = q.id || `q-${q.display_order || idx + 1}`;
-                      const isUnanswered = unansweredQuestionIds.includes(qKey);
-                      const answerText = studentAnswers[qKey] || (q.id ? studentAnswers[q.id] : undefined) || studentAnswers[`q-${q.display_order || idx + 1}`] || '';
-                      const wordCount = answerText.trim() ? answerText.trim().split(/\s+/).length : 0;
-                      const charCount = answerText.length;
-
-                      const sub = assessmentSubmissions[0];
-                      const now = Date.now();
-                      const origDeadline = new Date(selectedAssessment.deadline_at).getTime();
-                      const extDeadline = selectedAssessment.allow_late && selectedAssessment.extension_deadline_at
-                        ? new Date(selectedAssessment.extension_deadline_at).getTime()
-                        : origDeadline;
-                      const isEditingLocked = sub ? (now > origDeadline) : (now > extDeadline);
-
                       return (
-                        <div key={q.id || idx} className={`p-3.5 rounded-lg border bg-academic-surface space-y-2 ${isUnanswered ? 'border-red-400 bg-red-50/10' : 'border-academic-border'}`}>
+                        <div key={q.id || idx} className="p-3.5 rounded-lg border border-academic-border bg-academic-surface space-y-2">
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex items-center space-x-2">
                               <span className="px-2 py-0.5 rounded bg-academic-deepGreen text-white text-[11px] font-bold font-mono">
@@ -2510,43 +3834,6 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                               {q.prompt}
                             </p>
                           )}
-
-                          {/* Student Manual Question Answering Field */}
-                          {isStudent && selectedAssessment.status === 'published' && (
-                            <div className="mt-3 pt-3 border-t border-academic-border/70 space-y-2">
-                              <div className="flex items-center justify-between text-xs">
-                                <label className="font-bold text-academic-deepGreen flex items-center">
-                                  <span>Your Answer</span>
-                                  <span className="text-red-500 ml-1" title="Required question">*</span>
-                                </label>
-                                <span className="text-[11px] font-mono text-academic-muted">
-                                  {wordCount} {wordCount === 1 ? 'word' : 'words'} &bull; {charCount} chars
-                                </span>
-                              </div>
-
-                              <textarea
-                                rows={5}
-                                value={answerText}
-                                onChange={(e) => handleAnswerChange(qKey, e.target.value)}
-                                disabled={isEditingLocked}
-                                placeholder={isEditingLocked ? 'Submission window closed. Answer editing disabled.' : `Type your detailed answer for Question ${q.display_order || idx + 1} here...`}
-                                className={`w-full p-3 rounded-lg border text-xs focus:outline-none transition-colors ${
-                                  isUnanswered 
-                                    ? 'border-red-500 bg-red-50/20 text-academic-deepGreen focus:border-red-600' 
-                                    : isEditingLocked
-                                    ? 'bg-academic-paleGreen/20 border-academic-border text-academic-deepGreen cursor-not-allowed'
-                                    : 'border-academic-border bg-academic-surface text-academic-deepGreen focus:border-academic-primaryGreen'
-                                }`}
-                              />
-
-                              {isUnanswered && (
-                                <p className="text-[11px] text-red-600 font-semibold flex items-center">
-                                  <AlertCircle className="w-3.5 h-3.5 mr-1 flex-shrink-0" />
-                                  Please provide an answer for Question {q.display_order || idx + 1} before submitting.
-                                </p>
-                              )}
-                            </div>
-                          )}
                         </div>
                       );
                     })}
@@ -2583,255 +3870,11 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                   </div>
                 )}
               </div>
-
-              {/* Student Multi-File Submission Panel */}
-              {isStudent && selectedAssessment.status === 'published' && (() => {
-                const sub = assessmentSubmissions[0];
-                const now = Date.now();
-                const origDeadline = new Date(selectedAssessment.deadline_at).getTime();
-                const extDeadline = selectedAssessment.allow_late && selectedAssessment.extension_deadline_at
-                  ? new Date(selectedAssessment.extension_deadline_at).getTime()
-                  : origDeadline;
-                const isOriginalDeadlinePassed = now > origDeadline;
-                const isExtensionPassed = now > extDeadline;
-                const isEditingLocked = sub ? isOriginalDeadlinePassed : isExtensionPassed;
-                const isInExtensionWindow = !sub && isOriginalDeadlinePassed && !isExtensionPassed;
-
-                const hasManualQuestions = draftQuestions.length > 0;
-                const hasExistingFiles = Boolean(
-                  sub && 
-                  !removeExistingUploadedFile && 
-                  ((sub.active_version?.files && sub.active_version.files.length > 0) || sub.active_version?.original_name)
-                );
-
-                return (
-                  <div className="card-surface p-5 border border-academic-border space-y-4">
-                    <div className="flex items-center justify-between pb-3 border-b border-academic-border">
-                      <div>
-                        <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
-                          <FileCheck2 className="w-4 h-4 mr-2 text-academic-primaryGreen" />
-                          <span>{hasManualQuestions ? 'Supporting Files & Final Submission' : 'Answer Document & Final Submission'}</span>
-                        </h3>
-                        <p className="text-xs text-academic-muted mt-0.5">
-                          {hasManualQuestions 
-                            ? `File attachment is optional. You may attach up to ${selectedAssessment.max_files || 1} supporting file(s) (PDF, PPT, PPTX; 25MB total).` 
-                            : `Upload up to ${selectedAssessment.max_files || 1} answer file(s) (PDF, PPT, PPTX; 25MB total). Required.`}
-                        </p>
-                      </div>
-
-                      {sub ? (
-                        <span className="inline-flex items-center text-xs font-semibold text-academic-primaryGreen bg-academic-lightGreen px-2.5 py-1 rounded border border-academic-primaryGreen/30">
-                          <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
-                          Submitted (v{sub.active_version?.version || 1})
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center text-xs font-medium text-academic-muted bg-academic-paleGreen px-2.5 py-1 rounded border border-academic-border">
-                          <Clock className="w-3.5 h-3.5 mr-1" />
-                          Pending Submission
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Deadline Status Banner */}
-                    {isEditingLocked ? (
-                      <div className="p-3 bg-[#FDF6E2] border border-[#D9BD71] rounded text-xs text-[#6D5200] flex items-center space-x-2">
-                        <Lock className="w-4 h-4 text-[#B28704] flex-shrink-0" />
-                        <span>
-                          {sub 
-                            ? `Submissions locked. The original deadline (${new Date(selectedAssessment.deadline_at).toLocaleString()}) has passed. Resubmissions and edits are disabled. Your submission is in read-only mode.`
-                            : `Submissions closed. The deadline for this assignment has passed.`
-                          }
-                        </span>
-                      </div>
-                    ) : sub ? (
-                      <div className="p-3 bg-academic-paleGreen/40 border border-academic-border rounded text-xs text-academic-deepGreen flex items-center space-x-2">
-                        <CheckCircle2 className="w-4 h-4 text-academic-primaryGreen flex-shrink-0" />
-                        <span>
-                          You have submitted <strong>Version {sub.active_version?.version || 1}</strong>. You can update your answers or replace supporting files until the deadline (<strong>{new Date(selectedAssessment.deadline_at).toLocaleString()}</strong>). Resubmitting creates a new auditable version.
-                        </span>
-                      </div>
-                    ) : isInExtensionWindow ? (
-                      <div className="p-3 bg-[#FDF6E2] border border-[#D9BD71] rounded text-xs text-[#6D5200] flex items-center space-x-2">
-                        <AlertTriangle className="w-4 h-4 text-[#B28704] flex-shrink-0" />
-                        <span>
-                          <strong>Late Extension Window Active:</strong> The original deadline has passed. You are submitting during the extension window. A late penalty will apply upon submission.
-                        </span>
-                      </div>
-                    ) : null}
-
-                    {/* Active Submission Details */}
-                    {sub && sub.active_version && (
-                      <div className="p-4 bg-academic-paleGreen/40 rounded border border-academic-border space-y-3 text-xs">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-2">
-                            <span className="font-bold text-academic-deepGreen">Current Version: v{sub.active_version.version}</span>
-                            {sub.active_version.late_status === 'late' ? (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#FDF6E2] text-[#A63214] border border-[#D9BD71]">
-                                ⚠️ LATE SUBMISSION
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-academic-lightGreen text-academic-primaryGreen border border-academic-primaryGreen/30">
-                                ✓ ON TIME
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-[11px] text-academic-muted">
-                            Submitted on {new Date(sub.active_version.uploaded_at).toLocaleString()}
-                          </span>
-                        </div>
-
-                        {/* Submitted Files List */}
-                        <div className="space-y-1.5 pt-1">
-                          <span className="font-semibold text-academic-deepGreen block">Submitted Files:</span>
-                          {hasExistingFiles ? (
-                            sub.active_version.files && sub.active_version.files.length > 0 ? (
-                              sub.active_version.files.map((f: any) => (
-                                <div key={f.id} className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between">
-                                  <div className="flex items-center space-x-2">
-                                    <Paperclip className="w-3.5 h-3.5 text-academic-primaryGreen" />
-                                    <span className="font-medium text-academic-deepGreen">{f.original_name}</span>
-                                    <span className="text-[11px] font-mono text-academic-muted">
-                                      ({(f.size_bytes / 1024).toFixed(1)} KB)
-                                    </span>
-                                  </div>
-                                  <div className="flex items-center space-x-2">
-                                    <a
-                                      href={submissionApi.downloadFileUrl(sub.id, sub.active_version!.id, f.id)}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="btn-secondary text-[11px] py-1 px-2.5 inline-flex items-center"
-                                    >
-                                      <Download className="w-3 h-3 mr-1 text-academic-primaryGreen" />
-                                      <span>Download</span>
-                                    </a>
-                                    {!isEditingLocked && (
-                                      <button
-                                        type="button"
-                                        onClick={() => setRemoveExistingUploadedFile(true)}
-                                        className="text-academic-muted hover:text-red-700 p-1"
-                                        title="Remove file for resubmission"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-                              ))
-                            ) : (
-                              <div className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between">
-                                <span className="font-medium text-academic-deepGreen">{sub.active_version.original_name}</span>
-                                <div className="flex items-center space-x-2">
-                                  <a
-                                    href={submissionApi.downloadPdfUrl(sub.id, sub.active_version.id)}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="btn-secondary text-[11px] py-1 px-2.5 inline-flex items-center"
-                                  >
-                                    <Download className="w-3 h-3 mr-1 text-academic-primaryGreen" />
-                                    <span>Download PDF</span>
-                                  </a>
-                                  {!isEditingLocked && (
-                                    <button
-                                      type="button"
-                                      onClick={() => setRemoveExistingUploadedFile(true)}
-                                      className="text-academic-muted hover:text-red-700 p-1"
-                                      title="Remove file for resubmission"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            )
-                          ) : (
-                            <p className="text-academic-muted text-[11px] italic">
-                              {removeExistingUploadedFile ? 'File removed for next version.' : 'No files attached (Text-only submission).'}
-                            </p>
-                          )}
-                        </div>
-
-                        {sub.active_version.sha256 && (
-                          <div className="text-[10px] text-academic-muted font-mono bg-academic-surface p-1.5 rounded border border-academic-border/60 break-all">
-                            SHA-256: {sub.active_version.sha256}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Staging & Upload Controls (if not locked) */}
-                    {!isEditingLocked && (
-                      <div className="space-y-3 pt-2">
-                        {/* Staged New Files */}
-                        {studentAnswerFiles.length > 0 && (
-                          <div className="space-y-2 p-3 bg-academic-paleGreen/20 border border-academic-border rounded">
-                            <span className="font-semibold text-xs text-academic-deepGreen block">
-                              Files selected for submission ({studentAnswerFiles.length} of max {selectedAssessment.max_files || 1}):
-                            </span>
-                            <div className="space-y-1.5">
-                              {studentAnswerFiles.map((sf, idx) => (
-                                <div key={idx} className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between text-xs">
-                                  <div className="flex items-center space-x-2">
-                                    <Paperclip className="w-3.5 h-3.5 text-academic-primaryGreen" />
-                                    <span className="font-medium text-academic-deepGreen">{sf.name}</span>
-                                    <span className="text-[11px] font-mono text-academic-muted">
-                                      ({(sf.size / 1024).toFixed(1)} KB)
-                                    </span>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRemoveStudentAnswerFile(idx)}
-                                    className="text-academic-muted hover:text-red-700 p-1"
-                                    title="Remove file"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-                          {studentAnswerFiles.length < (selectedAssessment.max_files || 1) && (
-                            <label className="btn-secondary text-xs flex items-center cursor-pointer min-h-[44px]">
-                              <Upload className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
-                              <span>
-                                {studentAnswerFiles.length > 0 || hasExistingFiles ? 'Replace / Add Supporting File' : 'Select Supporting File (Optional)'}
-                              </span>
-                              <input
-                                type="file"
-                                accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                                className="hidden"
-                                onChange={handleSelectStudentAnswerFiles}
-                                disabled={isSubmittingAnswers}
-                              />
-                            </label>
-                          )}
-
-                          <button
-                            type="button"
-                            onClick={handleValidateAndOpenSubmitConfirm}
-                            disabled={isSubmittingAnswers}
-                            className="btn-primary text-xs flex items-center min-h-[44px] px-5"
-                          >
-                            <CheckCircle2 className="w-4 h-4 mr-1.5" />
-                            <span>
-                              {sub 
-                                ? `Save Changes & Resubmit Assignment (v${(sub.active_version?.version || 1) + 1})`
-                                : isInExtensionWindow 
-                                ? 'Submit Late Assignment' 
-                                : 'Submit Assignment'
-                              }
-                            </span>
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
             </div>
           )}
+        </>
+      );
+    })()}
 
       {/* MODAL: Submit Assignment Confirmation Summary */}
       {isConfirmSubmitOpen && selectedAssessment && (() => {
@@ -2889,6 +3932,15 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                       <span className="font-bold text-academic-primaryGreen flex items-center">
                         <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
                         {draftQuestions.length} of {draftQuestions.length} answered
+                      </span>
+                    </div>
+                  )}
+                  {draftQuizQuestions.length > 0 && (
+                    <div className="flex justify-between items-center pt-1 border-t border-academic-border/60">
+                      <span className="text-academic-muted">Quiz Questions Answered:</span>
+                      <span className="font-bold text-academic-primaryGreen flex items-center">
+                        <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                        {Object.keys(studentQuizAnswers).length} of {draftQuizQuestions.length} answered
                       </span>
                     </div>
                   )}
@@ -3015,255 +4067,122 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                 </div>
               </div>
 
-              {/* Assignment PDF File Picker */}
+              {/* Assessment Types Selector */}
               <div>
-                <label className="block font-semibold text-academic-deepGreen mb-1">
-                  Assignment PDF Document (Optional if manual questions are added)
+                <label className="block font-semibold text-academic-deepGreen mb-1.5">
+                  Assessment Types * (Select one, two, or all three)
                 </label>
-                <div className="p-3 border border-academic-border rounded bg-academic-paleGreen/20 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="btn-secondary text-xs flex items-center cursor-pointer min-h-[40px]">
-                      <Upload className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
-                      <span>{formPdfFileName ? 'Change PDF File' : 'Choose Assignment PDF'}</span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {/* File-Based Assessment Option */}
+                  <label
+                    className={`flex flex-col justify-between p-3 rounded-lg border cursor-pointer transition-all ${
+                      formAssessmentTypes.includes('file_based')
+                        ? 'border-academic-primaryGreen bg-academic-lightGreen/40 ring-1 ring-academic-primaryGreen'
+                        : 'border-academic-border bg-academic-surface hover:bg-academic-paleGreen/20'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="p-1.5 rounded bg-academic-paleGreen text-academic-primaryGreen">
+                        <FileText className="w-4 h-4" />
+                      </div>
                       <input
-                        type="file"
-                        accept="application/pdf"
-                        className="hidden"
-                        onChange={handleAssignmentPdfSelect}
+                        type="checkbox"
+                        checked={formAssessmentTypes.includes('file_based')}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setFormAssessmentTypes(prev => [...prev, 'file_based']);
+                          } else {
+                            if (formAssessmentTypes.length > 1) {
+                              setFormAssessmentTypes(prev => prev.filter(t => t !== 'file_based'));
+                            }
+                          }
+                        }}
+                        className="rounded border-academic-border text-academic-primaryGreen focus:ring-academic-primaryGreen mt-0.5"
                       />
-                    </label>
-                    <span className="text-[11px] text-academic-muted">
-                      Max 20.00 MB. PDF documents only.
-                    </span>
-                  </div>
-
-                  {formPdfFileName && (
-                    <div className="p-2 rounded bg-academic-surface border border-academic-border flex items-center justify-between">
-                      <div className="flex items-center space-x-2">
-                        <FileText className="w-4 h-4 text-academic-primaryGreen" />
-                        <span className="font-semibold text-academic-deepGreen">{formPdfFileName}</span>
-                        <span className="text-[11px] font-mono text-academic-muted">
-                          ({formPdfFileSize ? (formPdfFileSize / 1024).toFixed(1) : 0} KB)
-                        </span>
-                      </div>
-                      <span className="text-[11px] font-bold text-academic-primaryGreen">✓ Validated</span>
                     </div>
-                  )}
+                    <div className="mt-2">
+                      <span className="font-bold text-academic-deepGreen text-xs block">File-Based</span>
+                      <p className="text-[10px] text-academic-muted mt-0.5 leading-snug">
+                        Upload brief (PDF/PPT/DOC). Students upload answer files.
+                      </p>
+                    </div>
+                  </label>
 
-                  {formPdfError && (
-                    <p className="text-[11px] font-semibold text-red-700">{formPdfError}</p>
-                  )}
-                </div>
-              </div>
-
-              {/* Manual Questions Builder in Create Modal */}
-              <div className="p-3 border border-academic-border rounded bg-academic-surface space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="font-bold text-academic-deepGreen text-xs flex items-center">
-                      <FileText className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
-                      Manual Questions ({formQuestions.length})
-                    </span>
-                    <p className="text-[10px] text-academic-muted mt-0.5">
-                      Optional if PDF is attached. Teachers may provide PDF, questions, or both.
-                    </p>
-                  </div>
-                </div>
-
-                {formQuestions.length > 0 && (
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                    {formQuestions.map((q, idx) => (
-                      <div key={idx} className="p-2.5 rounded bg-academic-paleGreen/30 border border-academic-border space-y-1.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <span className="px-1.5 py-0.5 rounded bg-academic-deepGreen text-white text-[10px] font-bold">
-                            Q{idx + 1}
-                          </span>
-                          <div className="flex items-center space-x-1">
-                            <button
-                              type="button"
-                              onClick={() => handleMoveFormQuestion(idx, 'up')}
-                              disabled={idx === 0}
-                              className={`p-1 rounded text-academic-muted hover:text-academic-deepGreen ${idx === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
-                              title="Move Question Up"
-                            >
-                              <ChevronUp className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleMoveFormQuestion(idx, 'down')}
-                              disabled={idx === formQuestions.length - 1}
-                              className={`p-1 rounded text-academic-muted hover:text-academic-deepGreen ${idx === formQuestions.length - 1 ? 'opacity-30 cursor-not-allowed' : ''}`}
-                              title="Move Question Down"
-                            >
-                              <ChevronDown className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleStartEditFormQuestion(idx)}
-                              className="p-1 rounded text-academic-muted hover:text-academic-primaryGreen"
-                              title="Edit Question"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveFormQuestion(idx)}
-                              className="p-1 rounded text-academic-muted hover:text-red-700"
-                              title="Remove Question"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-
-                        {editingFormQIndex === idx ? (
-                          <div className="space-y-1.5 pt-1">
-                            <textarea
-                              rows={2}
-                              value={editingFormQPrompt}
-                              onChange={(e) => setEditingFormQPrompt(e.target.value)}
-                              className="w-full px-2 py-1 border border-academic-primaryGreen rounded bg-academic-surface text-academic-deepGreen text-xs focus:outline-none"
-                            />
-                            <div className="flex items-center justify-end space-x-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingFormQIndex(null);
-                                  setEditingFormQPrompt('');
-                                }}
-                                className="px-2 py-0.5 text-[11px] text-academic-muted hover:text-academic-deepGreen"
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                type="button"
-                                onClick={handleSaveEditFormQuestion}
-                                disabled={!editingFormQPrompt.trim()}
-                                className="btn-primary text-[11px] py-0.5 px-2.5"
-                              >
-                                Save
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <p className="text-academic-deepGreen text-xs line-clamp-3 leading-relaxed">{q.prompt}</p>
-                        )}
+                  {/* Manual Questions Option */}
+                  <label
+                    className={`flex flex-col justify-between p-3 rounded-lg border cursor-pointer transition-all ${
+                      formAssessmentTypes.includes('manual_questions')
+                        ? 'border-academic-primaryGreen bg-academic-lightGreen/40 ring-1 ring-academic-primaryGreen'
+                        : 'border-academic-border bg-academic-surface hover:bg-academic-paleGreen/20'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="p-1.5 rounded bg-academic-paleGreen text-academic-primaryGreen">
+                        <Pencil className="w-4 h-4" />
                       </div>
-                    ))}
-                  </div>
-                )}
+                      <input
+                        type="checkbox"
+                        checked={formAssessmentTypes.includes('manual_questions')}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setFormAssessmentTypes(prev => [...prev, 'manual_questions']);
+                          } else {
+                            if (formAssessmentTypes.length > 1) {
+                              setFormAssessmentTypes(prev => prev.filter(t => t !== 'manual_questions'));
+                            }
+                          }
+                        }}
+                        className="rounded border-academic-border text-academic-primaryGreen focus:ring-academic-primaryGreen mt-0.5"
+                      />
+                    </div>
+                    <div className="mt-2">
+                      <span className="font-bold text-academic-deepGreen text-xs block">Manual Questions</span>
+                      <p className="text-[10px] text-academic-muted mt-0.5 leading-snug">
+                        Author custom questions. Students submit written responses.
+                      </p>
+                    </div>
+                  </label>
 
-                <div className="p-2.5 rounded bg-academic-paleGreen/20 border border-academic-border/70 space-y-2">
-                  <textarea
-                    rows={2}
-                    placeholder="Enter manual question prompt..."
-                    value={newFormQPrompt}
-                    onChange={(e) => setNewFormQPrompt(e.target.value)}
-                    className="w-full px-2.5 py-1.5 border border-academic-border rounded bg-academic-surface text-academic-deepGreen text-xs focus:outline-none focus:border-academic-primaryGreen"
-                  />
-                  <div className="flex items-center justify-end">
-                    <button
-                      type="button"
-                      onClick={handleAddFormQuestion}
-                      disabled={!newFormQPrompt.trim()}
-                      className="btn-secondary text-[11px] py-1 px-2.5 flex items-center"
-                    >
-                      <PlusCircle className="w-3 h-3 mr-1 text-academic-primaryGreen" />
-                      <span>Add Question</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Assignment-Level Rubric Builder in Create Modal */}
-              <div className="p-3 border border-academic-border rounded bg-academic-surface space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
-                  <div>
-                    <span className="font-bold text-academic-deepGreen text-xs flex items-center">
-                      <Layers className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
-                      Assignment-Level Rubric *
-                    </span>
-                    <p className="text-[10px] text-academic-muted">
-                      Used for grading. Total marks must equal 50 before publishing.
-                    </p>
-                  </div>
-                  <div className="flex items-center space-x-1.5">
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                      Math.abs(formRubricSum - 50) < 0.001
-                        ? 'bg-academic-lightGreen text-academic-primaryGreen border-academic-primaryGreen/30'
-                        : 'bg-[#FDF6E2] text-[#A63214] border-[#D9BD71]'
-                    }`}>
-                      {Math.abs(formRubricSum - 50) < 0.001 ? '✓ Total: 50 / 50' : `⚠️ Total: ${formRubricSum} / 50`}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleResetFormRubric}
-                      className="text-[10px] text-academic-primaryGreen hover:underline font-semibold"
-                    >
-                      Reset Template
-                    </button>
-                  </div>
-                </div>
-
-                {formRubricCriteria.length > 0 && (
-                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                    {formRubricCriteria.map((c, idx) => (
-                      <div key={idx} className="p-2 rounded bg-academic-paleGreen/20 border border-academic-border flex items-center justify-between gap-2 text-xs">
-                        <div className="flex items-center space-x-2 min-w-0">
-                          <span className="font-mono text-[10px] text-academic-muted font-bold">{idx + 1}.</span>
-                          <span className="font-semibold text-academic-deepGreen truncate">{c.criterion_title}</span>
-                          <span className="font-mono text-[11px] font-bold text-academic-primaryGreen">({c.max_marks}m)</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveFormCriterion(idx)}
-                          className="text-academic-muted hover:text-red-700 p-1 flex-shrink-0"
-                          title="Remove Criterion"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
+                  {/* Quiz (MCQ) Option */}
+                  <label
+                    className={`flex flex-col justify-between p-3 rounded-lg border cursor-pointer transition-all ${
+                      formAssessmentTypes.includes('quiz')
+                        ? 'border-academic-primaryGreen bg-academic-lightGreen/40 ring-1 ring-academic-primaryGreen'
+                        : 'border-academic-border bg-academic-surface hover:bg-academic-paleGreen/20'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="p-1.5 rounded bg-academic-paleGreen text-academic-primaryGreen">
+                        <CheckCircle2 className="w-4 h-4" />
                       </div>
-                    ))}
-                  </div>
+                      <input
+                        type="checkbox"
+                        checked={formAssessmentTypes.includes('quiz')}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setFormAssessmentTypes(prev => [...prev, 'quiz']);
+                          } else {
+                            if (formAssessmentTypes.length > 1) {
+                              setFormAssessmentTypes(prev => prev.filter(t => t !== 'quiz'));
+                            }
+                          }
+                        }}
+                        className="rounded border-academic-border text-academic-primaryGreen focus:ring-academic-primaryGreen mt-0.5"
+                      />
+                    </div>
+                    <div className="mt-2">
+                      <span className="font-bold text-academic-deepGreen text-xs block">Quiz (MCQ)</span>
+                      <p className="text-[10px] text-academic-muted mt-0.5 leading-snug">
+                        Multiple-choice questions with 4 options and automatic scoring.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+                {formAssessmentTypes.length === 0 && (
+                  <p className="text-[11px] text-red-600 font-semibold mt-1">Please select at least one assessment type.</p>
                 )}
-
-                <div className="p-2.5 rounded bg-academic-paleGreen/10 border border-academic-border/70 space-y-2">
-                  <div className="grid grid-cols-3 gap-2">
-                    <input
-                      type="text"
-                      placeholder="New Criterion Title"
-                      value={newFormCritTitle}
-                      onChange={(e) => setNewFormCritTitle(e.target.value)}
-                      className="col-span-2 px-2.5 py-1.5 border border-academic-border rounded bg-academic-surface text-academic-deepGreen text-xs focus:outline-none focus:border-academic-primaryGreen"
-                    />
-                    <input
-                      type="number"
-                      min="1"
-                      max="50"
-                      placeholder="Marks"
-                      value={newFormCritMarks}
-                      onChange={(e) => setNewFormCritMarks(Math.max(1, Math.min(50, Number(e.target.value))))}
-                      className="px-2.5 py-1.5 border border-academic-border rounded bg-academic-surface text-academic-deepGreen text-xs focus:outline-none focus:border-academic-primaryGreen"
-                    />
-                  </div>
-                  <input
-                    type="text"
-                    placeholder="Description / Guidance (Optional)"
-                    value={newFormCritDesc}
-                    onChange={(e) => setNewFormCritDesc(e.target.value)}
-                    className="w-full px-2.5 py-1.5 border border-academic-border rounded bg-academic-surface text-academic-deepGreen text-xs focus:outline-none focus:border-academic-primaryGreen"
-                  />
-                  <div className="flex justify-end">
-                    <button
-                      type="button"
-                      onClick={handleAddFormCriterion}
-                      disabled={!newFormCritTitle.trim()}
-                      className="btn-secondary text-[11px] py-1 px-2.5 flex items-center"
-                    >
-                      <PlusCircle className="w-3 h-3 mr-1 text-academic-primaryGreen" />
-                      <span>Add Criterion</span>
-                    </button>
-                  </div>
+                <div className="p-2.5 rounded bg-academic-paleGreen/40 border border-academic-border text-[11px] text-academic-muted mt-2">
+                  ℹ️ <strong>Draft Workflow:</strong> Creating this assignment saves it as a <strong>Draft</strong>. You will configure the selected sections (instruction documents, questions, quiz, and rubric) in the configuration workspace before publishing to students.
                 </div>
               </div>
 
@@ -3423,7 +4342,7 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
       {/* MODAL 2: Publish Checklist & Confirmation Modal */}
       {showPublishConfirmModal && selectedAssessment && (
         <div className="fixed inset-0 bg-academic-deepGreen/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-academic-surface border border-academic-border rounded-lg shadow-xl max-w-lg w-full p-6 space-y-4">
+          <div className="bg-academic-surface border border-academic-border rounded-lg shadow-xl max-w-xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-academic-border">
               <h3 className="text-base font-bold text-academic-deepGreen flex items-center">
                 <CheckCircle2 className="w-4 h-4 mr-2 text-academic-primaryGreen" />
@@ -3437,17 +4356,18 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
               </button>
             </div>
 
-            <div className="space-y-3 text-xs">
+            <div className="space-y-4 text-xs">
               <p className="text-academic-deepGreen">
-                Publishing locks this assessment and opens it to enrolled students:
+                Publishing locks this assessment and opens it for student submissions:
               </p>
 
+              {/* Requirement Checklist */}
               <div className="space-y-2 p-3 bg-academic-paleGreen/30 rounded border border-academic-border">
                 {checklist.errors.length === 0 ? (
                   <div className="flex items-start space-x-2 text-academic-primaryGreen">
                     <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
                     <span>
-                      All publication requirements passed: Assessment content (PDF document and/or manual questions) is present, assignment rubric totals exactly 50 marks, and deadline is in the future.
+                      All publication requirements passed: Assessment content is configured, rubric totals 50 marks, and deadline is set.
                     </span>
                   </div>
                 ) : (
@@ -3464,11 +4384,238 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
                   </div>
                 )}
               </div>
+
+              {/* Audience Targeting Selection */}
+              {checklist.valid && (
+                <div className="space-y-3 pt-2 border-t border-academic-border">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-academic-deepGreen flex items-center text-xs">
+                      <Users className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+                      Target Audience
+                    </label>
+                    <span className="text-[11px] text-academic-muted">
+                      {loadingEligibleStudents ? 'Loading cohort...' : `${eligibleStudents.length} eligible students`}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {/* Option 1: All Students */}
+                    <label className={`flex items-start p-3 rounded-lg border cursor-pointer transition-all ${
+                      publishAudience === 'all'
+                        ? 'border-academic-primaryGreen bg-academic-lightGreen/50 shadow-sm'
+                        : 'border-academic-border bg-academic-surface hover:border-academic-primaryGreen/40'
+                    }`}>
+                      <input
+                        type="radio"
+                        name="publishAudience"
+                        value="all"
+                        checked={publishAudience === 'all'}
+                        onChange={() => setPublishAudience('all')}
+                        className="mt-0.5 text-academic-primaryGreen focus:ring-academic-primaryGreen"
+                      />
+                      <div className="ml-2.5">
+                        <span className="font-bold text-academic-deepGreen block text-xs">All Students</span>
+                        <span className="text-[11px] text-academic-muted block mt-0.5">
+                          Publish to all {eligibleStudents.length} actively enrolled Security stream students in this class.
+                        </span>
+                      </div>
+                    </label>
+
+                    {/* Option 2: Specific Students */}
+                    <label className={`flex items-start p-3 rounded-lg border cursor-pointer transition-all ${
+                      publishAudience === 'selected'
+                        ? 'border-academic-primaryGreen bg-academic-lightGreen/50 shadow-sm'
+                        : 'border-academic-border bg-academic-surface hover:border-academic-primaryGreen/40'
+                    }`}>
+                      <input
+                        type="radio"
+                        name="publishAudience"
+                        value="selected"
+                        checked={publishAudience === 'selected'}
+                        onChange={() => setPublishAudience('selected')}
+                        className="mt-0.5 text-academic-primaryGreen focus:ring-academic-primaryGreen"
+                      />
+                      <div className="ml-2.5">
+                        <span className="font-bold text-academic-deepGreen block text-xs">Selected Students</span>
+                        <span className="text-[11px] text-academic-muted block mt-0.5">
+                          Select specific individual students. Unselected students will have zero access.
+                        </span>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* Student Selector Interface (when Selected Students is chosen) */}
+                  {publishAudience === 'selected' && (
+                    <div className="mt-3 p-3 bg-academic-paleGreen/20 rounded-lg border border-academic-border space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        {/* Search Bar */}
+                        <div className="relative flex-1">
+                          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 transform -translate-y-1/2 text-academic-muted" />
+                          <input
+                            type="text"
+                            placeholder="Search by student name or USN..."
+                            value={studentSearchQuery}
+                            onChange={(e) => setStudentSearchQuery(e.target.value)}
+                            className="input-base pl-8 py-1 text-xs w-full"
+                          />
+                          {studentSearchQuery && (
+                            <button
+                              type="button"
+                              onClick={() => setStudentSearchQuery('')}
+                              className="absolute right-2 top-1/2 transform -translate-y-1/2 text-academic-muted hover:text-academic-deepGreen"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Quick Selection Actions */}
+                        <div className="flex items-center space-x-2 text-[11px]">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const matchingIds = eligibleStudents
+                                .filter(st => {
+                                  if (!studentSearchQuery) return true;
+                                  const q = studentSearchQuery.toLowerCase();
+                                  return (
+                                    (st.full_name || '').toLowerCase().includes(q) ||
+                                    (st.usn || '').toLowerCase().includes(q)
+                                  );
+                                })
+                                .map(st => st.student_id);
+                              setSelectedStudentIds(Array.from(new Set([...selectedStudentIds, ...matchingIds])));
+                            }}
+                            className="px-2 py-1 rounded bg-academic-lightGreen text-academic-deepGreen hover:bg-academic-primaryGreen/20 border border-academic-border"
+                          >
+                            Select All
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedStudentIds([])}
+                            className="px-2 py-1 rounded bg-academic-surface text-academic-muted hover:text-academic-deepGreen border border-academic-border"
+                          >
+                            Clear
+                          </button>
+                          <span className="font-semibold text-academic-deepGreen ml-1">
+                            {selectedStudentIds.length} / {eligibleStudents.length} selected
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Student Table */}
+                      <div className="border border-academic-border rounded overflow-hidden max-h-48 overflow-y-auto bg-academic-surface">
+                        {loadingEligibleStudents ? (
+                          <div className="p-4 text-center text-academic-muted flex items-center justify-center space-x-2">
+                            <Loader2 className="w-4 h-4 animate-spin text-academic-primaryGreen" />
+                            <span>Loading eligible Security stream students...</span>
+                          </div>
+                        ) : eligibleStudents.length === 0 ? (
+                          <div className="p-4 text-center text-academic-muted">
+                            No active enrolled students found for this subject and class.
+                          </div>
+                        ) : (
+                          <table className="w-full text-left border-collapse text-[11px]">
+                            <thead className="bg-academic-paleGreen/50 text-academic-deepGreen sticky top-0 border-b border-academic-border">
+                              <tr>
+                                <th className="p-2 w-8 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={
+                                      eligibleStudents.length > 0 &&
+                                      eligibleStudents.every(st => selectedStudentIds.includes(st.student_id))
+                                    }
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        setSelectedStudentIds(eligibleStudents.map(st => st.student_id));
+                                      } else {
+                                        setSelectedStudentIds([]);
+                                      }
+                                    }}
+                                    className="rounded border-academic-border text-academic-primaryGreen focus:ring-academic-primaryGreen"
+                                  />
+                                </th>
+                                <th className="p-2 font-semibold">USN</th>
+                                <th className="p-2 font-semibold">Student Name</th>
+                                <th className="p-2 font-semibold">Specialization</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-academic-border/60">
+                              {eligibleStudents
+                                .filter(st => {
+                                  if (!studentSearchQuery) return true;
+                                  const q = studentSearchQuery.toLowerCase();
+                                  return (
+                                    (st.full_name || '').toLowerCase().includes(q) ||
+                                    (st.usn || '').toLowerCase().includes(q)
+                                  );
+                                })
+                                .map((st) => {
+                                  const isSelected = selectedStudentIds.includes(st.student_id);
+                                  return (
+                                    <tr
+                                      key={st.student_id}
+                                      onClick={() => {
+                                        setSelectedStudentIds(prev =>
+                                          prev.includes(st.student_id)
+                                            ? prev.filter(id => id !== st.student_id)
+                                            : [...prev, st.student_id]
+                                        );
+                                      }}
+                                      className={`cursor-pointer transition-colors ${
+                                        isSelected ? 'bg-academic-lightGreen/40' : 'hover:bg-academic-paleGreen/20'
+                                      }`}
+                                    >
+                                      <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
+                                        <input
+                                          type="checkbox"
+                                          checked={isSelected}
+                                          onChange={() => {
+                                            setSelectedStudentIds(prev =>
+                                              prev.includes(st.student_id)
+                                                ? prev.filter(id => id !== st.student_id)
+                                                : [...prev, st.student_id]
+                                            );
+                                          }}
+                                          className="rounded border-academic-border text-academic-primaryGreen focus:ring-academic-primaryGreen"
+                                        />
+                                      </td>
+                                      <td className="p-2 font-mono font-medium text-academic-deepGreen">
+                                        {st.usn}
+                                      </td>
+                                      <td className="p-2 font-medium text-academic-deepGreen">
+                                        {st.full_name}
+                                      </td>
+                                      <td className="p-2 text-academic-muted">
+                                        <span className="px-1.5 py-0.5 rounded bg-academic-paleGreen text-[10px] text-academic-deepGreen border border-academic-border font-medium">
+                                          {st.specialization_name || st.specialization_code || 'Security'}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+
+                      {/* Zero Selection Validation Warning */}
+                      {selectedStudentIds.length === 0 && (
+                        <div className="flex items-center space-x-1.5 text-amber-700 bg-amber-50 p-2 rounded border border-amber-200 text-[11px]">
+                          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                          <span>At least 1 student must be selected to publish this assessment.</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-end space-x-3 pt-3 border-t border-academic-border">
               <button
                 type="button"
+                disabled={isPublishing}
                 onClick={() => setShowPublishConfirmModal(false)}
                 className="btn-secondary text-xs min-h-[44px]"
               >
@@ -3476,11 +4623,33 @@ export const AssessmentManagement: React.FC<AssessmentManagementProps> = ({ acti
               </button>
               <button
                 type="button"
-                disabled={!checklist.valid}
+                disabled={
+                  !checklist.valid ||
+                  (publishAudience === 'selected' && selectedStudentIds.length === 0) ||
+                  isPublishing
+                }
                 onClick={handlePublishAssessment}
-                className={`btn-primary text-xs min-h-[44px] ${!checklist.valid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`btn-primary text-xs min-h-[44px] flex items-center ${
+                  !checklist.valid || (publishAudience === 'selected' && selectedStudentIds.length === 0) || isPublishing
+                    ? 'opacity-50 cursor-not-allowed'
+                    : ''
+                }`}
               >
-                Confirm & Publish
+                {isPublishing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                    <span>Publishing...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4 mr-1.5" />
+                    <span>
+                      {publishAudience === 'selected'
+                        ? `Publish to ${selectedStudentIds.length} Student${selectedStudentIds.length === 1 ? '' : 's'}`
+                        : 'Confirm & Publish to All'}
+                    </span>
+                  </>
+                )}
               </button>
             </div>
           </div>

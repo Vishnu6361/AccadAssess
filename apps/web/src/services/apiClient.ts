@@ -1563,6 +1563,9 @@ export interface AssessmentDTO {
   late_penalty_mode?: 'none' | 'fixed';
   late_penalty_marks?: number;
   max_marks?: number;
+  assessment_types?: ('file_based' | 'manual_questions' | 'quiz')[];
+  quiz_questions?: any[];
+  instruction_files?: any[];
   idempotency_key?: string | null;
 }
 
@@ -1798,6 +1801,9 @@ export const assessmentApi = {
     late_penalty_mode?: 'none' | 'fixed';
     late_penalty_marks?: number;
     max_marks?: number;
+    assessment_types?: ('file_based' | 'manual_questions' | 'quiz')[];
+    quiz_questions?: any[];
+    instruction_files?: any[];
     questions?: any[];
     rubric?: any;
   }): Promise<AssessmentDTO> => {
@@ -1886,12 +1892,16 @@ export const assessmentApi = {
     }
   },
 
-  publishAssessment: async (assessmentId: string): Promise<any> => {
+  publishAssessment: async (assessmentId: string, payload?: { audience?: 'all' | 'selected'; student_ids?: string[] }): Promise<any> => {
     try {
       const authHeaders = await getAuthHeaders();
       const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/${assessmentId}/publish`, {
         method: 'POST',
-        headers: authHeaders
+        headers: {
+          ...authHeaders,
+          'Content-Type': 'application/json'
+        },
+        body: payload ? JSON.stringify(payload) : JSON.stringify({ audience: 'all' })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -1901,6 +1911,26 @@ export const assessmentApi = {
     } catch (err: any) {
       if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
         throw new Error(`API server is unreachable (${API_BASE_URL}). Cannot publish assessment.`);
+      }
+      throw err;
+    }
+  },
+
+  getEligibleStudents: async (assessmentId: string): Promise<any[]> => {
+    try {
+      const authHeaders = await getAuthHeaders();
+      const res = await fetchWithTimeout(`${API_BASE_URL}/assessments/${assessmentId}/eligible-students`, {
+        method: 'GET',
+        headers: authHeaders
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error?.message || `Failed to fetch eligible students (${res.status})`);
+      }
+      return data.students || [];
+    } catch (err: any) {
+      if (err.message?.includes('Failed to fetch') || err.name === 'TypeError') {
+        throw new Error(`API server is unreachable (${API_BASE_URL}). Cannot fetch eligible students.`);
       }
       throw err;
     }
@@ -1918,6 +1948,9 @@ export const assessmentApi = {
     late_penalty_mode?: 'none' | 'fixed';
     late_penalty_marks?: number;
     max_marks?: number;
+    assessment_types?: ('file_based' | 'manual_questions' | 'quiz')[];
+    quiz_questions?: any[];
+    instruction_files?: any[];
     questions?: any[];
     rubric?: any;
   }): Promise<{ assessment: AssessmentDTO; warning?: string | null }> => {
@@ -2100,6 +2133,8 @@ export const submissionApi = {
   submitAssignment: async (payload: {
     assessment_id: string;
     answers?: Array<{ question_id: string; question_order?: number; question_number?: number; question_prompt?: string; answer_text: string }>;
+    quiz_answers?: Array<{ quiz_question_id: string; selected_option_id: string }>;
+    section_statuses?: Record<string, string>;
     files?: Array<{ file_name: string; file_base64: string; mime_type?: string }>;
     keep_existing_files?: boolean;
   }): Promise<{ receipt: any; version?: any }> => {
@@ -2140,10 +2175,12 @@ export const submissionApi = {
     return null;
   },
 
-  saveDraft: async (param1: string | { assessment_id: string; answers: Array<any> }, param2?: Array<any>): Promise<any> => {
+  saveDraft: async (param1: string | { assessment_id: string; answers?: Array<any>; quiz_answers?: Array<any>; section_statuses?: any }, param2?: Array<any>): Promise<any> => {
     try {
       const assessmentId = typeof param1 === 'string' ? param1 : param1.assessment_id;
-      const answers = typeof param1 === 'string' ? (param2 || []) : param1.answers;
+      const answers = typeof param1 === 'string' ? (param2 || []) : (param1.answers || []);
+      const quiz_answers = typeof param1 === 'object' ? (param1.quiz_answers || []) : [];
+      const section_statuses = typeof param1 === 'object' ? (param1.section_statuses || {}) : {};
       const authHeaders = await getAuthHeaders();
       const res = await fetchWithTimeout(`${API_BASE_URL}/submissions/assessment/${assessmentId}/draft`, {
         method: 'PUT',
@@ -2151,7 +2188,7 @@ export const submissionApi = {
           ...authHeaders,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ answers })
+        body: JSON.stringify({ answers, quiz_answers, section_statuses })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -2187,6 +2224,8 @@ export const submissionApi = {
     file_base64?: string;
     files?: Array<{ file_name: string; file_base64: string }>;
     answers?: Array<{ question_id: string; question_order?: number; question_number?: number; question_prompt?: string; answer_text: string }>;
+    quiz_answers?: Array<{ quiz_question_id: string; selected_option_id: string }>;
+    section_statuses?: Record<string, string>;
     keep_existing_files?: boolean;
   }): Promise<any> => {
     const res = await submissionApi.submitAssignment(payload);

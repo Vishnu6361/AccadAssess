@@ -108,7 +108,7 @@ export class InMemoryEvaluationRepository implements IEvaluationRepository {
     }
 
     let finalRawScore = params.rawScore ?? 0;
-    if (params.criterionScores && params.criterionScores.length > 0) {
+    if (params.rawScore === undefined && params.criterionScores && params.criterionScores.length > 0) {
       finalRawScore = params.criterionScores.reduce((sum: number, cs: any) => sum + Number(cs.score || 0), 0);
     }
     const calculatedTotal = Math.max(0, finalRawScore - penaltyToDeduct);
@@ -369,7 +369,12 @@ export class InMemoryEvaluationRepository implements IEvaluationRepository {
         };
 
         const cs = this.inMemoryDb.classSubjects.find(c => c.id === ass.class_subject_id);
-        const classEnrs = cs ? this.inMemoryDb.enrollments.filter(e => e.class_id === cs.class_id && e.status === 'active') : [];
+        let classEnrs = cs ? this.inMemoryDb.enrollments.filter(e => e.class_id === cs.class_id && e.status === 'active') : [];
+        if (ass.publishing_audience === 'selected') {
+          const targets = (this.inMemoryDb.assessment_student_targets || []).filter(t => t.assessment_id === ass.id);
+          const targetIds = new Set(targets.map(t => t.student_id));
+          classEnrs = classEnrs.filter(e => targetIds.has(e.student_id));
+        }
         const subs = this.inMemoryDb.submissions.filter(s => s.assessment_id === ass.id);
 
         selectedAssessmentRoster = classEnrs.map(enr => {
@@ -902,7 +907,7 @@ export class SupabaseEvaluationRepository implements IEvaluationRepository {
     }
 
     let finalRawScore = params.rawScore ?? 0;
-    if (params.criterionScores && params.criterionScores.length > 0) {
+    if (params.rawScore === undefined && params.criterionScores && params.criterionScores.length > 0) {
       finalRawScore = params.criterionScores.reduce((sum: number, cs: any) => sum + Number(cs.score || 0), 0);
     }
 
@@ -928,6 +933,25 @@ export class SupabaseEvaluationRepository implements IEvaluationRepository {
 
     if (evalErr) {
       throw new Error(`Failed to save evaluation: ${evalErr.message}`);
+    }
+
+    // Record teacher_confirmed_marks and quiz_score
+    try {
+      const { data: activeVer } = await this.client
+        .from('submission_versions')
+        .select('quiz_score')
+        .eq('id', submission.active_version_id)
+        .maybeSingle();
+
+      await this.client
+        .from('evaluations')
+        .update({
+          teacher_confirmed_marks: finalRawScore,
+          quiz_score: activeVer?.quiz_score ?? null
+        })
+        .eq('id', evalResult.id);
+    } catch (ignoreErr) {
+      console.warn('Failed to update teacher_confirmed_marks on evaluation:', ignoreErr);
     }
 
     const fullEval = await this.getEvaluationById(evalResult.id);
@@ -1232,7 +1256,17 @@ export class SupabaseEvaluationRepository implements IEvaluationRepository {
         };
 
         const cs = (classSubjects || []).find(c => c.id === ass.class_subject_id);
-        const targetEnrs = cs ? (enrollments || []).filter(e => e.class_id === cs.class_id) : [];
+        let targetEnrs = cs ? (enrollments || []).filter(e => e.class_id === cs.class_id) : [];
+        if (ass.publishing_audience === 'selected') {
+          try {
+            const { data: targets } = await this.client
+              .from('assessment_student_targets')
+              .select('student_id')
+              .eq('assessment_id', ass.id);
+            const targetIds = new Set((targets || []).map(t => t.student_id));
+            targetEnrs = targetEnrs.filter(e => targetIds.has(e.student_id));
+          } catch {}
+        }
 
         const { data: subs } = await this.client
           .from('submissions')

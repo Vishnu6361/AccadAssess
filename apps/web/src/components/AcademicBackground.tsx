@@ -24,21 +24,21 @@ export const AcademicBackground: React.FC<{ children?: React.ReactNode; classNam
       >
         <defs>
           <linearGradient id="warmBgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="#FCFAF5" />
-            <stop offset="50%" stopColor="#F7F4EB" />
-            <stop offset="100%" stopColor="#F2EEE2" />
+            <stop offset="0%" stopColor="#FFFFFF" />
+            <stop offset="50%" stopColor="#F8FAFC" />
+            <stop offset="100%" stopColor="#F1F5F9" />
           </linearGradient>
 
           <linearGradient id="waveGrad1" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#4A7558" stopOpacity="0.08" />
-            <stop offset="50%" stopColor="#2D5A3F" stopOpacity="0.05" />
-            <stop offset="100%" stopColor="#4A7558" stopOpacity="0.09" />
+            <stop offset="0%" stopColor="#0A2B8E" stopOpacity="0.05" />
+            <stop offset="50%" stopColor="#011B6A" stopOpacity="0.03" />
+            <stop offset="100%" stopColor="#0A2B8E" stopOpacity="0.06" />
           </linearGradient>
 
           <linearGradient id="waveGrad2" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#2D5A3F" stopOpacity="0.04" />
-            <stop offset="50%" stopColor="#4A7558" stopOpacity="0.08" />
-            <stop offset="100%" stopColor="#2D5A3F" stopOpacity="0.05" />
+            <stop offset="0%" stopColor="#FFBF00" stopOpacity="0.04" />
+            <stop offset="50%" stopColor="#0A2B8E" stopOpacity="0.04" />
+            <stop offset="100%" stopColor="#FFBF00" stopOpacity="0.03" />
           </linearGradient>
         </defs>
 

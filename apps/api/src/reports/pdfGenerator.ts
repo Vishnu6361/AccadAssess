@@ -1,4 +1,6 @@
 import PDFDocument from 'pdfkit';
+import path from 'path';
+import fs from 'fs';
 import {
   AssessmentReportData,
   ConsolidatedReportData,
@@ -7,23 +9,49 @@ import {
   DetailedRubricReportData
 } from './assessmentReportTypes.js';
 
+// Resolve official SJBIT emblem image asset for institutional report headers
+function loadEmblemBuffer(): Buffer | null {
+  const candidatePaths = [
+    typeof __dirname !== 'undefined' ? path.resolve(__dirname, 'assets', 'sjbit-emblem.png') : null,
+    typeof __dirname !== 'undefined' ? path.resolve(__dirname, '..', 'src', 'reports', 'assets', 'sjbit-emblem.png') : null,
+    path.resolve(process.cwd(), 'apps', 'api', 'src', 'reports', 'assets', 'sjbit-emblem.png'),
+    path.resolve(process.cwd(), 'src', 'reports', 'assets', 'sjbit-emblem.png'),
+    path.resolve(process.cwd(), 'apps', 'web', 'public', 'sjbit-emblem.png')
+  ].filter(Boolean) as string[];
+
+  for (const p of candidatePaths) {
+    try {
+      if (fs.existsSync(p)) {
+        return fs.readFileSync(p);
+      }
+    } catch {
+      // Continue to next candidate
+    }
+  }
+  return null;
+}
+
+const emblemBuffer: Buffer | null = loadEmblemBuffer();
+
 /**
  * Standard Institutional Palette for SJBIT & AcadAssess
  */
 const COLORS = {
-  primary: '#1B4D3E',     // Academic Deep Green
-  primaryDark: '#0D2B22',
-  headerBg: '#EBF4F0',    // Soft institutional sage/mint
-  headerBorder: '#1B4D3E',
-  subHeaderBg: '#F4F8F6',
-  rowBorder: '#D0DDD7',
-  zebraBg: '#F9FBFB',
+  primary: '#0A2B8E',     // Official SJBIT Royal Blue
+  primaryDark: '#011B6A', // Official SJBIT Deep Navy
+  goldAccent: '#FFBF00',  // Official SJBIT Amber Gold
+  goldBorder: '#D97706',  // Amber Gold border
+  headerBg: '#EFF6FF',    // Soft institutional blue tint
+  headerBorder: '#0A2B8E',
+  subHeaderBg: '#F8FAFC', // Slate soft tint
+  rowBorder: '#CBD5E1',   // Slate border
+  zebraBg: '#F8FAFC',
   white: '#FFFFFF',
-  textDark: '#111827',
-  textMuted: '#4B5563',
-  tagPending: '#B45309',
-  tagAwaiting: '#4338CA',
-  tagZero: '#6B7280'
+  textDark: '#0F172A',
+  textMuted: '#64748B',
+  tagPending: '#D97706',
+  tagAwaiting: '#0A2B8E',
+  tagZero: '#64748B'
 };
 
 /**
@@ -182,6 +210,18 @@ async function generateConsolidatedPdf(data: ConsolidatedReportData): Promise<Bu
     doc
       .rect(marginLeft, startY, usableWidth, 70)
       .fillAndStroke(COLORS.headerBg, COLORS.headerBorder);
+
+    // Gold Accent Stripe
+    doc.rect(marginLeft, startY + 68, usableWidth, 2).fill(COLORS.goldAccent);
+
+    // Official SJBIT Emblem Crest
+    if (emblemBuffer) {
+      try {
+        doc.image(emblemBuffer, marginLeft + 14, startY + 8, { width: 54, height: 54 });
+      } catch {
+        // Fallback gracefully
+      }
+    }
 
     // Text details inside banner
     doc.font('Helvetica-Bold').fontSize(14).fillColor(COLORS.primaryDark);
@@ -507,6 +547,18 @@ async function generateSubjectPdf(data: SubjectReportData): Promise<Buffer> {
       .rect(marginLeft, startY, usableWidth, 52)
       .fillAndStroke(COLORS.headerBg, COLORS.headerBorder);
 
+    // Gold Accent Stripe
+    doc.rect(marginLeft, startY + 50, usableWidth, 2).fill(COLORS.goldAccent);
+
+    // Official SJBIT Emblem Crest
+    if (emblemBuffer) {
+      try {
+        doc.image(emblemBuffer, marginLeft + 10, startY + 6, { width: 40, height: 40 });
+      } catch {
+        // Fallback gracefully
+      }
+    }
+
     doc.font('Helvetica-Bold').fontSize(12.5).fillColor(COLORS.primaryDark);
     doc.text(data.institution, marginLeft, startY + 5, { width: usableWidth, align: 'center' });
 
@@ -696,6 +748,18 @@ async function generateStudentPdf(data: StudentIndividualReportData): Promise<Bu
   doc.save();
   // Header
   doc.rect(marginLeft, marginTop, usableWidth, 64).fillAndStroke(COLORS.headerBg, COLORS.headerBorder);
+
+  // Gold Accent Stripe
+  doc.rect(marginLeft, marginTop + 62, usableWidth, 2).fill(COLORS.goldAccent);
+
+  // Official SJBIT Emblem Crest
+  if (emblemBuffer) {
+    try {
+      doc.image(emblemBuffer, marginLeft + 10, marginTop + 7, { width: 50, height: 50 });
+    } catch {
+      // Fallback gracefully
+    }
+  }
   doc.font('Helvetica-Bold').fontSize(13).fillColor(COLORS.primaryDark);
   doc.text(data.institution, marginLeft, marginTop + 8, { width: usableWidth, align: 'center' });
   doc.font('Helvetica-Bold').fontSize(10).fillColor(COLORS.primary);
@@ -869,6 +933,18 @@ async function generateRubricPdf(data: DetailedRubricReportData): Promise<Buffer
 
   // Header Banner
   doc.rect(marginLeft, marginTop, usableWidth, 64).fillAndStroke(COLORS.headerBg, COLORS.headerBorder);
+
+  // Gold Accent Stripe
+  doc.rect(marginLeft, marginTop + 62, usableWidth, 2).fill(COLORS.goldAccent);
+
+  // Official SJBIT Emblem Crest
+  if (emblemBuffer) {
+    try {
+      doc.image(emblemBuffer, marginLeft + 10, marginTop + 7, { width: 50, height: 50 });
+    } catch {
+      // Fallback gracefully
+    }
+  }
   doc.font('Helvetica-Bold').fontSize(13).fillColor(COLORS.primaryDark);
   doc.text(data.institution, marginLeft, marginTop + 8, { width: usableWidth, align: 'center' });
   doc.font('Helvetica-Bold').fontSize(10).fillColor(COLORS.primary);

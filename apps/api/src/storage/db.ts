@@ -12,6 +12,7 @@ import {
   AuditEvent,
   Assessment,
   Question,
+  QuizQuestion,
   RubricVersion,
   RubricCriterion,
   RubricLevel,
@@ -319,13 +320,15 @@ export class InMemoryDatabase {
   ];
 
   assessments: Assessment[] = [];
+  assessment_student_targets: Array<{ id: string; assessment_id: string; student_id: string; assigned_at: string }> = [];
   questions: Question[] = [];
+  quiz_questions: QuizQuestion[] = [];
   rubricVersions: RubricVersion[] = [];
   rubricCriteria: RubricCriterion[] = [];
   rubricLevels: RubricLevel[] = [];
   submissions: Submission[] = [];
   submissionVersions: SubmissionVersion[] = [];
-  studentSubmissionDrafts: Array<{ id: string; assessment_id: string; student_id: string; answers: any[]; created_at: string; updated_at: string }> = [];
+  studentSubmissionDrafts: Array<{ id: string; assessment_id: string; student_id: string; answers: any[]; quiz_answers?: any[]; section_statuses?: any; created_at: string; updated_at: string }> = [];
   storageBlobs: Map<string, Buffer> = new Map();
   evaluations: Evaluation[] = [];
   evaluationCriterionScores: EvaluationCriterionScore[] = [];

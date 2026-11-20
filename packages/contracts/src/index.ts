@@ -545,6 +545,57 @@ export const RubricVersionSchema = z.object({
 });
 export type RubricVersion = z.infer<typeof RubricVersionSchema>;
 
+export const AssessmentTypeSchema = z.enum([
+  'file_based',
+  'manual_questions',
+  'quiz'
+]);
+export type AssessmentType = z.infer<typeof AssessmentTypeSchema>;
+
+export const QuizOptionSchema = z.object({
+  id: z.string(),
+  text: z.string().min(1, 'Option text cannot be empty')
+});
+export type QuizOption = z.infer<typeof QuizOptionSchema>;
+
+export const QuizQuestionSchema = z.object({
+  id: z.string().uuid(),
+  assessment_id: z.string().uuid(),
+  display_order: z.number().int().min(1),
+  question_text: z.string().min(1, 'Question text cannot be empty'),
+  marks: z.number().positive().default(1),
+  options: z.array(QuizOptionSchema).length(4, 'Exactly 4 options are required'),
+  correct_option_id: z.string().min(1, 'Correct option must be selected'),
+  explanation: z.string().nullable().optional(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional()
+});
+export type QuizQuestion = z.infer<typeof QuizQuestionSchema>;
+
+export const QuizQuestionInputSchema = z.object({
+  id: z.string().uuid().optional(),
+  display_order: z.number().int().min(1).optional(),
+  question_text: z.string().optional(),
+  prompt: z.string().optional(),
+  marks: z.number().positive().default(1),
+  options: z.array(QuizOptionSchema).length(4, 'Exactly 4 options are required'),
+  correct_option_id: z.string().min(1, 'Correct option must be selected'),
+  explanation: z.string().nullable().optional()
+}).transform(val => ({
+  ...val,
+  question_text: (val.question_text || val.prompt || '').trim()
+})).refine(val => val.question_text.length > 0, {
+  message: 'Question text cannot be empty',
+  path: ['question_text']
+});
+export type QuizQuestionInput = z.infer<typeof QuizQuestionInputSchema>;
+
+export const StudentQuizAnswerSchema = z.object({
+  question_id: z.string().uuid(),
+  selected_option_id: z.string().min(1, 'Selection cannot be empty')
+});
+export type StudentQuizAnswer = z.infer<typeof StudentQuizAnswerSchema>;
+
 export const QuestionSchema = z.object({
   id: z.string().uuid(),
   assessment_id: z.string().uuid(),
@@ -567,13 +618,19 @@ export const AssessmentSchema = z.object({
   published_at: z.string().nullable().optional(),
   published_by: z.string().uuid().nullable().optional(),
   version: z.number().int().min(1),
+  assessment_types: z.array(AssessmentTypeSchema).min(1).default(['file_based']),
+  publishing_audience: z.enum(['all', 'selected']).default('all'),
+  assigned_student_count: z.number().int().nonnegative().optional(),
+  assigned_student_ids: z.array(z.string().uuid()).optional(),
   questions: z.array(QuestionSchema).optional().default([]),
+  quiz_questions: z.array(QuizQuestionSchema).optional().default([]),
   rubric: RubricVersionSchema.nullable().optional(),
   // Document-based Assignment fields
   document_storage_key: z.string().nullable().optional(),
   document_filename: z.string().nullable().optional(),
   document_size_bytes: z.number().int().positive().nullable().optional(),
   document_mime_type: z.string().nullable().optional(),
+  instruction_files: z.array(z.any()).optional().default([]),
   max_files: z.number().int().min(1).max(10).default(1),
   allow_late: z.boolean().default(false),
   extension_deadline_at: z.string().nullable().optional(),
@@ -640,12 +697,14 @@ export const CreateAssessmentRequestSchema = z.object({
   deadline_at: z.string().refine(val => !isNaN(Date.parse(val)), {
     message: 'Valid ISO timestamp required'
   }),
+  assessment_types: z.array(AssessmentTypeSchema).min(1, 'Select at least one assessment type').default(['file_based']),
   // Optional document-based assignment creation fields
   document_storage_key: z.string().nullable().optional(),
   document_filename: z.string().nullable().optional(),
   document_size_bytes: z.number().int().positive().nullable().optional(),
   document_mime_type: z.string().nullable().optional(),
   document_base64: z.string().optional(),
+  instruction_files: z.array(z.any()).optional().default([]),
   max_files: z.number().int().min(1).max(10).default(1).optional(),
   allow_late: z.boolean().default(false).optional(),
   extension_deadline_at: z.string().nullable().optional(),
@@ -657,6 +716,12 @@ export const CreateAssessmentRequestSchema = z.object({
     qs.map((q, idx) => ({
       ...q,
       display_order: q.display_order || (idx + 1)
+    }))
+  ),
+  quiz_questions: z.array(QuizQuestionInputSchema).optional().default([]).transform((qqs) =>
+    qqs.map((qq, idx) => ({
+      ...qq,
+      display_order: qq.display_order || (idx + 1)
     }))
   ),
   rubric: AssignmentRubricInputSchema.nullable().optional()
@@ -686,11 +751,13 @@ export const UpdateAssessmentRequestSchema = z.object({
   deadline_at: z.string().refine(val => !isNaN(Date.parse(val)), {
     message: 'Valid ISO timestamp required'
   }).optional(),
+  assessment_types: z.array(AssessmentTypeSchema).min(1).optional(),
   document_storage_key: z.string().nullable().optional(),
   document_filename: z.string().nullable().optional(),
   document_size_bytes: z.number().int().positive().nullable().optional(),
   document_mime_type: z.string().nullable().optional(),
   document_base64: z.string().optional(),
+  instruction_files: z.array(z.any()).optional(),
   max_files: z.number().int().min(1).max(10).optional(),
   allow_late: z.boolean().optional(),
   extension_deadline_at: z.string().nullable().optional(),
@@ -701,6 +768,12 @@ export const UpdateAssessmentRequestSchema = z.object({
     qs ? qs.map((q, idx) => ({
       ...q,
       display_order: q.display_order || (idx + 1)
+    })) : undefined
+  ),
+  quiz_questions: z.array(QuizQuestionInputSchema).optional().transform((qqs) =>
+    qqs ? qqs.map((qq, idx) => ({
+      ...qq,
+      display_order: qq.display_order || (idx + 1)
     })) : undefined
   ),
   rubric: AssignmentRubricInputSchema.nullable().optional()
@@ -791,6 +864,10 @@ export const SubmissionVersionSchema = z.object({
   late_status: z.enum(['on_time', 'late']).default('on_time'),
   files: z.array(SubmissionFileSchema).optional().default([]),
   answers: z.array(SubmissionAnswerSchema).optional().default([]),
+  quiz_answers: z.array(z.any()).optional().default([]),
+  quiz_score: z.number().nullable().optional(),
+  quiz_total_marks: z.number().nullable().optional(),
+  section_statuses: z.record(z.any()).optional().default({}),
   uploaded_at: z.string(),
   superseded_at: z.string().nullable().optional()
 });
@@ -896,6 +973,26 @@ export const SaveEvaluationRequestSchema = z.object({
   criterion_scores: z.array(SaveCriterionScoreDTOSchema).optional().default([])
 });
 export type SaveEvaluationRequest = z.infer<typeof SaveEvaluationRequestSchema>;
+
+export const PublishAssessmentRequestSchema = z.object({
+  audience: z.enum(['all', 'selected']).default('all'),
+  student_ids: z.array(z.string().uuid()).optional()
+}).refine(
+  data => data.audience !== 'selected' || (data.student_ids && data.student_ids.length > 0),
+  { message: 'At least one student must be selected when publishing to specific students', path: ['student_ids'] }
+);
+export type PublishAssessmentRequest = z.infer<typeof PublishAssessmentRequestSchema>;
+
+export const EligibleStudentDTOSchema = z.object({
+  student_id: z.string().uuid(),
+  full_name: z.string(),
+  usn: z.string(),
+  email: z.string(),
+  class_name: z.string(),
+  specialization_code: z.string().nullable().optional(),
+  specialization_name: z.string().nullable().optional()
+});
+export type EligibleStudentDTO = z.infer<typeof EligibleStudentDTOSchema>;
 
 export const PublishAssessmentResultsRequestSchema = z.object({
   remarks: z.string().max(500).nullable().optional()

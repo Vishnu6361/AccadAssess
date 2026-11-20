@@ -21,6 +21,11 @@ const MultiFileSubmissionRequestSchema = z.object({
     question_prompt: z.string().optional(),
     answer_text: z.string()
   })).optional().default([]),
+  quiz_answers: z.array(z.object({
+    quiz_question_id: z.string().uuid(),
+    selected_option_id: z.string().min(1)
+  })).optional().default([]),
+  section_statuses: z.record(z.string()).optional().default({}),
   files: z.array(z.object({
     file_name: z.string().min(1).max(255),
     file_base64: z.string().min(1),
@@ -30,6 +35,7 @@ const MultiFileSubmissionRequestSchema = z.object({
 });
 
 function detectMagicMime(buffer: Buffer, declaredName: string): string | null {
+  const lowerName = declaredName.toLowerCase();
   if (buffer.length >= 4 && buffer.toString('ascii', 0, 4) === '%PDF') {
     return 'application/pdf';
   }
@@ -38,12 +44,14 @@ function detectMagicMime(buffer: Buffer, declaredName: string): string | null {
     buffer[0] === 0xD0 && buffer[1] === 0xCF && buffer[2] === 0x11 && buffer[3] === 0xE0 &&
     buffer[4] === 0xA1 && buffer[5] === 0xB1 && buffer[6] === 0x1A && buffer[7] === 0xE1
   ) {
+    if (lowerName.endsWith('.doc')) return 'application/msword';
     return 'application/vnd.ms-powerpoint';
   }
   if (
     buffer.length >= 4 &&
     buffer[0] === 0x50 && buffer[1] === 0x4B && buffer[2] === 0x03 && buffer[3] === 0x04
   ) {
+    if (lowerName.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
     return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
   }
   return null;
@@ -66,6 +74,13 @@ router.get('/assessment/:assessmentId/draft', requireRoles(['student']), async (
     return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are not actively enrolled in the class for this assessment' } });
   }
 
+  if (assessment.publishing_audience === 'selected') {
+    const isTargeted = await assRepo.isStudentTargeted(assessment.id, user.profile.id);
+    if (!isTargeted) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are not assigned to this targeted assessment' } });
+    }
+  }
+
   const draft = await subRepo.getDraftSubmission(assessmentId, user.profile.id);
   return res.status(200).json({ draft });
 });
@@ -86,6 +101,13 @@ router.put('/assessment/:assessmentId/draft', requireRoles(['student']), async (
     return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are not actively enrolled in the class for this assessment' } });
   }
 
+  if (assessment.publishing_audience === 'selected') {
+    const isTargeted = await assRepo.isStudentTargeted(assessment.id, user.profile.id);
+    if (!isTargeted) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are not assigned to this targeted assessment' } });
+    }
+  }
+
   const now = new Date();
   const deadline = new Date(assessment.deadline_at);
   const existingSub = await subRepo.getSubmissionByAssessmentAndStudent(assessment.id, user.profile.id);
@@ -96,7 +118,9 @@ router.put('/assessment/:assessmentId/draft', requireRoles(['student']), async (
   }
 
   const answers = Array.isArray(req.body.answers) ? req.body.answers : [];
-  const draft = await subRepo.saveDraftSubmission(assessmentId, user.profile.id, answers);
+  const quizAnswers = Array.isArray(req.body.quiz_answers) ? req.body.quiz_answers : [];
+  const sectionStatuses = typeof req.body.section_statuses === 'object' && req.body.section_statuses !== null ? req.body.section_statuses : {};
+  const draft = await subRepo.saveDraftSubmission(assessmentId, user.profile.id, answers, quizAnswers, sectionStatuses);
   return res.status(200).json({ success: true, draft });
 });
 
@@ -134,32 +158,74 @@ router.post('/', requireRoles(['student']), async (req: Request, res: Response) 
     });
   }
 
-  // 1. Validate Manual Questions Answering
-  const manualQuestions = fullAssessment.questions || [];
-  if (manualQuestions.length > 0) {
-    const unansweredQuestions = manualQuestions.filter((q: any) => {
-      const userAns = (answers || []).find((a: any) => a.question_id === q.id);
-      return !userAns || !userAns.answer_text || userAns.answer_text.trim().length === 0;
-    });
-
-    if (unansweredQuestions.length > 0) {
-      return res.status(400).json({
-        error: {
-          code: 'QUESTIONS_UNANSWERED',
-          message: `All manual questions must be answered before submitting (${unansweredQuestions.length} unanswered).`,
-          unanswered_question_ids: unansweredQuestions.map((q: any) => q.id)
-        }
+  if (fullAssessment.publishing_audience === 'selected') {
+    const isTargeted = await assRepo.isStudentTargeted(fullAssessment.id, user.profile.id);
+    if (!isTargeted) {
+      return res.status(403).json({
+        error: { code: 'FORBIDDEN', message: 'You are not assigned to this targeted assessment' }
       });
     }
-  } else {
-    // PDF-based assignment with no manual questions requires at least 1 file
-    if (!files || files.length === 0) {
+  }
+
+  const existingSubmission = await subRepo.getSubmissionByAssessmentAndStudent(fullAssessment.id, user.profile.id);
+  const isResubmission = Boolean(existingSubmission);
+
+  const types = fullAssessment.assessment_types && fullAssessment.assessment_types.length > 0
+    ? fullAssessment.assessment_types
+    : (fullAssessment.questions?.length > 0 ? ['manual_questions'] : ['file_based']);
+
+  // 1. Validate File-Based Submissions
+  if (types.includes('file_based')) {
+    const hasFiles = (files && files.length > 0) || (parseResult.data.keep_existing_files && isResubmission);
+    if (!hasFiles) {
       return res.status(400).json({
         error: {
           code: 'FILE_REQUIRED',
-          message: 'At least one answer file (PDF, PPT, or PPTX) must be uploaded for document-based assignments.'
+          message: 'At least one answer file (PDF, PPT, PPTX, DOC, or DOCX) must be uploaded for file-based assessment.'
         }
       });
+    }
+  }
+
+  // 2. Validate Manual Questions Answering
+  if (types.includes('manual_questions')) {
+    const manualQuestions = fullAssessment.questions || [];
+    if (manualQuestions.length > 0) {
+      const unansweredQuestions = manualQuestions.filter((q: any) => {
+        const userAns = (answers || []).find((a: any) => a.question_id === q.id);
+        return !userAns || !userAns.answer_text || userAns.answer_text.trim().length === 0;
+      });
+
+      if (unansweredQuestions.length > 0) {
+        return res.status(400).json({
+          error: {
+            code: 'QUESTIONS_UNANSWERED',
+            message: `All manual questions must be answered before submitting (${unansweredQuestions.length} unanswered).`,
+            unanswered_question_ids: unansweredQuestions.map((q: any) => q.id)
+          }
+        });
+      }
+    }
+  }
+
+  // 3. Validate Quiz Questions
+  if (types.includes('quiz')) {
+    const quizQuestions = fullAssessment.quiz_questions || [];
+    if (quizQuestions.length > 0) {
+      const unansweredQuiz = quizQuestions.filter((qq: any) => {
+        const userAns = (parseResult.data.quiz_answers || []).find((qa: any) => qa.quiz_question_id === qq.id);
+        return !userAns || !userAns.selected_option_id;
+      });
+
+      if (unansweredQuiz.length > 0) {
+        return res.status(400).json({
+          error: {
+            code: 'QUIZ_UNANSWERED',
+            message: `All quiz questions must be answered before submitting (${unansweredQuiz.length} unanswered).`,
+            unanswered_quiz_question_ids: unansweredQuiz.map((q: any) => q.id)
+          }
+        });
+      }
     }
   }
 
@@ -179,9 +245,6 @@ router.post('/', requireRoles(['student']), async (req: Request, res: Response) 
   const deadline = new Date(fullAssessment.deadline_at);
   const allowLate = Boolean(fullAssessment.allow_late);
   const extensionDeadline = fullAssessment.extension_deadline_at ? new Date(fullAssessment.extension_deadline_at) : null;
-
-  const existingSubmission = await subRepo.getSubmissionByAssessmentAndStudent(fullAssessment.id, user.profile.id);
-  const isResubmission = Boolean(existingSubmission);
 
   let lateStatus: 'on_time' | 'late' = 'on_time';
 
@@ -227,9 +290,9 @@ router.post('/', requireRoles(['student']), async (req: Request, res: Response) 
       const sizeBytes = fileBuffer.length;
       totalBytes += sizeBytes;
 
-      if (sizeBytes > 26214400) {
+      if (sizeBytes > 20971520) {
         return res.status(400).json({
-          error: { code: 'FILE_TOO_LARGE', message: `File ${item.file_name} exceeds 25 MB limit` }
+          error: { code: 'FILE_TOO_LARGE', message: `File ${item.file_name} exceeds 20 MB limit` }
         });
       }
 
@@ -238,7 +301,7 @@ router.post('/', requireRoles(['student']), async (req: Request, res: Response) 
         return res.status(400).json({
           error: {
             code: 'INVALID_FILE_TYPE',
-            message: `File ${item.file_name} is not an authentic PDF, PPT, or PPTX file binary signature.`
+            message: `File ${item.file_name} is not an authentic PDF, PPT, PPTX, DOC, or DOCX file binary signature.`
           }
         });
       }
@@ -253,9 +316,9 @@ router.post('/', requireRoles(['student']), async (req: Request, res: Response) 
       });
     }
 
-    if (totalBytes > 26214400) {
+    if (totalBytes > 20971520) {
       return res.status(400).json({
-        error: { code: 'TOTAL_SIZE_EXCEEDED', message: 'Combined submission size exceeds 25 MB' }
+        error: { code: 'TOTAL_SIZE_EXCEEDED', message: 'Combined submission size exceeds 20 MB' }
       });
     }
   } else if (parseResult.data.keep_existing_files && isResubmission && existingSubmission) {
@@ -269,6 +332,8 @@ router.post('/', requireRoles(['student']), async (req: Request, res: Response) 
     assessmentId: fullAssessment.id,
     studentId: user.profile.id,
     answers: answers || [],
+    quizAnswers: parseResult.data.quiz_answers || [],
+    sectionStatuses: parseResult.data.section_statuses || {},
     files: validatedFiles,
     serverTime: now,
     lateStatus
@@ -416,6 +481,12 @@ router.get('/assessment/:assessmentId', async (req: Request, res: Response) => {
   }
 
   if (user.roles.includes('student')) {
+    if (assessment.publishing_audience === 'selected') {
+      const isTargeted = await assRepo.isStudentTargeted(assessment.id, user.profile.id);
+      if (!isTargeted) {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are not assigned to this targeted assessment' } });
+      }
+    }
     const studentSub = await subRepo.getSubmissionByAssessmentAndStudent(assessment.id, user.profile.id);
     const full = studentSub ? await subRepo.getFullSubmission(studentSub.id) : null;
     return res.status(200).json({ submissions: full ? [full] : [] });

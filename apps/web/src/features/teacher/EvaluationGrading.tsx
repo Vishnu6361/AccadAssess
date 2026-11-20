@@ -78,7 +78,7 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
   const [isSavingEvaluation, setIsSavingEvaluation] = useState<boolean>(false);
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
   const [selectedEvalVersionId, setSelectedEvalVersionId] = useState<string | null>(null);
-  const [evalLeftTab, setEvalLeftTab] = useState<'answers' | 'files'>('answers');
+  const [evalLeftTab, setEvalLeftTab] = useState<'answers' | 'files' | 'quiz'>('answers');
 
   // File Preview in Evaluation Modal
   const [previewingFile, setPreviewingFile] = useState<SubmittedFileDTO | null>(null);
@@ -172,7 +172,17 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
       (row.answers && row.answers.length > 0) || 
       (row.versions && row.versions.some((v: any) => v.answers && v.answers.length > 0))
     );
-    setEvalLeftTab(hasAnswers ? 'answers' : 'files');
+    const hasQuiz = Boolean(
+      (currentAssessment?.quiz_questions && currentAssessment.quiz_questions.length > 0) ||
+      (row.versions && row.versions.some((v: any) => v.quiz_answers && v.quiz_answers.length > 0))
+    );
+    if (hasAnswers) {
+      setEvalLeftTab('answers');
+    } else if (hasQuiz) {
+      setEvalLeftTab('quiz');
+    } else {
+      setEvalLeftTab('files');
+    }
     setSelectedEvalVersionId(row.submission?.active_version_id || null);
 
     const questions = currentAssessment?.questions || [];
@@ -872,6 +882,13 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
                     storage_path: selectedVersion.storage_path
                   }] : []);
 
+              const displayedQuizAnswers: any[] = (selectedVersion?.quiz_answers && selectedVersion.quiz_answers.length > 0)
+                ? selectedVersion.quiz_answers
+                : ((activeStudentRow as any).quiz_answers || []);
+              const quizScore = selectedVersion?.quiz_score ?? (activeStudentRow as any).quiz_score ?? null;
+              const quizTotalMarks = selectedVersion?.quiz_total_marks ?? (activeStudentRow as any).quiz_total_marks ?? null;
+              const hasQuiz = Boolean((currentAssessment?.quiz_questions && currentAssessment.quiz_questions.length > 0) || displayedQuizAnswers.length > 0);
+
               return (
                 <div className="flex-1 overflow-y-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
                   {/* Left Column: Student Coursework (Answers & Files) (7 cols) */}
@@ -903,6 +920,21 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
                         <Layers className="w-3.5 h-3.5 mr-1.5" />
                         <span>Attached Files ({displayedFiles.length})</span>
                       </button>
+
+                      {hasQuiz && (
+                        <button
+                          type="button"
+                          onClick={() => setEvalLeftTab('quiz')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center transition-colors ${
+                            evalLeftTab === 'quiz'
+                              ? 'bg-academic-deepGreen text-white shadow-2xs'
+                              : 'bg-academic-paleGreen text-academic-deepGreen hover:bg-academic-paleGreen/70'
+                          }`}
+                        >
+                          <Award className="w-3.5 h-3.5 mr-1.5" />
+                          <span>Quiz Results {quizScore !== null ? `(${quizScore}/${quizTotalMarks || (currentAssessment?.quiz_questions || []).length})` : ''}</span>
+                        </button>
+                      )}
                     </div>
 
                     {/* Tab 1: Student Manual Question Answers */}
@@ -1066,6 +1098,119 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
                         </div>
                       </div>
                     )}
+
+                    {/* Tab 3: Student Quiz MCQ Answers & Score */}
+                    {evalLeftTab === 'quiz' && (
+                      <div className="space-y-4 flex flex-col flex-1 overflow-y-auto max-h-[600px] pr-1">
+                        {/* Quiz Score Banner */}
+                        <div className="p-4 rounded-lg bg-academic-paleGreen/40 border border-academic-primaryGreen/40 flex items-center justify-between gap-3">
+                          <div>
+                            <span className="text-[10px] uppercase font-bold tracking-wider text-academic-primaryGreen block">Auto-Calculated Quiz Score</span>
+                            <div className="text-xl font-bold font-mono text-academic-deepGreen mt-0.5">
+                              {quizScore !== null ? `${quizScore} / ${quizTotalMarks || (currentAssessment?.quiz_questions || []).length} Marks` : 'Awaiting Scoring'}
+                              {quizScore !== null && quizTotalMarks ? (
+                                <span className="text-xs font-normal text-academic-muted ml-2">
+                                  ({Math.round((quizScore / quizTotalMarks) * 100)}%)
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                          <span className="text-[10px] text-academic-deepGreen font-semibold bg-white/70 px-2.5 py-1 rounded border border-academic-border">
+                            {displayedQuizAnswers.length} of {(currentAssessment?.quiz_questions || []).length} answered
+                          </span>
+                        </div>
+
+                        {/* Quiz Questions Review */}
+                        <div className="space-y-3">
+                          {(currentAssessment?.quiz_questions || []).length === 0 ? (
+                            <div className="p-8 text-center text-xs text-academic-muted bg-academic-paleGreen/20 rounded-lg border border-academic-border">
+                              No quiz questions configured for this assessment.
+                            </div>
+                          ) : (
+                            (currentAssessment?.quiz_questions || []).map((qq: any, qIdx: number) => {
+                              const studentAns = displayedQuizAnswers.find((qa: any) => qa.quiz_question_id === qq.id);
+                              const isCorrect = studentAns && studentAns.selected_option_id === qq.correct_option_id;
+                              const isAnswered = Boolean(studentAns && studentAns.selected_option_id);
+
+                              return (
+                                <div key={qq.id || qIdx} className={`p-4 rounded-lg border bg-academic-surface space-y-3 ${
+                                  isCorrect ? 'border-academic-primaryGreen/40 bg-academic-lightGreen/10' : (isAnswered ? 'border-red-300 bg-red-50/10' : 'border-academic-border')
+                                }`}>
+                                  <div className="flex items-start justify-between gap-2 border-b border-academic-border/60 pb-2">
+                                    <div className="flex items-center space-x-2">
+                                      <span className="px-2 py-0.5 rounded bg-academic-deepGreen text-white text-[11px] font-bold font-mono">
+                                        Question {qq.display_order || qIdx + 1}
+                                      </span>
+                                      <span className="text-[10px] font-mono text-academic-muted font-bold">
+                                        ({qq.marks || 1} {Number(qq.marks || 1) === 1 ? 'mark' : 'marks'})
+                                      </span>
+                                    </div>
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center ${
+                                      isCorrect 
+                                        ? 'bg-academic-lightGreen text-academic-primaryGreen border border-academic-primaryGreen/30' 
+                                        : (isAnswered ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-gray-100 text-gray-600')
+                                    }`}>
+                                      {isCorrect ? '✓ Correct' : (isAnswered ? '✗ Incorrect' : 'Unanswered')}
+                                    </span>
+                                  </div>
+
+                                  <p className="text-xs font-semibold text-academic-deepGreen leading-relaxed">
+                                    {qq.question_text}
+                                  </p>
+
+                                  <div className="space-y-1.5 pt-1">
+                                    {(qq.options || []).map((opt: any, optIdx: number) => {
+                                      const optLabel = String.fromCharCode(65 + optIdx);
+                                      const isStudentChoice = studentAns?.selected_option_id === opt.id;
+                                      const isCorrectOpt = qq.correct_option_id === opt.id;
+
+                                      return (
+                                        <div
+                                          key={opt.id || optIdx}
+                                          className={`p-2.5 rounded border text-xs flex items-center justify-between transition-colors ${
+                                            isStudentChoice && isCorrectOpt
+                                              ? 'bg-academic-lightGreen/60 border-academic-primaryGreen text-academic-deepGreen font-semibold'
+                                              : isStudentChoice && !isCorrectOpt
+                                              ? 'bg-red-50 border-red-300 text-red-900 font-semibold'
+                                              : isCorrectOpt
+                                              ? 'bg-academic-lightGreen/30 border-academic-primaryGreen/50 text-academic-deepGreen font-medium'
+                                              : 'bg-academic-surface border-academic-border/70 text-academic-deepGreen'
+                                          }`}
+                                        >
+                                          <div className="flex items-center space-x-2">
+                                            <span className="font-mono font-bold text-academic-muted w-4">{optLabel}.</span>
+                                            <span>{opt.text}</span>
+                                          </div>
+                                          <div className="flex items-center space-x-1.5">
+                                            {isStudentChoice && (
+                                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${isCorrectOpt ? 'bg-academic-primaryGreen text-white' : 'bg-red-600 text-white'}`}>
+                                                Student Selection
+                                              </span>
+                                            )}
+                                            {isCorrectOpt && !isStudentChoice && (
+                                              <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-academic-primaryGreen/20 text-academic-primaryGreen border border-academic-primaryGreen/30">
+                                                Correct Answer
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {qq.explanation && (
+                                    <div className="p-2.5 rounded bg-academic-paleGreen/20 border border-academic-border/70 text-[11px] text-academic-deepGreen leading-relaxed">
+                                      <span className="font-bold text-academic-primaryGreen">Explanation: </span>
+                                      {qq.explanation}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Right Column: Rubric Criteria & Score Inputs (5 cols) */}
@@ -1096,11 +1241,29 @@ export const EvaluationGrading: React.FC<EvaluationGradingProps> = () => {
                   </div>
                 )}
 
+                {/* Assistive Quiz Score Reference */}
+                {quizScore !== null && (
+                  <div className="p-3 bg-academic-paleGreen/50 border border-academic-primaryGreen/40 rounded-lg space-y-1.5 text-xs">
+                    <div className="flex items-center justify-between font-bold text-academic-deepGreen">
+                      <span className="flex items-center">
+                        <Award className="w-3.5 h-3.5 mr-1.5 text-academic-primaryGreen" />
+                        Auto-Calculated Quiz Score:
+                      </span>
+                      <span className="font-mono text-academic-primaryGreen text-sm">
+                        {quizScore} / {quizTotalMarks || (currentAssessment?.quiz_questions || []).length}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-academic-muted leading-tight">
+                      Assistive calculation only. As subject teacher, review all coursework components and confirm the authoritative final marks.
+                    </p>
+                  </div>
+                )}
+
                 {/* Rubric Criteria Section */}
                 <div className="card-surface p-4 border border-academic-border rounded-lg space-y-4 flex-1">
                   <div className="flex items-center justify-between border-b border-academic-border/70 pb-2">
                     <h4 className="font-bold text-xs text-academic-deepGreen">
-                      {hasRubricCriteria ? 'Rubric Criteria Scoring' : 'Direct Score Award'}
+                      {hasRubricCriteria ? 'Rubric Criteria Scoring' : 'Authoritative Marks Entry'}
                     </h4>
                     <span className="text-[11px] font-mono text-academic-muted">
                       Max: {maxAssessmentMarks}

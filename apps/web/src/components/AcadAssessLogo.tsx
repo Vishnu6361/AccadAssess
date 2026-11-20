@@ -11,80 +11,67 @@ export interface AcadAssessLogoProps {
 /**
  * AcadAssess Official Institutional Brand Logo
  * 
- * Exact vector reproduction of the reference academic identity:
- * - Top: Wide mortarboard graduation cap in dark teal (#023730) with golden button and tassel (#C59B42).
- * - Center: Brilliant gold 5-point academic star (#C59B42) centered above the open book spine.
- * - Center Book: Two-tone open pages (Left page: Olive Green #708636, Right page: Dark Teal #023730).
- * - Framing: Majestic symmetrical laurel wreath branches flanking the emblem.
- * - Wordmark: "AcadAssess" (Acad in #023730, Assess in #708636) with tight, authoritative typography.
- * - Proportions: Pure vector viewBox, zero transparent padding, 100% responsive without distortion.
+ * Official SJB Institute of Technology (SJBIT) Institutional Identity:
+ * - Emblem: Official SJBIT Crest (transparent high-res vector/raster emblem)
+ * - Typography: "AcadAssess" alongside "SJB Institute of Technology"
+ * - Colors: SJBIT Royal Blue (#0A2B8E), Deep Navy (#011B6A), and Amber Gold (#FFBF00)
+ * - Proportions: Strictly preserved aspect ratio, zero stretching or distortion
  */
-
-// Shared SVG Vector Paths
-const PATHS = {
-  oliveEmblem: "M 294 308 L 294 310 L 300 316 L 311 322 L 317 323 L 325 322 L 331 320 L 335 317 L 328 310 L 322 306 L 316 304 L 304 304 Z M 444 305 L 459 306 L 475 310 L 451 302 L 447 302 L 448 304 Z M 418 300 L 428 301 L 434 300 Z M 344 271 L 336 281 L 334 288 L 335 301 L 342 311 L 346 306 L 350 296 L 350 285 Z M 271 272 L 273 277 L 279 285 L 290 292 L 302 293 L 311 290 L 303 279 L 292 272 L 289 271 L 274 271 Z M 331 245 L 322 253 L 317 264 L 318 279 L 321 286 L 324 287 L 332 278 L 336 266 L 335 254 Z M 256 226 L 257 232 L 261 241 L 270 251 L 282 256 L 291 256 L 291 253 L 286 241 L 278 232 L 268 227 Z M 320 214 L 314 217 L 306 225 L 302 234 L 302 249 L 305 256 L 310 253 L 317 246 L 322 235 L 322 220 Z M 646 185 L 636 185 L 635 283 L 615 281 L 598 281 L 579 283 L 567 286 L 542 297 L 530 306 L 524 313 L 530 308 L 543 301 L 554 297 L 574 293 L 600 292 L 619 294 L 641 299 L 646 299 Z M 371 185 L 371 299 L 405 293 L 418 292 L 443 293 L 462 297 L 470 300 L 484 307 L 494 315 L 489 309 L 477 299 L 463 291 L 449 286 L 420 281 L 403 281 L 389 283 L 380 282 L 380 185 Z M 318 178 L 306 183 L 298 191 L 295 197 L 293 206 L 294 216 L 307 210 L 314 202 L 318 191 Z M 255 176 L 256 188 L 261 200 L 269 208 L 275 211 L 281 212 L 281 199 L 275 186 L 267 179 L 258 175 Z M 389 171 L 389 272 L 425 271 L 438 273 L 459 279 L 479 289 L 491 298 L 503 312 L 503 268 L 501 259 L 492 238 L 479 218 L 462 200 L 449 190 L 437 183 L 417 175 L 398 171 Z M 326 144 L 316 145 L 307 149 L 299 157 L 295 165 L 294 175 L 303 174 L 312 170 L 321 160 L 325 151 Z M 267 127 L 266 131 L 266 148 L 268 154 L 271 159 L 281 168 L 285 168 L 286 158 L 287 157 L 285 144 L 281 137 L 275 131 Z M 314 102 L 309 105 L 300 114 L 295 125 L 294 135 L 296 142 L 296 147 L 289 163 L 284 191 L 285 217 L 288 234 L 293 250 L 305 276 L 314 290 L 325 304 L 339 318 L 345 322 L 343 319 L 347 319 L 325 297 L 307 271 L 295 243 L 291 229 L 288 211 L 288 180 L 290 167 L 296 147 L 309 137 L 316 125 L 317 121 L 317 104 L 316 102 Z",
-  darkEmblem: "M 723 309 L 719 306 L 712 304 L 701 304 L 691 308 L 682 318 L 688 321 L 696 323 L 705 322 L 715 317 Z M 745 272 L 742 271 L 724 272 L 717 276 L 710 283 L 707 291 L 713 293 L 722 293 L 729 291 L 739 283 Z M 673 271 L 667 282 L 666 293 L 668 301 L 671 307 L 675 310 L 680 304 L 683 291 L 680 280 Z M 686 245 L 683 250 L 681 257 L 681 269 L 686 280 L 695 286 L 699 275 L 699 263 L 695 254 Z M 760 226 L 748 227 L 738 232 L 730 241 L 724 256 L 738 255 L 746 251 L 755 241 L 758 235 Z M 697 214 L 694 221 L 694 234 L 701 248 L 712 256 L 715 243 L 713 230 L 707 221 Z M 662 199 L 653 199 L 652 308 L 646 308 L 618 302 L 615 303 L 610 301 L 600 300 L 571 301 L 556 304 L 548 307 L 551 308 L 557 306 L 572 305 L 596 306 L 616 309 L 637 314 L 661 317 Z M 355 199 L 355 317 L 374 315 L 413 307 L 439 306 L 439 304 L 443 305 L 447 304 L 444 301 L 442 301 L 445 302 L 439 303 L 434 301 L 430 302 L 406 301 L 376 306 L 370 308 L 364 307 L 364 199 Z M 699 178 L 698 191 L 701 200 L 708 209 L 716 214 L 723 216 L 723 203 L 720 194 L 711 184 Z M 761 175 L 756 176 L 747 181 L 739 190 L 736 197 L 735 213 L 747 208 L 755 201 L 759 194 L 761 187 L 762 179 Z M 628 171 L 617 171 L 606 173 L 589 178 L 580 182 L 559 195 L 540 213 L 532 223 L 524 236 L 514 259 L 512 267 L 512 313 L 514 309 L 532 292 L 557 279 L 578 273 L 592 271 L 628 272 Z M 690 144 L 694 157 L 702 168 L 713 174 L 723 175 L 720 161 L 717 156 L 710 149 L 701 145 Z M 424 136 L 424 168 L 430 169 L 447 177 L 460 186 L 472 197 L 498 191 L 516 191 L 543 197 L 553 187 L 566 178 L 580 171 L 590 168 L 590 136 L 571 143 L 564 147 L 509 170 L 503 169 L 474 156 Z M 750 127 L 742 131 L 736 137 L 732 144 L 730 154 L 732 169 L 738 167 L 746 159 L 749 154 L 752 141 Z M 719 116 L 709 105 L 702 102 L 700 112 L 702 127 L 708 137 L 721 147 L 727 170 L 728 212 L 724 234 L 712 265 L 701 284 L 688 301 L 673 316 L 663 324 L 644 323 L 611 316 L 575 312 L 551 313 L 536 316 L 525 320 L 515 327 L 510 329 L 502 328 L 492 321 L 479 316 L 465 313 L 452 312 L 426 313 L 366 324 L 354 324 L 346 317 L 346 319 L 344 319 L 344 322 L 353 329 L 353 338 L 373 336 L 398 330 L 427 325 L 467 324 L 482 327 L 486 329 L 492 336 L 500 340 L 515 340 L 523 336 L 531 328 L 541 325 L 563 323 L 596 326 L 644 336 L 663 338 L 664 328 L 674 321 L 692 303 L 708 281 L 721 255 L 728 234 L 732 209 L 732 186 L 728 164 L 721 147 L 721 142 L 723 136 L 723 127 Z M 368 104 L 421 127 L 426 128 L 438 134 L 443 135 L 505 162 L 509 162 L 571 135 L 576 134 L 598 124 L 622 115 L 622 109 L 620 108 L 592 108 L 538 105 L 515 105 L 510 109 L 504 109 L 499 104 L 499 98 L 503 93 L 509 92 L 516 98 L 623 101 L 627 102 L 630 105 L 630 112 L 649 104 L 625 93 L 608 87 L 509 45 L 504 46 L 464 64 Z",
-  goldAccents: "M 507 200 L 502 213 L 489 213 L 491 216 L 499 222 L 496 235 L 507 228 L 518 235 L 516 222 L 526 214 L 512 212 Z M 500 98 L 500 103 L 505 108 L 510 108 L 515 103 L 571 106 L 621 107 L 623 109 L 623 134 L 620 137 L 620 143 L 622 146 L 619 151 L 616 166 L 635 166 L 634 156 L 630 145 L 632 142 L 632 138 L 629 134 L 630 117 L 628 104 L 618 102 L 589 102 L 515 99 L 511 94 L 504 94 Z",
-  acadWordmark: "M 308 392 L 306 395 L 314 410 L 316 410 L 321 406 L 329 403 L 342 403 L 346 405 L 350 411 L 349 414 L 346 415 L 327 415 L 316 418 L 309 422 L 305 427 L 303 432 L 303 444 L 306 451 L 313 457 L 320 460 L 340 459 L 351 452 L 353 459 L 373 459 L 372 407 L 371 403 L 365 393 L 358 388 L 343 384 L 326 385 L 316 388 Z M 350 429 L 350 436 L 344 443 L 330 444 L 326 441 L 325 436 L 330 430 L 337 428 Z M 256 385 L 245 389 L 239 393 L 231 402 L 226 415 L 227 434 L 233 446 L 239 452 L 247 457 L 256 460 L 275 460 L 279 459 L 294 451 L 297 448 L 298 445 L 285 432 L 278 438 L 271 441 L 262 441 L 256 438 L 252 434 L 249 427 L 250 415 L 256 407 L 262 404 L 275 405 L 279 407 L 285 413 L 299 398 L 292 391 L 278 385 L 272 384 Z M 460 359 L 438 359 L 438 388 L 435 392 L 432 389 L 426 386 L 419 384 L 411 384 L 399 388 L 389 396 L 385 402 L 381 412 L 380 426 L 384 442 L 394 454 L 407 460 L 422 460 L 431 456 L 437 450 L 438 459 L 460 459 Z M 416 404 L 428 405 L 434 410 L 437 416 L 438 424 L 435 433 L 429 439 L 424 441 L 413 440 L 408 436 L 404 429 L 404 416 L 406 412 L 413 405 Z M 156 359 L 119 459 L 144 459 L 151 439 L 191 440 L 198 459 L 224 459 L 221 448 L 218 443 L 217 438 L 214 433 L 206 410 L 203 405 L 200 395 L 185 359 Z M 171 385 L 174 391 L 183 421 L 169 420 L 161 421 L 158 419 L 164 401 Z",
-  assessWordmark: "M 863 385 L 853 389 L 846 396 L 843 404 L 844 415 L 846 419 L 851 424 L 856 427 L 872 431 L 878 434 L 880 439 L 875 444 L 864 444 L 857 441 L 850 435 L 841 449 L 848 455 L 861 460 L 881 460 L 885 459 L 893 455 L 901 446 L 902 443 L 901 428 L 892 419 L 869 412 L 865 408 L 865 406 L 868 402 L 875 401 L 893 408 L 900 395 L 900 393 L 890 387 L 876 384 Z M 798 385 L 792 387 L 782 395 L 779 402 L 779 413 L 781 418 L 785 423 L 794 428 L 812 433 L 815 437 L 815 440 L 810 444 L 800 444 L 791 440 L 787 436 L 785 436 L 777 448 L 777 450 L 785 456 L 796 460 L 816 460 L 827 456 L 835 448 L 837 443 L 837 430 L 835 426 L 827 419 L 803 411 L 801 409 L 801 405 L 804 402 L 811 401 L 828 408 L 835 395 L 835 393 L 825 387 L 812 384 Z M 721 387 L 712 392 L 704 401 L 701 407 L 699 414 L 699 432 L 702 441 L 706 447 L 715 455 L 728 460 L 747 460 L 752 459 L 762 454 L 770 446 L 757 434 L 756 436 L 749 441 L 743 443 L 735 443 L 728 440 L 723 435 L 721 430 L 773 429 L 773 413 L 768 400 L 760 391 L 750 386 L 741 384 L 732 384 Z M 721 414 L 723 409 L 729 403 L 736 401 L 742 402 L 747 405 L 751 410 L 752 414 Z M 655 385 L 647 388 L 639 395 L 635 406 L 636 414 L 643 424 L 651 428 L 660 430 L 670 434 L 672 439 L 667 444 L 657 444 L 648 440 L 642 435 L 635 446 L 634 450 L 640 455 L 653 460 L 677 459 L 685 455 L 691 449 L 694 442 L 694 431 L 691 425 L 687 421 L 679 417 L 661 412 L 658 409 L 658 405 L 661 402 L 667 401 L 677 404 L 684 409 L 691 398 L 692 392 L 682 387 L 670 384 Z M 596 384 L 585 387 L 576 393 L 571 403 L 571 412 L 574 419 L 580 425 L 604 433 L 607 436 L 607 440 L 603 444 L 592 444 L 585 441 L 578 435 L 569 450 L 576 455 L 589 460 L 608 460 L 620 455 L 625 451 L 630 440 L 629 429 L 625 423 L 621 420 L 609 415 L 599 413 L 593 408 L 593 406 L 596 402 L 602 401 L 610 403 L 620 409 L 624 402 L 627 392 L 620 388 L 611 385 Z M 501 360 L 464 459 L 488 459 L 494 441 L 496 439 L 535 440 L 542 459 L 567 459 L 564 448 L 561 443 L 556 427 L 553 422 L 546 401 L 529 359 Z M 515 385 L 526 413 L 527 421 L 503 420 L 505 410 Z",
-};
 
 export const AcadAssessLogo: React.FC<AcadAssessLogoProps> = ({
   variant = 'full',
   size = 'md',
   className = '',
-  showSubtitle = false,
+  showSubtitle = true,
   withBackground = false
 }) => {
   // Sizing definitions ensuring responsive scaling and proper proportions
-  const dimensions = {
+  const sizeConfig = {
     sm: {
-      emblemOnly: 'w-10 h-auto max-w-[40px]',
-      fullLogo: 'w-full max-w-[190px] sm:max-w-[210px]',
-      compactEmblem: 'w-7 h-auto max-w-[28px]',
-      compactText: 'text-lg',
-      container: 'gap-1'
+      emblem: 'w-8 h-8 max-w-[32px] max-h-[32px]',
+      fullEmblem: 'w-14 h-14 max-w-[56px] max-h-[56px]',
+      titleText: 'text-xl',
+      instText: 'text-[10px]',
+      subText: 'text-[11px]',
+      gap: 'gap-1.5'
     },
     md: {
-      emblemOnly: 'w-20 h-auto sm:w-24 max-w-[96px]',
-      fullLogo: 'w-full max-w-[230px] sm:max-w-[250px]',
-      compactEmblem: 'w-8 h-auto max-w-[34px]',
-      compactText: 'text-xl sm:text-2xl',
-      container: 'gap-1.5'
+      emblem: 'w-9 h-9 sm:w-10 sm:h-10 max-w-[40px] max-h-[40px]',
+      fullEmblem: 'w-16 h-16 sm:w-20 sm:h-20 max-w-[80px] max-h-[80px]',
+      titleText: 'text-2xl sm:text-3xl',
+      instText: 'text-xs',
+      subText: 'text-xs',
+      gap: 'gap-2'
     },
     lg: {
-      emblemOnly: 'w-28 h-auto sm:w-32 max-w-[128px]',
-      fullLogo: 'w-full max-w-[300px] sm:max-w-[340px]',
-      compactEmblem: 'w-10 h-auto max-w-[42px]',
-      compactText: 'text-2xl sm:text-3xl',
-      container: 'gap-2.5'
+      emblem: 'w-12 h-12 max-w-[48px] max-h-[48px]',
+      fullEmblem: 'w-24 h-24 max-w-[96px] max-h-[96px]',
+      titleText: 'text-3xl sm:text-4xl',
+      instText: 'text-sm',
+      subText: 'text-sm',
+      gap: 'gap-2.5'
     },
     xl: {
-      emblemOnly: 'w-36 h-auto sm:w-44 max-w-[176px]',
-      fullLogo: 'w-full max-w-[380px] sm:max-w-[440px]',
-      compactEmblem: 'w-12 h-auto max-w-[50px]',
-      compactText: 'text-3xl sm:text-4xl',
-      container: 'gap-3'
+      emblem: 'w-16 h-16 max-w-[64px] max-h-[64px]',
+      fullEmblem: 'w-28 h-28 sm:w-32 sm:h-32 max-w-[128px] max-h-[128px]',
+      titleText: 'text-4xl sm:text-5xl',
+      instText: 'text-base',
+      subText: 'text-base',
+      gap: 'gap-3'
     }
   }[size];
 
   // ---------------------------------------------------------------------------
-  // 1. EMBLEM GRAPHIC COMPONENT (viewBox: 250 35 520 315)
+  // 1. EMBLEM IMAGE (Official SJBIT Crest)
   // ---------------------------------------------------------------------------
-  const EmblemSvg: React.FC<{ svgClass?: string }> = ({ svgClass = '' }) => (
-    <svg
-      viewBox="250 35 520 315"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className={svgClass ? `${svgClass} flex-shrink-0 drop-shadow-sm` : 'flex-shrink-0 drop-shadow-sm'}
-      preserveAspectRatio="xMidYMid meet"
-      style={{ width: '100%', height: 'auto', objectFit: 'contain' }}
-      aria-hidden="true"
-    >
-      <path d={PATHS.oliveEmblem} fill="#708636" fillRule="evenodd" />
-      <path d={PATHS.darkEmblem} fill="#023730" fillRule="evenodd" />
-      <path d={PATHS.goldAccents} fill="#C59B42" fillRule="evenodd" />
-    </svg>
+  const EmblemImage: React.FC<{ imgClass?: string }> = ({ imgClass = '' }) => (
+    <img
+      src="/sjbit-emblem.png"
+      alt="SJB Institute of Technology Emblem"
+      className={`${imgClass} object-contain flex-shrink-0 drop-shadow-xs`}
+      loading="eager"
+      decoding="async"
+    />
   );
 
   // ---------------------------------------------------------------------------
@@ -92,14 +79,14 @@ export const AcadAssessLogo: React.FC<AcadAssessLogoProps> = ({
   // ---------------------------------------------------------------------------
   const Wordmark: React.FC<{ textClass?: string }> = ({ textClass = '' }) => (
     <span
-      className={`font-extrabold tracking-tight select-none inline-flex items-baseline ${textClass}`}
+      className={`font-black tracking-tight select-none inline-flex items-baseline ${textClass}`}
       style={{
         fontFamily: "'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
         letterSpacing: '-0.035em'
       }}
     >
-      <span className="text-[#023730]">Acad</span>
-      <span className="text-[#708636]">Assess</span>
+      <span className="text-[#011B6A]">Acad</span>
+      <span className="text-[#0A2B8E]">Assess</span>
     </span>
   );
 
@@ -109,7 +96,7 @@ export const AcadAssessLogo: React.FC<AcadAssessLogoProps> = ({
   if (variant === 'emblem') {
     return (
       <div className={`inline-flex items-center justify-center ${className}`}>
-        <EmblemSvg svgClass={dimensions.emblemOnly} />
+        <EmblemImage imgClass={sizeConfig.fullEmblem} />
       </div>
     );
   }
@@ -120,7 +107,7 @@ export const AcadAssessLogo: React.FC<AcadAssessLogoProps> = ({
   if (variant === 'wordmark') {
     return (
       <div className={`inline-flex items-center ${className}`}>
-        <Wordmark textClass={dimensions.compactText} />
+        <Wordmark textClass={sizeConfig.titleText} />
       </div>
     );
   }
@@ -132,55 +119,48 @@ export const AcadAssessLogo: React.FC<AcadAssessLogoProps> = ({
     return (
       <div className={`inline-flex items-center gap-2.5 ${className}`}>
         <div className="flex-shrink-0 flex items-center justify-center">
-          <EmblemSvg svgClass={dimensions.compactEmblem} />
+          <EmblemImage imgClass={sizeConfig.emblem} />
         </div>
         <div className="flex flex-col leading-none">
-          <Wordmark textClass={dimensions.compactText} />
-          {showSubtitle && (
-            <span className="text-[10px] text-academic-muted font-medium mt-0.5 tracking-tight truncate">
-              Academic Portal
-            </span>
-          )}
+          <Wordmark textClass="text-lg sm:text-xl" />
+          <span className="text-[10px] text-academic-muted font-medium mt-0.5 tracking-tight truncate max-w-[170px] sm:max-w-[220px]">
+            SJB Institute of Technology
+          </span>
         </div>
       </div>
     );
   }
 
   // ---------------------------------------------------------------------------
-  // VARIANT 4: FULL VERTICAL LOGO (Portal Selection & Login Screens)
-  // Unified single SVG ensures exact mathematical proportions, zero stretching/cropping
+  // VARIANT 4: FULL VERTICAL/CENTRAL LOGO (Portal Selection & Login Screens)
+  // Displays the official SJBIT Crest with institution name and AcadAssess branding
   // ---------------------------------------------------------------------------
   const backgroundWrapperClasses = withBackground
-    ? 'bg-[#FAF8F3] border border-[#E2DDD1] rounded-2xl shadow-[0_4px_24px_-4px_rgba(27,77,62,0.06)] p-6'
+    ? 'bg-white border border-academic-border rounded-2xl shadow-academicCard p-6'
     : '';
 
   return (
-    <div className={`flex flex-col items-center text-center ${dimensions.container} ${backgroundWrapperClasses} ${className}`}>
-      <svg
-        viewBox="105 35 810 435"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-        className={`${dimensions.fullLogo} h-auto flex-shrink-0 drop-shadow-sm`}
-        preserveAspectRatio="xMidYMid meet"
-        style={{ width: '100%', height: 'auto', objectFit: 'contain' }}
-        role="img"
-        aria-label="AcadAssess Official Logo"
-      >
-        {/* Olive Emblem (Left Laurel & Left Page) */}
-        <path d={PATHS.oliveEmblem} fill="#708636" fillRule="evenodd" />
-        {/* Dark Emblem (Mortarboard Cap, Right Laurel, Right Page, Spine) */}
-        <path d={PATHS.darkEmblem} fill="#023730" fillRule="evenodd" />
-        {/* Gold Accents (Star, Tassel, Button) */}
-        <path d={PATHS.goldAccents} fill="#C59B42" fillRule="evenodd" />
-        {/* Acad Wordmark */}
-        <path d={PATHS.acadWordmark} fill="#023730" fillRule="evenodd" />
-        {/* Assess Wordmark */}
-        <path d={PATHS.assessWordmark} fill="#708636" fillRule="evenodd" />
-      </svg>
+    <div className={`flex flex-col items-center text-center ${sizeConfig.gap} ${backgroundWrapperClasses} ${className}`}>
+      {/* Official SJBIT Emblem Crest */}
+      <div className="flex items-center justify-center mb-1">
+        <EmblemImage imgClass={sizeConfig.fullEmblem} />
+      </div>
 
+      {/* Institutional Affiliation Header */}
+      <div className="flex flex-col items-center">
+        <span className={`font-semibold tracking-wider uppercase text-academic-deepGreen ${sizeConfig.instText}`}>
+          SJB Institute of Technology
+        </span>
+        <div className="w-12 h-0.5 bg-[#FFBF00] rounded-full my-1" />
+      </div>
+
+      {/* Main AcadAssess Brand Wordmark */}
+      <Wordmark textClass={sizeConfig.titleText} />
+
+      {/* Academic Assessment Management Portal Subtitle */}
       {showSubtitle && (
-        <p className="text-xs text-[#2D5A3F] font-semibold mt-1 tracking-tight">
-          Academic Portal
+        <p className={`text-academic-muted font-medium tracking-tight ${sizeConfig.subText}`}>
+          Academic Assessment Management Portal
         </p>
       )}
     </div>

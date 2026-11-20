@@ -5,6 +5,7 @@ import {
   CreateQuestionRequestSchema,
   UpdateQuestionRequestSchema,
   SaveRubricRequestSchema,
+  PublishAssessmentRequestSchema,
   formatClassName
 } from '@smartfa/contracts';
 import { logAuditEvent } from '../audit/auditService.js';
@@ -237,6 +238,15 @@ router.get('/:id', async (req: Request, res: Response) => {
         error: { code: 'FORBIDDEN', message: 'You are not enrolled in the class for this assessment' }
       });
     }
+
+    if (assessment.publishing_audience === 'selected') {
+      const isTargeted = await repo.isStudentTargeted(assessment.id, user.profile.id);
+      if (!isTargeted) {
+        return res.status(403).json({
+          error: { code: 'FORBIDDEN', message: 'You are not assigned to this targeted assessment' }
+        });
+      }
+    }
   } else if (user.roles.includes('subject_teacher')) {
     const isAuth = await repo.isAuthorizedTeacher(user.profile.id, assessment.class_subject_id);
     if (!isAuth) {
@@ -269,7 +279,17 @@ router.get('/:id', async (req: Request, res: Response) => {
     }
   }
 
-  return res.status(200).json({ assessment });
+  let responseAssessment = { ...assessment };
+  if (user.roles.includes('student')) {
+    if (responseAssessment.quiz_questions && Array.isArray(responseAssessment.quiz_questions)) {
+      responseAssessment.quiz_questions = responseAssessment.quiz_questions.map((q: any) => {
+        const { correct_option_id, ...safeQuestion } = q;
+        return safeQuestion;
+      });
+    }
+  }
+
+  return res.status(200).json({ assessment: responseAssessment });
 });
 
 router.get('/:id/document', async (req: Request, res: Response) => {
@@ -283,7 +303,8 @@ router.get('/:id/document', async (req: Request, res: Response) => {
     });
   }
 
-  if (!assessment.document_storage_key) {
+  const storageKey = assessment.document_storage_key || (assessment.instruction_files && assessment.instruction_files[0]?.storage_path);
+  if (!storageKey) {
     return res.status(404).json({
       error: { code: 'DOCUMENT_NOT_FOUND', message: 'No document attached to this assessment' }
     });
@@ -317,6 +338,14 @@ router.get('/:id/document', async (req: Request, res: Response) => {
         error: { code: 'FORBIDDEN', message: 'Only enrolled students may access the assignment brief' }
       });
     }
+    if (assessment.publishing_audience === 'selected') {
+      const isTargeted = await repo.isStudentTargeted(assessment.id, user.profile.id);
+      if (!isTargeted) {
+        return res.status(403).json({
+          error: { code: 'FORBIDDEN', message: 'You are not assigned to this targeted assessment' }
+        });
+      }
+    }
   } else if (user.roles.includes('proctor')) {
     const academicRepo = getAcademicRepository();
     const mentees = await academicRepo.listProctorAssignmentsByProctor(user.profile.id);
@@ -339,7 +368,7 @@ router.get('/:id/document', async (req: Request, res: Response) => {
     });
   }
 
-  const doc = await repo.getDocumentBlob(assessment.document_storage_key);
+  const doc = await repo.getDocumentBlob(storageKey);
   if (!doc) {
     return res.status(404).json({
       error: { code: 'DOCUMENT_BYTES_NOT_FOUND', message: 'Document binary not found in storage' }
@@ -365,7 +394,8 @@ router.get('/:id/document-url', async (req: Request, res: Response) => {
     });
   }
 
-  if (!assessment.document_storage_key) {
+  const storageKey = assessment.document_storage_key || (assessment.instruction_files && assessment.instruction_files[0]?.storage_path);
+  if (!storageKey) {
     return res.status(404).json({
       error: { code: 'DOCUMENT_NOT_FOUND', message: 'No document attached to this assessment' }
     });
@@ -399,6 +429,14 @@ router.get('/:id/document-url', async (req: Request, res: Response) => {
         error: { code: 'FORBIDDEN', message: 'Only enrolled students may access the assignment brief' }
       });
     }
+    if (assessment.publishing_audience === 'selected') {
+      const isTargeted = await repo.isStudentTargeted(assessment.id, user.profile.id);
+      if (!isTargeted) {
+        return res.status(403).json({
+          error: { code: 'FORBIDDEN', message: 'You are not assigned to this targeted assessment' }
+        });
+      }
+    }
   } else if (user.roles.includes('proctor')) {
     const academicRepo = getAcademicRepository();
     const mentees = await academicRepo.listProctorAssignmentsByProctor(user.profile.id);
@@ -421,11 +459,11 @@ router.get('/:id/document-url', async (req: Request, res: Response) => {
     });
   }
 
-  const signedUrl = repo.getSignedDocumentUrl ? await repo.getSignedDocumentUrl(assessment.document_storage_key) : null;
+  const signedUrl = repo.getSignedDocumentUrl ? await repo.getSignedDocumentUrl(storageKey) : null;
   return res.status(200).json({
     document: {
-      storage_key: assessment.document_storage_key,
-      filename: assessment.document_filename,
+      storage_key: storageKey,
+      filename: assessment.document_filename || (assessment.instruction_files && assessment.instruction_files[0]?.file_name),
       size_bytes: assessment.document_size_bytes,
       mime_type: assessment.document_mime_type,
       signed_url: signedUrl,
@@ -941,6 +979,36 @@ router.post('/:id/questions/:questionId/rubric', requireRoles(['subject_teacher'
   return res.status(201).json({ rubric });
 });
 
+router.get('/:id/eligible-students', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
+  const user = req.userContext!;
+  const repo = getAssessmentRepository();
+  const assessment = await repo.getAssessmentById(req.params.id);
+
+  if (!assessment) {
+    return res.status(404).json({
+      error: { code: 'NOT_FOUND', message: 'Assessment not found' }
+    });
+  }
+
+  if (!user.isHOD) {
+    const isAuth = await repo.isAuthorizedTeacher(user.profile.id, assessment.class_subject_id);
+    if (!isAuth) {
+      return res.status(403).json({
+        error: { code: 'FORBIDDEN', message: 'Unauthorized teacher for this assessment' }
+      });
+    }
+  }
+
+  try {
+    const students = await repo.listEligibleStudents(assessment.class_subject_id);
+    return res.status(200).json({ students });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: { code: 'INTERNAL_SERVER_ERROR', message: err.message || 'Failed to list eligible students' }
+    });
+  }
+});
+
 router.post('/:id/publish', requireRoles(['subject_teacher', 'hod']), async (req: Request, res: Response) => {
   const user = req.userContext!;
   const repo = getAssessmentRepository();
@@ -961,9 +1029,25 @@ router.post('/:id/publish', requireRoles(['subject_teacher', 'hod']), async (req
     }
   }
 
+  let audience: 'all' | 'selected' = 'all';
+  let studentIds: string[] = [];
+  if (req.body && Object.keys(req.body).length > 0) {
+    const parseResult = PublishAssessmentRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      const formattedErrors = parseResult.error.errors
+        .map(e => `${e.path.join('.') || 'payload'}: ${e.message}`)
+        .join('; ');
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: formattedErrors, details: parseResult.error.errors }
+      });
+    }
+    audience = parseResult.data.audience;
+    studentIds = parseResult.data.student_ids || [];
+  }
+
   let published: any;
   try {
-    published = await repo.publishAssessment(assessment.id, user.profile.id);
+    published = await repo.publishAssessment(assessment.id, user.profile.id, audience, studentIds);
   } catch (err: any) {
     const msg = err.message || '';
     if (msg.includes('rubric') && (msg.includes('missing') || msg.includes('configured') || msg.includes('zero criteria'))) {
@@ -974,6 +1058,11 @@ router.post('/:id/publish', requireRoles(['subject_teacher', 'hod']), async (req
     if (msg.includes('total') || msg.includes('does not equal') || msg.includes('mismatch')) {
       return res.status(422).json({
         error: { code: 'RUBRIC_TOTAL_MISMATCH', message: msg }
+      });
+    }
+    if (msg.includes('At least one student must be selected') || msg.includes('not eligible') || msg.includes('not actively enrolled') || msg.includes('does not belong to the required specialization')) {
+      return res.status(400).json({
+        error: { code: 'INVALID_AUDIENCE_SELECTION', message: msg }
       });
     }
     return res.status(400).json({

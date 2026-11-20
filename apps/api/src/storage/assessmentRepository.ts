@@ -53,7 +53,9 @@ export interface IAssessmentRepository {
   markAssessmentDeletionPending(assessmentId: string, callerId: string): Promise<void>;
   listAssessmentStorageKeys(assessmentId: string): Promise<string[]>;
   deleteAssessmentPermanent(assessmentId: string, callerId: string): Promise<AssessmentDeletionCounts>;
-  publishAssessment(id: string, publishedBy: string): Promise<Assessment>;
+  publishAssessment(id: string, publishedBy: string, audience?: 'all' | 'selected', studentIds?: string[]): Promise<Assessment>;
+  isStudentTargeted(assessmentId: string, studentId: string): Promise<boolean>;
+  listEligibleStudents(classSubjectId: string): Promise<any[]>;
   getNextAssessmentSequence(classSubjectId: string): Promise<{ sequence_number: number; title: string; short_label: string }>;
   createQuestion(assessmentId: string, data: any): Promise<Question>;
   updateQuestion(questionId: string, data: any): Promise<Question>;
@@ -119,11 +121,24 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
     const cls = cs ? this.inMemoryDb.classes.find(c => c.id === cs.class_id) : null;
     const sub = cs ? this.inMemoryDb.subjects.find(s => s.id === cs.subject_id) : null;
 
+    const quizQuestions = (this.inMemoryDb.quiz_questions || [])
+      .filter(q => q.assessment_id === assessment.id)
+      .sort((a, b) => a.display_order - b.display_order);
+
+    const audience = assessment.publishing_audience || 'all';
+    const targetedStudents = (this.inMemoryDb.assessment_student_targets || [])
+      .filter(t => t.assessment_id === assessment.id)
+      .map(t => t.student_id);
+
     return {
       ...assessment,
+      publishing_audience: audience,
+      assigned_student_count: audience === 'selected' ? targetedStudents.length : undefined,
+      assigned_student_ids: audience === 'selected' ? targetedStudents : undefined,
       class_details: cls ? formatClassName(cls) : 'Unknown Class',
       subject_details: sub ? `${sub.code} - ${sub.name}` : 'Unknown Subject',
       questions,
+      quiz_questions: quizQuestions,
       rubric: fullRubric
     };
   }
@@ -220,7 +235,15 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
           return true;
         })
         .map(cs => cs.id);
-      list = this.inMemoryDb.assessments.filter(a => a.status === 'published' && studentCS.includes(a.class_subject_id));
+      list = this.inMemoryDb.assessments.filter(a => {
+        if (a.status !== 'published' || !studentCS.includes(a.class_subject_id)) return false;
+        if (a.publishing_audience === 'selected') {
+          return (this.inMemoryDb.assessment_student_targets || []).some(
+            t => t.assessment_id === a.id && t.student_id === user.profile.id
+          );
+        }
+        return true;
+      });
     } else {
       list = [];
     }
@@ -278,11 +301,13 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
       instructions: data.instructions,
       deadline_at: data.deadline_at,
       status: 'draft',
+      publishing_audience: (data as any).publishing_audience || 'all',
       created_by: createdBy,
       published_at: null,
       published_by: null,
       version: 1,
       questions: [],
+      quiz_questions: [],
       document_storage_key: storageKey,
       document_filename: data.document_filename || null,
       document_size_bytes: data.document_size_bytes || null,
@@ -293,6 +318,8 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
       late_penalty_mode: data.late_penalty_mode || 'none',
       late_penalty_marks: data.late_penalty_marks || 0,
       max_marks: data.max_marks || 100,
+      assessment_types: data.assessment_types && data.assessment_types.length > 0 ? data.assessment_types : ['file_based'],
+      instruction_files: data.instruction_files || [],
       idempotency_key: data.idempotency_key || null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -352,6 +379,12 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
         late_penalty_mode: data.late_penalty_mode || 'none',
         late_penalty_marks: data.late_penalty_marks || 0,
         max_marks: 50,
+        document_storage_key: data.document_storage_key !== undefined ? data.document_storage_key : this.inMemoryDb.assessments[idx].document_storage_key,
+        document_filename: data.document_filename !== undefined ? data.document_filename : this.inMemoryDb.assessments[idx].document_filename,
+        document_size_bytes: data.document_size_bytes !== undefined ? data.document_size_bytes : this.inMemoryDb.assessments[idx].document_size_bytes,
+        document_mime_type: data.document_mime_type !== undefined ? data.document_mime_type : this.inMemoryDb.assessments[idx].document_mime_type,
+        assessment_types: data.assessment_types && data.assessment_types.length > 0 ? data.assessment_types : (this.inMemoryDb.assessments[idx].assessment_types || ['file_based']),
+        instruction_files: data.instruction_files !== undefined ? data.instruction_files : (this.inMemoryDb.assessments[idx].instruction_files || []),
         updated_at: nowIso
       };
       ass = this.inMemoryDb.assessments[idx];
@@ -364,11 +397,13 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
         instructions: data.instructions,
         deadline_at: data.deadline_at,
         status: 'draft',
+        publishing_audience: data.publishing_audience || 'all',
         created_by: callerId,
         published_at: null,
         published_by: null,
         version: 1,
         questions: [],
+        quiz_questions: [],
         document_storage_key: data.document_storage_key || null,
         document_filename: data.document_filename || null,
         document_size_bytes: data.document_size_bytes || null,
@@ -379,6 +414,8 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
         late_penalty_mode: data.late_penalty_mode || 'none',
         late_penalty_marks: data.late_penalty_marks || 0,
         max_marks: 50,
+        assessment_types: data.assessment_types && data.assessment_types.length > 0 ? data.assessment_types : ['file_based'],
+        instruction_files: data.instruction_files || [],
         idempotency_key: data.idempotency_key || null,
         created_at: nowIso,
         updated_at: nowIso
@@ -473,6 +510,42 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
       }
       this.inMemoryDb.rubricCriteria = this.inMemoryDb.rubricCriteria.filter(
         c => c.rubric_version_id !== activeRv.id || remainingCIds.includes(c.id)
+      );
+    }
+
+    if (data.quiz_questions !== undefined) {
+      if (!this.inMemoryDb.quiz_questions) this.inMemoryDb.quiz_questions = [];
+      const remainingQuizIds: string[] = [];
+      for (let qIdx = 0; qIdx < data.quiz_questions.length; qIdx++) {
+        const qq = data.quiz_questions[qIdx];
+        const qId = qq.id || randomUUID();
+        remainingQuizIds.push(qId);
+        const existingIdx = this.inMemoryDb.quiz_questions.findIndex(q => q.id === qId);
+        if (existingIdx !== -1) {
+          this.inMemoryDb.quiz_questions[existingIdx] = {
+            ...this.inMemoryDb.quiz_questions[existingIdx],
+            question_text: qq.question_text,
+            options: qq.options,
+            correct_option_id: qq.correct_option_id,
+            display_order: qq.display_order || (qIdx + 1),
+            marks: Number(qq.marks || 1),
+            explanation: qq.explanation || null
+          };
+        } else {
+          this.inMemoryDb.quiz_questions.push({
+            id: qId,
+            assessment_id: ass.id,
+            question_text: qq.question_text,
+            options: qq.options,
+            correct_option_id: qq.correct_option_id,
+            display_order: qq.display_order || (qIdx + 1),
+            marks: Number(qq.marks || 1),
+            explanation: qq.explanation || null
+          });
+        }
+      }
+      this.inMemoryDb.quiz_questions = this.inMemoryDb.quiz_questions.filter(
+        q => q.assessment_id !== ass.id || remainingQuizIds.includes(q.id)
       );
     }
 
@@ -664,7 +737,12 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
     return summary.counts;
   }
 
-  async publishAssessment(id: string, publishedBy: string): Promise<Assessment> {
+  async publishAssessment(
+    id: string,
+    publishedBy: string,
+    audience: 'all' | 'selected' = 'all',
+    studentIds: string[] = []
+  ): Promise<Assessment> {
     const idx = this.inMemoryDb.assessments.findIndex(a => a.id === id);
     if (idx === -1) throw new Error('Assessment not found');
     const ass = this.inMemoryDb.assessments[idx];
@@ -672,11 +750,69 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
       throw new Error(`Cannot publish assessment: status is ${ass.status}`);
     }
 
+    if (audience === 'selected') {
+      if (!studentIds || studentIds.length === 0) {
+        throw new Error('Cannot publish assessment: At least one student must be selected when publishing to specific students');
+      }
+
+      const cs = this.inMemoryDb.classSubjects.find(c => c.id === ass.class_subject_id);
+      if (!cs) throw new Error('Class subject not found for assessment');
+      const sub = this.inMemoryDb.subjects.find(s => s.id === cs.subject_id);
+      const subSpecId = (sub as any)?.specialization_id || this.inMemoryDb.subject_specializations.find(ss => ss.subject_id === cs.subject_id)?.specialization_id;
+
+      for (const sId of studentIds) {
+        const enr = this.inMemoryDb.enrollments.find(e => e.student_id === sId && e.class_id === cs.class_id && e.status === 'active');
+        if (!enr) {
+          throw new Error(`Cannot publish assessment: Student ${sId} is not actively enrolled in this class`);
+        }
+        if (subSpecId && enr.specialization_id && enr.specialization_id !== subSpecId) {
+          throw new Error(`Cannot publish assessment: Student ${sId} does not belong to the required specialization stream`);
+        }
+      }
+    }
+
+    const types = (ass.assessment_types && ass.assessment_types.length > 0) ? ass.assessment_types : ['file_based'];
     const rv = this.inMemoryDb.rubricVersions.find(r => r.assessment_id === id);
     const questions = this.inMemoryDb.questions.filter(q => q.assessment_id === id);
+    const quizQuestions = (this.inMemoryDb.quiz_questions || []).filter(q => q.assessment_id === id);
 
-    if (rv) {
-      // Assignment-level rubric workflow (must equal exactly 50 marks)
+    // 1. File-based validation
+    if (types.includes('file_based')) {
+      const hasFile = Boolean(ass.document_storage_key || (ass.instruction_files && ass.instruction_files.length > 0));
+      if (!hasFile) {
+        throw new Error('Cannot publish assessment: File-based assessment requires at least one instruction file or document');
+      }
+    }
+
+    // 2. Manual question validation
+    if (types.includes('manual_questions')) {
+      if (questions.length === 0) {
+        throw new Error('Cannot publish assessment: Manual question-based assessment requires at least one question');
+      }
+    }
+
+    // 3. Quiz validation
+    if (types.includes('quiz')) {
+      if (quizQuestions.length === 0) {
+        throw new Error('Cannot publish assessment: Quiz-based assessment requires at least one quiz question');
+      }
+      for (const qq of quizQuestions) {
+        if (!qq.options || qq.options.length !== 4) {
+          throw new Error(`Cannot publish assessment: Quiz question "${qq.question_text.slice(0, 30)}..." must have exactly 4 options`);
+        }
+        if (!qq.correct_option_id) {
+          throw new Error(`Cannot publish assessment: Quiz question "${qq.question_text.slice(0, 30)}..." must have a correct option selected`);
+        }
+      }
+    }
+
+    // 4. Rubric validation: strictly required if file_based or manual_questions is selected
+    const requiresRubric = types.includes('file_based') || types.includes('manual_questions');
+
+    if (requiresRubric) {
+      if (!rv) {
+        throw new Error('Cannot publish assessment: An assignment-level rubric of 50 marks must be configured for file-based or manual question assessments');
+      }
       const criteria = this.inMemoryDb.rubricCriteria.filter(c => c.rubric_version_id === rv.id);
       if (criteria.length === 0) {
         throw new Error('Cannot publish assessment: Rubric contains zero criteria');
@@ -687,43 +823,74 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
         throw new Error(`Cannot publish assessment: Rubric criteria sum (${totalMarks}) must equal exactly 50.00 marks`);
       }
 
-      const nowIso = new Date().toISOString();
-      rv.frozen_at = nowIso;
-      ass.status = 'published';
-      ass.published_at = nowIso;
-      ass.published_by = publishedBy;
-      ass.max_marks = 50;
-      ass.updated_at = nowIso;
-      return ass;
-    }
-
-    // Fallback: Legacy Question-level rubrics workflow
-    if (questions.length === 0) {
-      throw new Error('Cannot publish assessment: An assignment-level rubric or questions with rubrics must be configured before publication');
-    }
-
-    for (const q of questions) {
-      const qRv = this.inMemoryDb.rubricVersions.find(r => r.question_id === q.id);
-      if (!qRv) {
-        throw new Error(`Cannot publish assessment: Question ${q.display_order} is missing a defined rubric`);
-      }
-      const criteria = this.inMemoryDb.rubricCriteria.filter(c => c.rubric_version_id === qRv.id);
-      const totalMarks = criteria.reduce((sum, c) => sum + Number(c.max_marks), 0);
-      if (Math.abs(totalMarks - Number(q.max_marks)) > 0.001) {
-        throw new Error(`Cannot publish assessment: Question ${q.display_order} rubric criteria sum (${totalMarks}) does not equal question marks (${q.max_marks})`);
-      }
+      rv.frozen_at = new Date().toISOString();
     }
 
     const nowIso = new Date().toISOString();
-    for (const q of questions) {
-      const qRv = this.inMemoryDb.rubricVersions.find(r => r.question_id === q.id);
-      if (qRv) qRv.frozen_at = nowIso;
-    }
     ass.status = 'published';
+    ass.publishing_audience = audience;
     ass.published_at = nowIso;
     ass.published_by = publishedBy;
+    ass.max_marks = 50;
     ass.updated_at = nowIso;
+
+    // Atomically manage targets
+    this.inMemoryDb.assessment_student_targets = (this.inMemoryDb.assessment_student_targets || []).filter(
+      t => t.assessment_id !== ass.id
+    );
+
+    if (audience === 'selected') {
+      for (const sId of studentIds) {
+        this.inMemoryDb.assessment_student_targets.push({
+          id: randomUUID(),
+          assessment_id: ass.id,
+          student_id: sId,
+          assigned_at: nowIso
+        });
+      }
+    }
+
     return ass;
+  }
+
+  async isStudentTargeted(assessmentId: string, studentId: string): Promise<boolean> {
+    const ass = this.inMemoryDb.assessments.find(a => a.id === assessmentId);
+    if (!ass) return false;
+    const audience = ass.publishing_audience || 'all';
+    if (audience === 'all') return true;
+    return (this.inMemoryDb.assessment_student_targets || []).some(
+      t => t.assessment_id === assessmentId && t.student_id === studentId
+    );
+  }
+
+  async listEligibleStudents(classSubjectId: string): Promise<any[]> {
+    const cs = this.inMemoryDb.classSubjects.find(c => c.id === classSubjectId);
+    if (!cs) return [];
+    const cls = this.inMemoryDb.classes.find(c => c.id === cs.class_id);
+    const sub = this.inMemoryDb.subjects.find(s => s.id === cs.subject_id);
+    const subSpecId = (sub as any)?.specialization_id || this.inMemoryDb.subject_specializations.find(ss => ss.subject_id === cs.subject_id)?.specialization_id;
+    const spec = subSpecId ? this.inMemoryDb.specializations.find(sp => sp.id === subSpecId) : null;
+
+    const enrollments = this.inMemoryDb.enrollments.filter(e => {
+      if (e.class_id !== cs.class_id || e.status !== 'active') return false;
+      if (subSpecId && e.specialization_id && e.specialization_id !== subSpecId) return false;
+      return true;
+    });
+
+    const students = enrollments.map(e => {
+      const p = this.inMemoryDb.profiles.find(prof => prof.id === e.student_id);
+      return {
+        student_id: e.student_id,
+        full_name: p?.full_name || 'Student',
+        usn: p?.usn || e.roll_number || '—',
+        email: p?.email || '',
+        class_name: cls ? formatClassName(cls) : 'Class',
+        specialization_code: spec?.code || null,
+        specialization_name: spec?.name || null
+      };
+    });
+
+    return students.sort((a, b) => (a.usn || '').localeCompare(b.usn || ''));
   }
 
   async deleteQuestion(questionId: string): Promise<void> {
@@ -888,8 +1055,8 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
     const assessment = await this.getAssessmentById(id);
     if (!assessment) return null;
 
-    // Parallel Round 1: Fetch questions, class_subject linkage, and assignment-level rubric version concurrently
-    const [questionsRes, csRes, assRubricVersionRes] = await Promise.all([
+    // Parallel Round 1: Fetch questions, class_subject linkage, assignment-level rubric version, and quiz questions concurrently
+    const [questionsRes, csRes, assRubricVersionRes, quizQuestionsRes] = await Promise.all([
       this.client
         .from('questions')
         .select('*')
@@ -904,7 +1071,12 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
         .from('rubric_versions')
         .select('*')
         .eq('assessment_id', id)
-        .maybeSingle()
+        .maybeSingle(),
+      this.client
+        .from('quiz_questions')
+        .select('*')
+        .eq('assessment_id', id)
+        .order('display_order', { ascending: true })
     ]);
 
     const questions = questionsRes.data || [];
@@ -968,11 +1140,31 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
       };
     }
 
+    const audience = (assessment as any).publishing_audience || 'all';
+    let assignedStudentCount: number | undefined = undefined;
+    let assignedStudentIds: string[] | undefined = undefined;
+
+    if (audience === 'selected') {
+      try {
+        const { data: targets } = await this.client
+          .from('assessment_student_targets')
+          .select('student_id')
+          .eq('assessment_id', id);
+        const sIds = (targets || []).map(t => t.student_id);
+        assignedStudentCount = sIds.length;
+        assignedStudentIds = sIds;
+      } catch {}
+    }
+
     return {
       ...assessment,
+      publishing_audience: audience,
+      assigned_student_count: assignedStudentCount,
+      assigned_student_ids: assignedStudentIds,
       class_details: classDetails,
       subject_details: subjectDetails,
       questions: questions.map(q => ({ ...q, rubric: null })),
+      quiz_questions: quizQuestionsRes.data || [],
       rubric: fullAssignmentRubric
     };
   }
@@ -1129,7 +1321,25 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
     const { data: assessments, error } = await query.order('created_at', { ascending: false });
     if (error) throw new Error(`Failed to list assessments: ${error.message}`);
 
-    const fullList = await Promise.all((assessments || []).map(a => this.getFullAssessment(a.id)));
+    let filteredAssessments = assessments || [];
+    if (user.roles.includes('student')) {
+      const targetedAssessments = filteredAssessments.filter(a => a.publishing_audience === 'selected');
+      if (targetedAssessments.length > 0) {
+        try {
+          const { data: myTargets } = await this.client
+            .from('assessment_student_targets')
+            .select('assessment_id')
+            .eq('student_id', user.profile.id)
+            .in('assessment_id', targetedAssessments.map(a => a.id));
+          const targetedSet = new Set((myTargets || []).map(t => t.assessment_id));
+          filteredAssessments = filteredAssessments.filter(a => 
+            a.publishing_audience !== 'selected' || targetedSet.has(a.id)
+          );
+        } catch {}
+      }
+    }
+
+    const fullList = await Promise.all(filteredAssessments.map(a => this.getFullAssessment(a.id)));
     return fullList.filter(Boolean);
   }
 
@@ -1230,6 +1440,8 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
       late_penalty_mode: data.late_penalty_mode || 'none',
       late_penalty_marks: data.late_penalty_marks || 0,
       max_marks: data.max_marks || 100,
+      assessment_types: data.assessment_types && data.assessment_types.length > 0 ? data.assessment_types : ['file_based'],
+      instruction_files: data.instruction_files || [],
       idempotency_key: data.idempotency_key || null
     };
 
@@ -1642,11 +1854,18 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
     return summary.counts;
   }
 
-  async publishAssessment(id: string, publishedBy: string): Promise<Assessment> {
+  async publishAssessment(
+    id: string,
+    publishedBy: string,
+    audience: 'all' | 'selected' = 'all',
+    studentIds: string[] = []
+  ): Promise<Assessment> {
     this.assertStagingProject();
     const { error } = await this.client.rpc('publish_assessment', {
       p_assessment_id: id,
-      p_published_by: publishedBy
+      p_published_by: publishedBy,
+      p_audience: audience,
+      p_student_ids: studentIds && studentIds.length > 0 ? studentIds : null
     });
 
     if (error) {
@@ -1655,6 +1874,84 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
 
     const full = await this.getFullAssessment(id);
     return full as Assessment;
+  }
+
+  async isStudentTargeted(assessmentId: string, studentId: string): Promise<boolean> {
+    this.assertStagingProject();
+    const { data: ass } = await this.client
+      .from('assessments')
+      .select('publishing_audience')
+      .eq('id', assessmentId)
+      .maybeSingle();
+    if (!ass) return false;
+    if (ass.publishing_audience !== 'selected') return true;
+    const { data: target } = await this.client
+      .from('assessment_student_targets')
+      .select('id')
+      .eq('assessment_id', assessmentId)
+      .eq('student_id', studentId)
+      .maybeSingle();
+    return Boolean(target);
+  }
+
+  async listEligibleStudents(classSubjectId: string): Promise<any[]> {
+    this.assertStagingProject();
+    const { data: cs } = await this.client
+      .from('class_subjects')
+      .select('id, class_id, subject_id, class:classes(programme, semester, section), subject:subjects(code, name, specialization_id)')
+      .eq('id', classSubjectId)
+      .maybeSingle();
+
+    if (!cs) return [];
+
+    let subSpecId = (cs as any)?.subject?.specialization_id;
+    if (!subSpecId) {
+      const { data: ss } = await this.client
+        .from('subject_specializations')
+        .select('specialization_id')
+        .eq('subject_id', cs.subject_id)
+        .maybeSingle();
+      if (ss?.specialization_id) subSpecId = ss.specialization_id;
+    }
+
+    let spec: any = null;
+    if (subSpecId) {
+      const { data: sp } = await this.client
+        .from('specializations')
+        .select('code, name')
+        .eq('id', subSpecId)
+        .maybeSingle();
+      spec = sp;
+    }
+
+    let query = this.client
+      .from('enrollments')
+      .select('id, student_id, roll_number, student:profiles(id, full_name, usn, email)')
+      .eq('class_id', cs.class_id)
+      .eq('status', 'active');
+
+    if (subSpecId) {
+      query = query.eq('specialization_id', subSpecId);
+    }
+
+    const { data: enrollments, error } = await query;
+    if (error) {
+      throw new Error(`Failed to list eligible students: ${error.message}`);
+    }
+
+    const className = (cs as any)?.class ? formatClassName((cs as any).class) : 'Class';
+
+    const students = (enrollments || []).map((e: any) => ({
+      student_id: e.student_id,
+      full_name: e.student?.full_name || 'Student',
+      usn: e.student?.usn || e.roll_number || '—',
+      email: e.student?.email || '',
+      class_name: className,
+      specialization_code: spec?.code || null,
+      specialization_name: spec?.name || null
+    }));
+
+    return students.sort((a: any, b: any) => (a.usn || '').localeCompare(b.usn || ''));
   }
 
   async saveDraftAssessmentAtomic(assessmentId: string | null, data: any, callerId: string): Promise<any> {
@@ -1697,6 +1994,22 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
       }
     }
 
+    const assessmentTypes = data.assessment_types && Array.isArray(data.assessment_types) && data.assessment_types.length > 0
+      ? data.assessment_types
+      : ['file_based'];
+
+    const quizQuestionsPayload = (data.quiz_questions || []).map((q: any, idx: number) => ({
+      id: q.id || null,
+      question_text: q.question_text || '',
+      options: q.options || [],
+      correct_option_id: q.correct_option_id || '',
+      display_order: q.display_order || (idx + 1),
+      marks: Number(q.marks || 1),
+      explanation: q.explanation || null
+    }));
+
+    const instructionFilesPayload = data.instruction_files || [];
+
     const { data: result, error } = await this.client.rpc('save_draft_assessment_atomic', {
       p_assessment_id: assessmentId || null,
       p_class_subject_id: data.class_subject_id,
@@ -1730,7 +2043,10 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
           display_order: c.display_order || (idx + 1),
           max_marks: Number(c.max_marks || c.max_score || 10)
         }))
-      } : null
+      } : null,
+      p_assessment_types: assessmentTypes,
+      p_quiz_questions: quizQuestionsPayload,
+      p_instruction_files: instructionFilesPayload
     });
 
     if (error) {
@@ -1752,6 +2068,9 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
             late_penalty_mode: data.late_penalty_mode || 'none',
             late_penalty_marks: data.late_penalty_marks || 0,
             max_marks: 50,
+            assessment_types: assessmentTypes,
+            quiz_questions: quizQuestionsPayload,
+            instruction_files: instructionFilesPayload,
             idempotency_key: data.idempotency_key || null,
             questions: []
           }, callerId);
@@ -1766,6 +2085,9 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
             late_penalty_mode: data.late_penalty_mode || 'none',
             late_penalty_marks: data.late_penalty_marks || 0,
             max_marks: 50,
+            assessment_types: assessmentTypes,
+            quiz_questions: quizQuestionsPayload,
+            instruction_files: instructionFilesPayload,
             idempotency_key: data.idempotency_key || null,
             questions: []
           });
@@ -1842,6 +2164,54 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
             }
           }
         }
+
+        // Reconcile quiz questions in fallback
+        if (data.quiz_questions !== undefined) {
+          const remainingQuizIds: string[] = [];
+          for (let qIdx = 0; qIdx < data.quiz_questions.length; qIdx++) {
+            const qq = data.quiz_questions[qIdx];
+            if (qq.id) {
+              remainingQuizIds.push(qq.id);
+              await this.client.from('quiz_questions').update({
+                question_text: qq.question_text,
+                options: qq.options,
+                correct_option_id: qq.correct_option_id,
+                display_order: qq.display_order || (qIdx + 1),
+                marks: Number(qq.marks || 1),
+                explanation: qq.explanation || null
+              }).eq('id', qq.id);
+            } else {
+              const newQId = randomUUID();
+              remainingQuizIds.push(newQId);
+              await this.client.from('quiz_questions').insert({
+                id: newQId,
+                assessment_id: effectiveAssessmentId,
+                question_text: qq.question_text,
+                options: qq.options,
+                correct_option_id: qq.correct_option_id,
+                display_order: qq.display_order || (qIdx + 1),
+                marks: Number(qq.marks || 1),
+                explanation: qq.explanation || null
+              });
+            }
+          }
+          if (remainingQuizIds.length > 0) {
+            await this.client.from('quiz_questions')
+              .delete()
+              .eq('assessment_id', effectiveAssessmentId)
+              .not('id', 'in', `(${remainingQuizIds.join(',')})`);
+          } else {
+            await this.client.from('quiz_questions')
+              .delete()
+              .eq('assessment_id', effectiveAssessmentId);
+          }
+        }
+
+        // Update assessment types & instruction files
+        await this.client.from('assessments').update({
+          assessment_types: assessmentTypes,
+          instruction_files: instructionFilesPayload
+        }).eq('id', effectiveAssessmentId);
 
         return this.getFullAssessment(effectiveAssessmentId);
       }

@@ -24,12 +24,14 @@ export interface ISubmissionRepository {
   getActiveVersion(submissionId: string): Promise<SubmissionVersion | null>;
   getSubmissionVersions(submissionId: string): Promise<SubmissionVersion[]>;
   getDraftSubmission(assessmentId: string, studentId: string): Promise<any | null>;
-  saveDraftSubmission(assessmentId: string, studentId: string, answers: any[]): Promise<any>;
+  saveDraftSubmission(assessmentId: string, studentId: string, answers: any[], quizAnswers?: any[], sectionStatuses?: any): Promise<any>;
   deleteDraftSubmission(assessmentId: string, studentId: string): Promise<void>;
   createOrUpdateSubmission(params: {
     assessmentId: string;
     studentId: string;
     answers?: Array<{ question_id: string; answer_text: string }>;
+    quizAnswers?: Array<{ quiz_question_id: string; selected_option_id: string }>;
+    sectionStatuses?: Record<string, string>;
     files: Array<any>;
     serverTime: Date;
     lateStatus: 'on_time' | 'late';
@@ -218,13 +220,15 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
     return draft ? { ...draft } : null;
   }
 
-  async saveDraftSubmission(assessmentId: string, studentId: string, answers: any[]): Promise<any> {
+  async saveDraftSubmission(assessmentId: string, studentId: string, answers: any[], quizAnswers?: any[], sectionStatuses?: any): Promise<any> {
     const nowIso = new Date().toISOString();
     let draft = this.inMemoryDb.studentSubmissionDrafts.find(
       d => d.assessment_id === assessmentId && d.student_id === studentId
     );
     if (draft) {
       draft.answers = answers;
+      draft.quiz_answers = quizAnswers || [];
+      draft.section_statuses = sectionStatuses || {};
       draft.updated_at = nowIso;
     } else {
       draft = {
@@ -232,6 +236,8 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
         assessment_id: assessmentId,
         student_id: studentId,
         answers,
+        quiz_answers: quizAnswers || [],
+        section_statuses: sectionStatuses || {},
         created_at: nowIso,
         updated_at: nowIso
       };
@@ -253,6 +259,8 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
     assessmentId: string;
     studentId: string;
     answers?: Array<{ question_id: string; answer_text: string }>;
+    quizAnswers?: Array<{ quiz_question_id: string; selected_option_id: string }>;
+    sectionStatuses?: Record<string, string>;
     files?: Array<any>;
     serverTime?: Date;
     lateStatus?: 'on_time' | 'late';
@@ -296,6 +304,21 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
     const primaryFile = uploadedFilesMeta.length > 0 ? uploadedFilesMeta[0] : null;
     const totalBytes = uploadedFilesMeta.reduce((sum, f) => sum + f.file_size_bytes, 0);
 
+    let quizScore: number | null = null;
+    let quizTotalMarks: number | null = null;
+    const quizQuestions = (this.inMemoryDb.quiz_questions || []).filter(q => q.assessment_id === params.assessmentId);
+    if (quizQuestions.length > 0) {
+      let scoreAcc = 0;
+      quizTotalMarks = quizQuestions.reduce((sum, q) => sum + Number(q.marks || 1), 0);
+      for (const userAns of (params.quizAnswers || [])) {
+        const q = quizQuestions.find(qq => qq.id === userAns.quiz_question_id);
+        if (q && q.correct_option_id === userAns.selected_option_id) {
+          scoreAcc += Number(q.marks || 1);
+        }
+      }
+      quizScore = scoreAcc;
+    }
+
     const submissionVersion: SubmissionVersion = {
       id: versionId,
       submission_id: submissionId,
@@ -309,6 +332,10 @@ export class InMemorySubmissionRepository implements ISubmissionRepository {
       superseded_at: null,
       files: uploadedFilesMeta,
       answers: params.answers || [],
+      quiz_answers: params.quizAnswers || [],
+      quiz_score: quizScore,
+      quiz_total_marks: quizTotalMarks,
+      section_statuses: params.sectionStatuses || {},
       late_status: lateStatus
     };
 
@@ -828,7 +855,7 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
     return data || null;
   }
 
-  async saveDraftSubmission(assessmentId: string, studentId: string, answers: any[]): Promise<any> {
+  async saveDraftSubmission(assessmentId: string, studentId: string, answers: any[], quizAnswers?: any[], sectionStatuses?: any): Promise<any> {
     const nowIso = new Date().toISOString();
     const { data, error } = await this.client
       .from('student_submission_drafts')
@@ -836,6 +863,8 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
         assessment_id: assessmentId,
         student_id: studentId,
         answers,
+        quiz_answers: quizAnswers || [],
+        section_statuses: sectionStatuses || {},
         updated_at: nowIso
       }, {
         onConflict: 'assessment_id,student_id'
@@ -887,6 +916,8 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
     assessmentId: string;
     studentId: string;
     answers?: Array<{ question_id: string; answer_text: string }>;
+    quizAnswers?: Array<{ quiz_question_id: string; selected_option_id: string }>;
+    sectionStatuses?: Record<string, string>;
     files: Array<any>;
     serverTime: Date;
     lateStatus: 'on_time' | 'late';
@@ -952,7 +983,9 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
       p_files: uploadedFilesMeta,
       p_submitted_at: nowIso,
       p_late_status: params.lateStatus,
-      p_answers: params.answers || []
+      p_answers: params.answers || [],
+      p_quiz_answers: params.quizAnswers || [],
+      p_section_statuses: params.sectionStatuses || {}
     });
 
     if (rpcErr) {
@@ -986,6 +1019,10 @@ export class SupabaseSubmissionRepository implements ISubmissionRepository {
       superseded_at: null,
       files: uploadedFilesMeta,
       answers: params.answers || [],
+      quiz_answers: params.quizAnswers || [],
+      quiz_score: rpcResult.quiz_score ?? null,
+      quiz_total_marks: rpcResult.quiz_total_marks ?? null,
+      section_statuses: params.sectionStatuses || {},
       late_status: params.lateStatus
     };
 

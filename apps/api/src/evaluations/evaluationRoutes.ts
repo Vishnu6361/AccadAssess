@@ -40,7 +40,8 @@ router.get('/teacher/assignments-overview', requireRoles(['subject_teacher', 'ho
         let enrolledCount = 0;
         let isPublished = false;
 
-        if (isLiveSupabaseConfigured && Boolean(supabaseAdmin)) {
+        const useSupabase = assRepo.getMode() === 'supabase_postgresql' && isLiveSupabaseConfigured && Boolean(supabaseAdmin);
+    if (useSupabase) {
           // 1. Get class_id and subject details from class_subjects
           const { data: cs } = await getAdminClient().from('class_subjects')
             .select('class_id, subject_id, subject:subjects(specialization_id)')
@@ -155,7 +156,8 @@ router.get('/assessment/:assessmentId/ledger', requireRoles(['subject_teacher', 
     let enrolledStudents: any[] = [];
     let isPublished = false;
 
-    if (isLiveSupabaseConfigured && Boolean(supabaseAdmin)) {
+    const useSupabase = assRepo.getMode() === 'supabase_postgresql' && isLiveSupabaseConfigured && Boolean(supabaseAdmin);
+    if (useSupabase) {
       const { data: cs } = await getAdminClient().from('class_subjects')
         .select('class_id, subject_id, subject:subjects(specialization_id)')
         .eq('id', assessment.class_subject_id)
@@ -211,6 +213,23 @@ router.get('/assessment/:assessmentId/ledger', requireRoles(['subject_teacher', 
 
     const subs = await subRepo.listSubmissionsForAssessment(assessment.id);
     const evals = await evalRepo.listEvaluationsForAssessment(assessment.id);
+
+    // If assessment is targeted to selected students, filter ledger cohort
+    if (assessment.publishing_audience === 'selected') {
+      const useSupabase = assRepo.getMode() === 'supabase_postgresql' && isLiveSupabaseConfigured && Boolean(supabaseAdmin);
+    if (useSupabase) {
+        const { data: targets } = await getAdminClient()
+          .from('assessment_student_targets')
+          .select('student_id')
+          .eq('assessment_id', assessment.id);
+        const targetIds = new Set((targets || []).map(t => t.student_id));
+        enrolledStudents = enrolledStudents.filter(s => targetIds.has(s.id));
+      } else {
+        const targets = (db.assessment_student_targets || []).filter(t => t.assessment_id === assessment.id);
+        const targetIds = new Set(targets.map(t => t.student_id));
+        enrolledStudents = enrolledStudents.filter(s => targetIds.has(s.id));
+      }
+    }
 
     // Build ledger rows for EVERY enrolled student
     const ledger = enrolledStudents.map(student => {
@@ -417,6 +436,9 @@ router.post('/', requireRoles(['subject_teacher', 'hod']), async (req: Request, 
   const allCriteria: any[] = [];
   if (fullAss?.assignment_rubric?.criteria) {
     allCriteria.push(...fullAss.assignment_rubric.criteria);
+  }
+  if (fullAss?.rubric?.criteria) {
+    allCriteria.push(...fullAss.rubric.criteria);
   }
   if (fullAss?.questions) {
     for (const q of fullAss.questions) {
