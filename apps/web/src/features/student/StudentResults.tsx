@@ -7,7 +7,8 @@ import {
   Search,
   Calendar,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  BookOpen
 } from 'lucide-react';
 import {
   evaluationApi,
@@ -176,6 +177,19 @@ export const StudentResults: React.FC = () => {
         </div>
       )}
 
+      {/* Notice when enrolled in subjects but no results are published yet */}
+      {subjects.length > 0 && overallKPIs.totalResults === 0 && (
+        <div className="p-4 rounded-xl bg-academic-paleGreen/20 border border-academic-border text-xs text-academic-deepGreen flex items-start space-x-3">
+          <Clock className="w-5 h-5 text-academic-primaryGreen shrink-0 mt-0.5" />
+          <div>
+            <h3 className="text-xs font-bold text-academic-deepGreen">No Published Results</h3>
+            <p className="text-[11px] text-academic-muted mt-0.5">
+              No results have been published for your subjects yet.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Search Bar */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
         <div className="relative w-full sm:w-80">
@@ -204,18 +218,28 @@ export const StudentResults: React.FC = () => {
             Resolving course enrollments, criterion scores, and rubric levels.
           </p>
         </div>
+      ) : subjects.length === 0 ? (
+        <div className="p-12 text-center text-academic-muted bg-academic-surface border border-academic-border rounded-xl shadow-xs space-y-3">
+          <div className="w-12 h-12 rounded-full bg-academic-paleGreen text-academic-primaryGreen flex items-center justify-center mx-auto">
+            <BookOpen className="w-6 h-6" />
+          </div>
+          <h2 className="text-sm font-bold text-academic-deepGreen">
+            No Subjects Assigned
+          </h2>
+          <p className="text-xs text-academic-muted max-w-md mx-auto leading-relaxed">
+            Your stream does not currently have any subjects assigned. Please contact your department or administrator for more information.
+          </p>
+        </div>
       ) : filteredSubjects.length === 0 ? (
         <div className="p-12 text-center text-academic-muted bg-academic-surface border border-academic-border rounded-xl shadow-xs space-y-3">
           <div className="w-12 h-12 rounded-full bg-academic-paleGreen text-academic-primaryGreen flex items-center justify-center mx-auto">
-            <Clock className="w-6 h-6" />
+            <Search className="w-6 h-6" />
           </div>
           <h2 className="text-sm font-bold text-academic-deepGreen">
-            {searchQuery ? 'No Matching Subjects Found' : 'No Enrolled Subjects or Published Results'}
+            No Matching Subjects Found
           </h2>
           <p className="text-xs text-academic-muted max-w-md mx-auto leading-relaxed">
-            {searchQuery
-              ? `No subject matched "${searchQuery}". Please check the subject code or clear the filter.`
-              : 'Your active enrollments have not published assessment results yet. Once course faculty publish rubric evaluations, grades and feedback will display here.'}
+            No subject matched "{searchQuery}". Please check the subject code or clear the filter.
           </p>
         </div>
       ) : (
