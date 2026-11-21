@@ -481,6 +481,10 @@ router.get('/assessment/:assessmentId', async (req: Request, res: Response) => {
   }
 
   if (user.roles.includes('student')) {
+    const isEnrolled = await assRepo.isEnrolledStudent(user.profile.id, assessment.class_subject_id);
+    if (!isEnrolled) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are not actively enrolled in the class for this assessment' } });
+    }
     if (assessment.publishing_audience === 'selected') {
       const isTargeted = await assRepo.isStudentTargeted(assessment.id, user.profile.id);
       if (!isTargeted) {

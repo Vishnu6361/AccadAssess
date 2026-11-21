@@ -241,13 +241,42 @@ export class InMemoryEvaluationRepository implements IEvaluationRepository {
   async getStudentPerformanceDashboard(studentId: string): Promise<any[]> {
     const enrollments = this.inMemoryDb.enrollments.filter(e => e.student_id === studentId && e.status === 'active');
     const classIds = enrollments.map(e => e.class_id);
+    if (classIds.length === 0) return [];
 
-    const classSubjects = this.inMemoryDb.classSubjects.filter(cs => classIds.includes(cs.class_id) && cs.active);
+    const studentSpecIds = new Set(enrollments.map(e => e.specialization_id).filter(Boolean));
+
+    const classSubjects = this.inMemoryDb.classSubjects.filter(cs => {
+      if (!classIds.includes(cs.class_id) || !cs.active) return false;
+      const sub = this.inMemoryDb.subjects.find(s => s.id === cs.subject_id);
+      const subSpecId = (sub as any)?.specialization_id;
+      const joinSpecs = (this.inMemoryDb.subject_specializations || [])
+        .filter(ss => ss.subject_id === cs.subject_id)
+        .map(ss => ss.specialization_id);
+      const allSubjectSpecIds = [
+        ...(subSpecId ? [subSpecId] : []),
+        ...joinSpecs
+      ];
+
+      if (allSubjectSpecIds.length > 0) {
+        return allSubjectSpecIds.some(specId => studentSpecIds.has(specId));
+      }
+      return true;
+    });
+
+    if (classSubjects.length === 0) return [];
 
     return classSubjects.map(cs => {
       const cls = this.inMemoryDb.classes.find(c => c.id === cs.class_id);
       const subject = this.inMemoryDb.subjects.find(s => s.id === cs.subject_id);
-      const assessments = this.inMemoryDb.assessments.filter(a => a.class_subject_id === cs.id && a.status === 'published');
+      const assessments = this.inMemoryDb.assessments.filter(a => {
+        if (a.class_subject_id !== cs.id || a.status !== 'published') return false;
+        if (a.publishing_audience === 'selected') {
+          return (this.inMemoryDb.assessment_student_targets || []).some(
+            t => t.assessment_id === a.id && t.student_id === studentId
+          );
+        }
+        return true;
+      });
 
       let resultsCount = 0;
       let totalScoreSum = 0;
@@ -1051,24 +1080,63 @@ export class SupabaseEvaluationRepository implements IEvaluationRepository {
     const classIds = (enrollments || []).map(e => e.class_id);
     if (classIds.length === 0) return [];
 
+    const studentSpecIds = new Set((enrollments || []).map(e => e.specialization_id).filter(Boolean));
+
     // 2. Class subjects for enrolled classes
-    const { data: classSubjects } = await this.client
+    const { data: rawClassSubjects } = await this.client
       .from('class_subjects')
       .select('*, subject:subjects(*), class:classes(*)')
       .in('class_id', classIds)
       .eq('active', true);
 
+    const { data: subjectSpecs } = await this.client
+      .from('subject_specializations')
+      .select('subject_id, specialization_id');
+    const subjectSpecMap = new Map<string, string[]>();
+    (subjectSpecs || []).forEach(ss => {
+      const arr = subjectSpecMap.get(ss.subject_id) || [];
+      arr.push(ss.specialization_id);
+      subjectSpecMap.set(ss.subject_id, arr);
+    });
+
+    const classSubjects = (rawClassSubjects || []).filter(cs => {
+      const sub = cs.subject;
+      const subSpecId = sub?.specialization_id;
+      const joinSpecs = subjectSpecMap.get(cs.subject_id) || [];
+      const allSubjectSpecIds = [
+        ...(subSpecId ? [subSpecId] : []),
+        ...joinSpecs
+      ];
+
+      if (allSubjectSpecIds.length > 0) {
+        return allSubjectSpecIds.some(specId => studentSpecIds.has(specId));
+      }
+      return true;
+    });
+
     const classSubIds = (classSubjects || []).map(cs => cs.id);
     if (classSubIds.length === 0) return [];
 
     // 3. Published assessments
-    const { data: assessments } = await this.client
+    const { data: rawAssessments } = await this.client
       .from('assessments')
       .select('*')
       .in('class_subject_id', classSubIds)
       .eq('status', 'published');
 
-    const assIds = (assessments || []).map(a => a.id);
+    let assessments = rawAssessments || [];
+    const targetedAssessments = assessments.filter(a => a.publishing_audience === 'selected');
+    if (targetedAssessments.length > 0) {
+      const { data: myTargets } = await this.client
+        .from('assessment_student_targets')
+        .select('assessment_id')
+        .eq('student_id', studentId)
+        .in('assessment_id', targetedAssessments.map(a => a.id));
+      const myTargetSet = new Set((myTargets || []).map(t => t.assessment_id));
+      assessments = assessments.filter(a => a.publishing_audience !== 'selected' || myTargetSet.has(a.id));
+    }
+
+    const assIds = assessments.map(a => a.id);
 
     // 4. Student submissions
     const { data: submissions } = await this.client

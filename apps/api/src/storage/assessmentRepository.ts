@@ -229,8 +229,15 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
           if (!studentClasses.includes(cs.class_id) || !cs.active) return false;
           const sub = this.inMemoryDb.subjects.find(s => s.id === cs.subject_id);
           const subSpecId = (sub as any)?.specialization_id;
-          if (subSpecId) {
-            return studentSpecIds.has(subSpecId);
+          const joinSpecs = (this.inMemoryDb.subject_specializations || [])
+            .filter(ss => ss.subject_id === cs.subject_id)
+            .map(ss => ss.specialization_id);
+          const allSpecs = [
+            ...(subSpecId ? [subSpecId] : []),
+            ...joinSpecs
+          ];
+          if (allSpecs.length > 0) {
+            return allSpecs.some(id => studentSpecIds.has(id));
           }
           return true;
         })
@@ -758,14 +765,22 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
       const cs = this.inMemoryDb.classSubjects.find(c => c.id === ass.class_subject_id);
       if (!cs) throw new Error('Class subject not found for assessment');
       const sub = this.inMemoryDb.subjects.find(s => s.id === cs.subject_id);
-      const subSpecId = (sub as any)?.specialization_id || this.inMemoryDb.subject_specializations.find(ss => ss.subject_id === cs.subject_id)?.specialization_id;
+      const subSpecId = (sub as any)?.specialization_id;
+      const joinSpecs = (this.inMemoryDb.subject_specializations || [])
+        .filter(ss => ss.subject_id === cs.subject_id)
+        .map(ss => ss.specialization_id)
+        .filter(Boolean);
+      const allSubjectSpecIds = [
+        ...(subSpecId ? [subSpecId] : []),
+        ...joinSpecs
+      ];
 
       for (const sId of studentIds) {
         const enr = this.inMemoryDb.enrollments.find(e => e.student_id === sId && e.class_id === cs.class_id && e.status === 'active');
         if (!enr) {
           throw new Error(`Cannot publish assessment: Student ${sId} is not actively enrolled in this class`);
         }
-        if (subSpecId && enr.specialization_id && enr.specialization_id !== subSpecId) {
+        if (allSubjectSpecIds.length > 0 && (!enr.specialization_id || !allSubjectSpecIds.includes(enr.specialization_id))) {
           throw new Error(`Cannot publish assessment: Student ${sId} does not belong to the required specialization stream`);
         }
       }
@@ -868,17 +883,25 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
     if (!cs) return [];
     const cls = this.inMemoryDb.classes.find(c => c.id === cs.class_id);
     const sub = this.inMemoryDb.subjects.find(s => s.id === cs.subject_id);
-    const subSpecId = (sub as any)?.specialization_id || this.inMemoryDb.subject_specializations.find(ss => ss.subject_id === cs.subject_id)?.specialization_id;
-    const spec = subSpecId ? this.inMemoryDb.specializations.find(sp => sp.id === subSpecId) : null;
+    const subSpecId = (sub as any)?.specialization_id;
+    const joinSpecs = (this.inMemoryDb.subject_specializations || [])
+      .filter(ss => ss.subject_id === cs.subject_id)
+      .map(ss => ss.specialization_id)
+      .filter(Boolean);
+    const allSubjectSpecIds = [
+      ...(subSpecId ? [subSpecId] : []),
+      ...joinSpecs
+    ];
 
     const enrollments = this.inMemoryDb.enrollments.filter(e => {
       if (e.class_id !== cs.class_id || e.status !== 'active') return false;
-      if (subSpecId && e.specialization_id && e.specialization_id !== subSpecId) return false;
+      if (allSubjectSpecIds.length > 0 && (!e.specialization_id || !allSubjectSpecIds.includes(e.specialization_id))) return false;
       return true;
     });
 
     const students = enrollments.map(e => {
       const p = this.inMemoryDb.profiles.find(prof => prof.id === e.student_id);
+      const spec = e.specialization_id ? this.inMemoryDb.specializations.find(sp => sp.id === e.specialization_id) : null;
       return {
         student_id: e.student_id,
         full_name: p?.full_name || 'Student',
@@ -1007,13 +1030,29 @@ export class InMemoryAssessmentRepository implements IAssessmentRepository {
     if (!cs) return false;
     const sub = this.inMemoryDb.subjects.find(s => s.id === cs.subject_id);
     const subSpecId = (sub as any)?.specialization_id;
-    return this.inMemoryDb.enrollments.some(e => {
-      if (e.class_id !== cs.class_id || e.student_id !== studentId || e.status !== 'active') return false;
-      if (subSpecId) {
-        return Boolean(e.specialization_id && e.specialization_id === subSpecId);
-      }
-      return true;
-    });
+    const joinSpecs = (this.inMemoryDb.subject_specializations || [])
+      .filter(ss => ss.subject_id === cs.subject_id)
+      .map(ss => ss.specialization_id)
+      .filter(Boolean);
+
+    const allSubjectSpecIds = [
+      ...(subSpecId ? [subSpecId] : []),
+      ...joinSpecs
+    ];
+
+    const enrollment = this.inMemoryDb.enrollments.find(e =>
+      e.class_id === cs.class_id &&
+      e.student_id === studentId &&
+      e.status === 'active'
+    );
+
+    if (!enrollment) return false;
+
+    if (allSubjectSpecIds.length > 0) {
+      return Boolean(enrollment.specialization_id && allSubjectSpecIds.includes(enrollment.specialization_id));
+    }
+
+    return true;
   }
 
   getMode(): 'supabase_postgresql' | 'in_memory_mock' {
@@ -1297,15 +1336,30 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
 
       const { data: studentCS } = await this.client
         .from('class_subjects')
-        .select('id, class_id, subject:subjects(specialization_id)')
+        .select('id, class_id, subject_id, subject:subjects(specialization_id)')
         .in('class_id', classIds)
         .eq('active', true);
+
+      const { data: subjectSpecs } = await this.client
+        .from('subject_specializations')
+        .select('subject_id, specialization_id');
+      const subjectSpecMap = new Map<string, string[]>();
+      (subjectSpecs || []).forEach(ss => {
+        const arr = subjectSpecMap.get(ss.subject_id) || [];
+        arr.push(ss.specialization_id);
+        subjectSpecMap.set(ss.subject_id, arr);
+      });
 
       const csIds = (studentCS || [])
         .filter(cs => {
           const subSpecId = (cs as any)?.subject?.specialization_id;
-          if (subSpecId) {
-            return studentSpecIds.has(subSpecId);
+          const joinSpecs = subjectSpecMap.get((cs as any).subject_id) || [];
+          const allSpecs = [
+            ...(subSpecId ? [subSpecId] : []),
+            ...joinSpecs
+          ];
+          if (allSpecs.length > 0) {
+            return allSpecs.some(id => studentSpecIds.has(id));
           }
           return true;
         })
@@ -1904,34 +1958,41 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
 
     if (!cs) return [];
 
-    let subSpecId = (cs as any)?.subject?.specialization_id;
-    if (!subSpecId) {
-      const { data: ss } = await this.client
+    const subSpecId = (cs as any)?.subject?.specialization_id;
+    let joinSpecIds: string[] = [];
+    if (cs.subject_id) {
+      const { data: ssList, error: ssErr } = await this.client
         .from('subject_specializations')
         .select('specialization_id')
-        .eq('subject_id', cs.subject_id)
-        .maybeSingle();
-      if (ss?.specialization_id) subSpecId = ss.specialization_id;
+        .eq('subject_id', cs.subject_id);
+      if (ssErr) {
+        throw new Error(`Failed to list eligible students: ${ssErr.message}`);
+      }
+      joinSpecIds = (ssList || []).map((s: any) => s.specialization_id).filter(Boolean);
     }
 
-    let spec: any = null;
-    if (subSpecId) {
-      const { data: sp } = await this.client
+    const allSubjectSpecIds = [
+      ...(subSpecId ? [subSpecId] : []),
+      ...joinSpecIds
+    ];
+
+    let specMap = new Map<string, { code: string; name: string }>();
+    if (allSubjectSpecIds.length > 0) {
+      const { data: spList } = await this.client
         .from('specializations')
-        .select('code, name')
-        .eq('id', subSpecId)
-        .maybeSingle();
-      spec = sp;
+        .select('id, code, name')
+        .in('id', allSubjectSpecIds);
+      (spList || []).forEach(sp => specMap.set(sp.id, { code: sp.code, name: sp.name }));
     }
 
     let query = this.client
       .from('enrollments')
-      .select('id, student_id, roll_number, student:profiles(id, full_name, usn, email)')
+      .select('id, student_id, roll_number, specialization_id, student:profiles(id, full_name, usn, email)')
       .eq('class_id', cs.class_id)
       .eq('status', 'active');
 
-    if (subSpecId) {
-      query = query.eq('specialization_id', subSpecId);
+    if (allSubjectSpecIds.length > 0) {
+      query = query.in('specialization_id', allSubjectSpecIds);
     }
 
     const { data: enrollments, error } = await query;
@@ -1941,15 +2002,18 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
 
     const className = (cs as any)?.class ? formatClassName((cs as any).class) : 'Class';
 
-    const students = (enrollments || []).map((e: any) => ({
-      student_id: e.student_id,
-      full_name: e.student?.full_name || 'Student',
-      usn: e.student?.usn || e.roll_number || '—',
-      email: e.student?.email || '',
-      class_name: className,
-      specialization_code: spec?.code || null,
-      specialization_name: spec?.name || null
-    }));
+    const students = (enrollments || []).map((e: any) => {
+      const sp = e.specialization_id ? specMap.get(e.specialization_id) : null;
+      return {
+        student_id: e.student_id,
+        full_name: e.student?.full_name || 'Student',
+        usn: e.student?.usn || e.roll_number || '—',
+        email: e.student?.email || '',
+        class_name: className,
+        specialization_code: sp?.code || null,
+        specialization_name: sp?.name || null
+      };
+    });
 
     return students.sort((a: any, b: any) => (a.usn || '').localeCompare(b.usn || ''));
   }
@@ -2376,17 +2440,38 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
   }
 
   async isEnrolledStudent(studentId: string, classSubjectId: string): Promise<boolean> {
-    const { data: cs } = await this.client
+    const { data: cs, error: csError } = await this.client
       .from('class_subjects')
-      .select('class_id, subject:subjects(specialization_id)')
+      .select('class_id, subject_id, subject:subjects(specialization_id)')
       .eq('id', classSubjectId)
       .maybeSingle();
 
-    if (!cs) return false;
+    if (csError || !cs) return false;
 
     const subSpecId = (cs as any)?.subject?.specialization_id;
+    let joinSpecIds: string[] = [];
 
-    const { data: en } = await this.client
+    if ((cs as any).subject_id) {
+      const { data: ssList, error: ssError } = await this.client
+        .from('subject_specializations')
+        .select('specialization_id')
+        .eq('subject_id', (cs as any).subject_id);
+
+      // Requirement 7: If the specialization query fails, return false. Never interpret a database query error as an unmapped core subject.
+      if (ssError) {
+        console.error(`[isEnrolledStudent] Database error querying subject_specializations for subject ${(cs as any).subject_id}:`, ssError);
+        return false;
+      }
+
+      joinSpecIds = (ssList || []).map((s: any) => s.specialization_id).filter(Boolean);
+    }
+
+    const allSubjectSpecIds = [
+      ...(subSpecId ? [subSpecId] : []),
+      ...joinSpecIds
+    ];
+
+    const { data: en, error: enError } = await this.client
       .from('enrollments')
       .select('id, specialization_id')
       .eq('class_id', cs.class_id)
@@ -2394,10 +2479,11 @@ export class SupabaseAssessmentRepository implements IAssessmentRepository {
       .eq('status', 'active')
       .maybeSingle();
 
-    if (!en) return false;
+    // Requirement 8: If enrollment validation fails or no valid active enrollment exists, return false.
+    if (enError || !en) return false;
 
-    if (subSpecId) {
-      return Boolean(en.specialization_id && en.specialization_id === subSpecId);
+    if (allSubjectSpecIds.length > 0) {
+      return Boolean(en.specialization_id && allSubjectSpecIds.includes(en.specialization_id));
     }
 
     return true;
